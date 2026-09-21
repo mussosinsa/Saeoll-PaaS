@@ -22,6 +22,13 @@ OPENBAO_RELEASE="${OPENBAO_RELEASE:-controller-vault}"
 OPENBAO_CHART_VERSION="${OPENBAO_CHART_VERSION:-0.19.0}"
 OPENBAO_CHART="${OPENBAO_CHART:-oci://registry.k-paas.org/kpaas/openbao}"
 OPENBAO_POD="${OPENBAO_POD:-controller-vault-0}"
+CP_PORTAL_NAMESPACE="${CP_PORTAL_NAMESPACE:-cp-portal}"
+CP_PORTAL_RELEASE="${CP_PORTAL_RELEASE:-cp-portal}"
+CP_PORTAL_CHART="${CP_PORTAL_CHART:-oci://registry.k-paas.org/kpaas/cp-portal}"
+CP_PORTAL_CHART_VERSION="${CP_PORTAL_CHART_VERSION:-}"
+CP_PORTAL_MANIFEST="${CP_PORTAL_MANIFEST:-}"
+CP_PORTAL_VALUES_FILE="${CP_PORTAL_VALUES_FILE:-}"
+CP_PORTAL_TIMEOUT="${CP_PORTAL_TIMEOUT:-10m}"
 POD_NETWORK="${POD_NETWORK:-172.16.0.0/16}"
 KEY_FILE="${KEY_FILE:-${STANDALONE_DIR}/.keys}"
 LOG_DIR="${LOG_DIR:-/var/log/kpaas}"
@@ -95,6 +102,8 @@ preflight() {
   [[ -d "$PROJECT_ROOT" ]] || die "project not found: $PROJECT_ROOT"
   [[ -d "$STANDALONE_DIR" ]] || die "standalone directory not found: $STANDALONE_DIR"
   [[ -f "$INGRESS_MANIFEST" ]] || die "ingress manifest not found: $INGRESS_MANIFEST"
+  [[ -z "$CP_PORTAL_MANIFEST" || -f "$CP_PORTAL_MANIFEST" ]] || die "CP-Portal manifest not found: $CP_PORTAL_MANIFEST"
+  [[ -z "$CP_PORTAL_VALUES_FILE" || -f "$CP_PORTAL_VALUES_FILE" ]] || die "CP-Portal values file not found: $CP_PORTAL_VALUES_FILE"
   kubectl cluster-info >/dev/null
   [[ "$(kubectl auth can-i '*' '*' --all-namespaces)" == yes ]] || die "current kubeconfig requires cluster-admin-equivalent access"
   local not_ready provisioner owner
@@ -320,12 +329,39 @@ configure_openbao() {
   ok "OpenBao controller configuration completed"
 }
 
+install_cp_portal() {
+  log "Deploying CP-Portal"
+  kubectl create namespace "$CP_PORTAL_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+  if [[ -n "$CP_PORTAL_MANIFEST" ]]; then
+    log "Applying CP-Portal manifest ${CP_PORTAL_MANIFEST}"
+    kubectl -n "$CP_PORTAL_NAMESPACE" apply -f "$CP_PORTAL_MANIFEST"
+  else
+    local helm_args=(upgrade --install "$CP_PORTAL_RELEASE" "$CP_PORTAL_CHART"
+      --namespace "$CP_PORTAL_NAMESPACE" --create-namespace
+      --wait --timeout "$CP_PORTAL_TIMEOUT")
+    [[ -z "$CP_PORTAL_CHART_VERSION" ]] || helm_args+=(--version "$CP_PORTAL_CHART_VERSION")
+    [[ -z "$CP_PORTAL_VALUES_FILE" ]] || helm_args+=(-f "$CP_PORTAL_VALUES_FILE")
+    helm "${helm_args[@]}"
+  fi
+
+  local workloads
+  workloads="$(kubectl -n "$CP_PORTAL_NAMESPACE" get deployment,statefulset -o name 2>/dev/null || true)"
+  [[ -n "$workloads" ]] || die "CP-Portal deployment created no Deployment or StatefulSet in ${CP_PORTAL_NAMESPACE}"
+  while IFS= read -r workload; do
+    [[ -z "$workload" ]] || kubectl -n "$CP_PORTAL_NAMESPACE" rollout status "$workload" --timeout="$CP_PORTAL_TIMEOUT"
+  done <<<"$workloads"
+  kubectl -n "$CP_PORTAL_NAMESPACE" get pods,service,ingress -o wide
+  ok "CP-Portal deployment completed"
+}
+
 final_check() {
   log "Final status"
   kubectl get nodes -o wide
   kubectl get storageclass "$SOURCE_SC" "$CP_SC" -o wide
   kubectl -n "$INGRESS_NAMESPACE" get pods,service -o wide
   kubectl -n "$OPENBAO_NAMESPACE" get pods,pvc,service -o wide
+  kubectl -n "$CP_PORTAL_NAMESPACE" get pods,service,ingress -o wide
   helm list -n "$OPENBAO_NAMESPACE"
   openbao_initialized && ok "OpenBao initialized" || warn "OpenBao is not initialized"
   openbao_sealed && warn "OpenBao is sealed" || ok "OpenBao unsealed"
@@ -334,7 +370,7 @@ final_check() {
   echo "[INFO] storage class: ${CP_SC}"
   echo "[INFO] sensitive key file: ${KEY_FILE}"
   echo "[INFO] installation log: ${LOG_FILE}"
-  echo "[NOTICE] This installs foundation components only; CP-Portal is not included."
+  echo "[INFO] CP-Portal namespace: ${CP_PORTAL_NAMESPACE}"
 }
 
 main() {
@@ -349,6 +385,7 @@ main() {
   initialize_openbao
   unseal_openbao
   configure_openbao
+  install_cp_portal
   final_check
 }
 main "$@"
