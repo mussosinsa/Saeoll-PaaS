@@ -294,11 +294,37 @@ unseal_openbao() {
 
 bao_api() {
   local method="$1" path="$2" token="$3" data="${4:-}"
-  if [[ -n "$data" ]]; then
-    bao_exec "wget -qO- --method='${method}' --header='X-Vault-Token: ${token}' --header='Content-Type: application/json' --body-data='${data}' 'http://127.0.0.1:8200${path}' 2>/dev/null || true"
-  else
-    bao_exec "wget -qO- --method='${method}' --header='X-Vault-Token: ${token}' 'http://127.0.0.1:8200${path}' 2>/dev/null || true"
-  fi
+  case "$method" in
+    GET)
+      bao_exec "wget -qO- --header='X-Vault-Token: ${token}' 'http://127.0.0.1:8200${path}'"
+      ;;
+    POST)
+      # The OpenBao image provides BusyBox wget.  It supports --post-data, but
+      # not GNU wget's --method/--body-data options.
+      [[ -n "$data" ]] || data='{}'
+      bao_exec "wget -qO- --header='X-Vault-Token: ${token}' --header='Content-Type: application/json' --post-data='${data}' 'http://127.0.0.1:8200${path}'"
+      ;;
+    *)
+      die "unsupported OpenBao API method: ${method}"
+      ;;
+  esac
+}
+
+json_response_value() {
+  local response="$1" field="$2" operation="$3"
+  [[ -n "$response" ]] || die "OpenBao returned an empty response while ${operation}"
+  python3 -c '
+import json, sys
+field, operation = sys.argv[1:]
+try:
+    value = json.load(sys.stdin)
+    for part in field.split("."):
+        value = value[part]
+except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    print(f"[ERROR] invalid OpenBao response while {operation}: {exc}", file=sys.stderr)
+    sys.exit(1)
+print(value)
+' "$field" "$operation" <<<"$response"
 }
 
 configure_openbao() {
@@ -323,8 +349,8 @@ configure_openbao() {
   bao_api POST /v1/auth/approle/role/cluster_role "$root_token" "$role_json" >/dev/null
   role_resp="$(bao_api GET /v1/auth/approle/role/cluster_role/role-id "$root_token")"
   secret_resp="$(bao_api POST /v1/auth/approle/role/cluster_role/secret-id "$root_token" '{}')"
-  role_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["role_id"])' <<<"$role_resp")"
-  secret_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["secret_id"])' <<<"$secret_resp")"
+  role_id="$(json_response_value "$role_resp" data.role_id "reading the AppRole role ID")"
+  secret_id="$(json_response_value "$secret_resp" data.secret_id "creating the AppRole secret ID")"
   kubectl -n "$OPENBAO_NAMESPACE" create secret generic controller-manager --from-literal=VAULT_ROLE_NAME=cluster_role --from-literal=VAULT_ROLE_ID="$role_id" --from-literal=VAULT_SECRET_ID="$secret_id" --dry-run=client -o yaml | kubectl apply -f -
   ok "OpenBao controller configuration completed"
 }
