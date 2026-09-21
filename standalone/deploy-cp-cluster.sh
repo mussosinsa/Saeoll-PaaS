@@ -2,52 +2,22 @@
 
 MODE="$1"
 
-# Installing Ubuntu, PIP3 Package
-PIP3_INSTALL=$(dpkg -l | grep python3-pip | awk '{print $2}')
-OS_VERSION=$(cat /etc/lsb-release | grep DISTRIB_RELEASE | awk -F '=' '{print $2}')
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+cd "$SCRIPT_DIR" || exit 1
 
-if [ "$PIP3_INSTALL" == "" ]; then
-  sudo apt-get update
-  if [ "$OS_VERSION" == "22.04" ]; then
-    sudo apt-get install -y python3-pip
-  elif [ "$OS_VERSION" == "24.04" ]; then
-    sudo apt-get install -y python3-pip python3-venv
-  fi
-  echo "pip3 installation completed."
+# Rocky Linux 9.7 controller prerequisites and isolated Ansible environment.
+source /etc/os-release
+if [[ "${ID:-}" != "rocky" || "${VERSION_ID:-}" != "9.7" ]]; then
+  echo "ERROR: Rocky Linux 9.7 is required (detected ${PRETTY_NAME:-unknown})." >&2
+  exit 1
 fi
 
-PIP3_PACKAGE_INSTALL=$(pip3 freeze | grep ansible)
-
-if [ "$PIP3_PACKAGE_INSTALL" == "" ]; then
-  if [ "$OS_VERSION" == "24.04" ]; then
-    python3 -m venv $HOME/kpaas-venv
-    source $HOME/kpaas-venv/bin/activate
-  fi
-  pip3 install -r requirements.txt
-
-  echo "Python packages installation completed."
-fi
-
-NET_TOOLS_INSTALL=$(dpkg -l | grep net-tools | awk '{print $2}')
-
-if [ "$NET_TOOLS_INSTALL" == "" ]; then
-  sudo apt-get install -y net-tools
-  echo "net-tools installation completed."
-fi
-
-JQ_INSTALL=$(dpkg -l | grep -w jq | awk '{print $2}')
-
-if [ "$JQ_INSTALL" == "" ]; then
-  sudo apt-get install -y jq
-  echo "jq installation completed."
-fi
-
-if [ "$OS_VERSION" == "24.04" ]; then
-  source $HOME/kpaas-venv/bin/activate
-else
-  export PATH=$PATH:$HOME/.local/bin
-  source $HOME/.bashrc
-fi
+sudo dnf install -y python3 python3-pip net-tools jq
+python3 -m venv "$HOME/kpaas-venv"
+# shellcheck disable=SC1091
+source "$HOME/kpaas-venv/bin/activate"
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 if [ "$MODE" == "single" ]; then
   ansible-playbook -i localhost, -c local -e mode=single playbooks/local.yml

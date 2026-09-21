@@ -6,30 +6,24 @@
   changed_when: false
   failed_when: false
 
-- name: Install Helm repository GPG key
-  apt_key:
-    url: "https://packages.buildkite.com/helm-linux/helm-debian/gpgkey"
-    keyring: "/usr/share/keyrings/helm.gpg"
-    state: present
+- name: Download Helm 3.17.4 archive
+  get_url:
+    url: "https://get.helm.sh/helm-v3.17.4-linux-{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}.tar.gz"
+    dest: /tmp/helm-v3.17.4.tar.gz
+    mode: "0644"
   when: helm_installed.rc != 0
 
-- name: Ensure apt-transport-https package is installed
-  apt:
-    name: apt-transport-https
-    state: present
-    update_cache: yes
+- name: Extract Helm archive
+  unarchive:
+    src: /tmp/helm-v3.17.4.tar.gz
+    dest: /tmp
+    remote_src: true
   when: helm_installed.rc != 0
 
-- name: Add Helm APT repository
-  apt_repository:
-    repo: "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main"
-    filename: "helm-stable-debian.list"
-    state: present
-  when: helm_installed.rc != 0
-
-- name: Install Specific Helm Version
-  apt:
-    name: helm=3.17.4-1
-    state: present
-    update_cache: yes
+- name: Install Helm 3.17.4
+  copy:
+    src: "/tmp/linux-{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}/helm"
+    dest: /usr/local/bin/helm
+    mode: "0755"
+    remote_src: true
   when: helm_installed.rc != 0
