@@ -24,7 +24,10 @@ OPENBAO_CHART="${OPENBAO_CHART:-oci://registry.k-paas.org/kpaas/openbao}"
 OPENBAO_POD="${OPENBAO_POD:-controller-vault-0}"
 CP_PORTAL_NAMESPACE="${CP_PORTAL_NAMESPACE:-cp-portal}"
 CP_PORTAL_RELEASE="${CP_PORTAL_RELEASE:-cp-portal}"
-CP_PORTAL_CHART="${CP_PORTAL_CHART:-oci://registry.k-paas.org/kpaas/cp-portal}"
+# CP-Portal is distributed separately in K-PaaS/cp-portal-release. There is no
+# cp-portal chart in registry.k-paas.org/kpaas, so a deployment source must be
+# supplied explicitly rather than silently guessing a registry repository.
+CP_PORTAL_CHART="${CP_PORTAL_CHART:-}"
 CP_PORTAL_CHART_VERSION="${CP_PORTAL_CHART_VERSION:-}"
 CP_PORTAL_MANIFEST="${CP_PORTAL_MANIFEST:-}"
 CP_PORTAL_VALUES_FILE="${CP_PORTAL_VALUES_FILE:-}"
@@ -113,8 +116,15 @@ preflight() {
   [[ -d "$PROJECT_ROOT" ]] || die "project not found: $PROJECT_ROOT"
   [[ -d "$STANDALONE_DIR" ]] || die "standalone directory not found: $STANDALONE_DIR"
   [[ -f "$INGRESS_MANIFEST" ]] || die "ingress manifest not found: $INGRESS_MANIFEST"
-  [[ -z "$CP_PORTAL_MANIFEST" || -f "$CP_PORTAL_MANIFEST" ]] || die "CP-Portal manifest not found: $CP_PORTAL_MANIFEST"
+  [[ -z "$CP_PORTAL_MANIFEST" || -e "$CP_PORTAL_MANIFEST" ]] || die "CP-Portal manifest not found: $CP_PORTAL_MANIFEST"
   [[ -z "$CP_PORTAL_VALUES_FILE" || -f "$CP_PORTAL_VALUES_FILE" ]] || die "CP-Portal values file not found: $CP_PORTAL_VALUES_FILE"
+  if [[ -z "$CP_PORTAL_MANIFEST" && -z "$CP_PORTAL_CHART" ]]; then
+    die "CP-Portal deployment source is required. Download K-PaaS/cp-portal-release and set CP_PORTAL_MANIFEST, or set CP_PORTAL_CHART to a valid chart."
+  fi
+  if [[ -n "$CP_PORTAL_MANIFEST" && -n "$CP_PORTAL_CHART" ]]; then
+    die "set only one of CP_PORTAL_MANIFEST or CP_PORTAL_CHART"
+  fi
+  [[ -z "$CP_PORTAL_VALUES_FILE" || -n "$CP_PORTAL_CHART" ]] || die "CP_PORTAL_VALUES_FILE can only be used with CP_PORTAL_CHART"
   kubectl cluster-info >/dev/null
   [[ "$(kubectl auth can-i '*' '*' --all-namespaces)" == yes ]] || die "current kubeconfig requires cluster-admin-equivalent access"
   local not_ready provisioner owner
@@ -377,13 +387,17 @@ install_cp_portal() {
   if [[ -n "$CP_PORTAL_MANIFEST" ]]; then
     log "Applying CP-Portal manifest ${CP_PORTAL_MANIFEST}"
     kubectl -n "$CP_PORTAL_NAMESPACE" apply -f "$CP_PORTAL_MANIFEST"
-  else
+  elif [[ -n "$CP_PORTAL_CHART" ]]; then
     local helm_args=(upgrade --install "$CP_PORTAL_RELEASE" "$CP_PORTAL_CHART"
       --namespace "$CP_PORTAL_NAMESPACE" --create-namespace
       --wait --timeout "$CP_PORTAL_TIMEOUT")
     [[ -z "$CP_PORTAL_CHART_VERSION" ]] || helm_args+=(--version "$CP_PORTAL_CHART_VERSION")
     [[ -z "$CP_PORTAL_VALUES_FILE" ]] || helm_args+=(-f "$CP_PORTAL_VALUES_FILE")
     helm "${helm_args[@]}"
+  else
+    # preflight catches this before any cluster changes; retain a defensive
+    # check in case this function is called independently.
+    die "CP-Portal deployment source is not configured"
   fi
 
   local workloads
