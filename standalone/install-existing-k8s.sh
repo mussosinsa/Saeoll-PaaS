@@ -70,6 +70,17 @@ wait_external_ip() {
   return 1
 }
 
+wait_openbao_api() {
+  local timeout="${1:-300}" elapsed
+  for ((elapsed=0; elapsed<timeout; elapsed+=5)); do
+    if bao_status_json >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
 install_helm() {
   local current="" arch tmp
   if command -v helm >/dev/null 2>&1; then
@@ -245,13 +256,17 @@ csi:
 EOF_VALUES
   fi
   wait_pod_running "$OPENBAO_NAMESPACE" "$OPENBAO_POD" || die "OpenBao pod did not reach Running"
-  ok "OpenBao pod is Running"
+  wait_openbao_api || die "OpenBao API did not become ready"
+  ok "OpenBao pod is Running and its API is ready"
 }
 
 bao_exec() { kubectl -n "$OPENBAO_NAMESPACE" exec "$OPENBAO_POD" -- sh -c "$1"; }
-bao_health_json() { bao_exec "wget -qO- http://127.0.0.1:8200/v1/sys/health 2>/dev/null || true"; }
-openbao_initialized() { bao_health_json | grep -Eq '"initialized"[[:space:]]*:[[:space:]]*true'; }
-openbao_sealed() { bao_health_json | grep -Eq '"sealed"[[:space:]]*:[[:space:]]*true'; }
+# Unlike /sys/health, /sys/seal-status returns HTTP 200 while OpenBao is
+# uninitialized or sealed. BusyBox wget therefore preserves its JSON response
+# instead of discarding it as an HTTP error.
+bao_status_json() { bao_exec "wget -qO- http://127.0.0.1:8200/v1/sys/seal-status"; }
+openbao_initialized() { bao_status_json | grep -Eq '"initialized"[[:space:]]*:[[:space:]]*true'; }
+openbao_sealed() { bao_status_json | grep -Eq '"sealed"[[:space:]]*:[[:space:]]*true'; }
 json_value() {
   python3 - "$1" "$2" <<'PY'
 import json, sys
