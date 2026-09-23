@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/rocky-linux.sh
+source "$SCRIPT_DIR/../lib/rocky-linux.sh"
+require_rocky_linux_9_7 || exit 1
 source cp-portal-vars-mc.sh
 
 function delete_namespace() {
@@ -37,8 +41,7 @@ then
   CMD_HELM_ORIG="helm --kube-context={TG_CTX}"
 
   # remove host_domain cert
-  sudo rm -rf /usr/local/share/ca-certificates/${HOST_DOMAIN}.crt
-  sudo update-ca-certificates
+  remove_host_ca "${HOST_DOMAIN}.crt"
 
   for IDX in 1 2; do
     echo "[Remove resources in cluster${IDX}]..."

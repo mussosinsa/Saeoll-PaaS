@@ -1,4 +1,8 @@
 #!/bin/bash
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/rocky-linux.sh
+source "$SCRIPT_DIR/../lib/rocky-linux.sh"
+require_rocky_linux_9_7 || exit 1
 source cp-portal-vars-mc.sh
 declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
@@ -211,8 +215,7 @@ for IDX in 1 2; do
     sleep 5
   done
 done
-sudo cp ../certs/${HOST_DOMAIN}.crt /usr/local/share/ca-certificates/
-sudo update-ca-certificates
+install_host_ca "../certs/${HOST_DOMAIN}.crt"
 
 # Deploy the secrets management
 chmod +x ../secmg/deploy-secmg-mc.sh

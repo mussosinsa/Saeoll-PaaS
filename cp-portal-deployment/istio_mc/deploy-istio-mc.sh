@@ -1,4 +1,8 @@
 #!/bin/bash
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/rocky-linux.sh
+source "$SCRIPT_DIR/../lib/rocky-linux.sh"
+require_rocky_linux_9_7 || exit 1
 source istio-vars-mc.sh
 CMD_ISTIOCTL_ORIG="istioctl --context={TG_CTX}"
 CMD_KCTL_ORIG="kubectl --context={TG_CTX}"
