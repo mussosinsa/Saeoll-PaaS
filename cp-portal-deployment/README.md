@@ -35,7 +35,8 @@ kubectl -n ingress-nginx get pods,svc
 ## 2. Rocky Linux 도구 설치
 
 도구 설치 스크립트는 `dnf`로 Podman, CA 인증서, `envsubst`, `uuidgen` 등 필요한
-패키지를 설치하고 kubectl, Helm, step CLI, istioctl을 설치한다.
+패키지를 설치하고 kubectl, Helm, step CLI, istioctl을 설치한다. 이미 설치된
+패키지와 명령은 `[SKIP]` 메시지를 출력하고 다시 설치하지 않는다.
 
 ```bash
 cd /workspace/Saeoll-PaaS/cp-portal-deployment/istio_mc
