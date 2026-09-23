@@ -56,11 +56,44 @@ step version
 
 ## 3. 배포 변수 설정
 
-원본을 백업한 후 변수를 편집한다.
+Kubernetes HA 설치에 사용한 `cluster.env`가 있으면 다음 명령으로 포털 변수를
+자동 설정한다.
 
 ```bash
 cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
-cp cp-portal-vars.sh cp-portal-vars.sh.bak
+chmod +x configure-from-cluster-env.sh
+./configure-from-cluster-env.sh /path/to/cluster.env
+```
+
+자동 설정 스크립트의 매핑은 다음과 같다.
+
+| `cluster.env` | `cp-portal-vars.sh` | 예시 결과 |
+| --- | --- | --- |
+| `CONTROL_PLANE_VIP` | `K8S_MASTER_NODE_IP` | `192.168.20.150` |
+| `CONTROL_PLANE_VIP` + `HAPROXY_PORT` | `K8S_CLUSTER_API_SERVER` | `https://192.168.20.150:8443` |
+| `DEFAULT_STORAGE_CLASS` | `K8S_STORAGECLASS` | `nfs-client` |
+| `METALLB_POOL`의 첫 IP | `HOST_DOMAIN` | `192.168.20.155.nip.io` |
+
+다른 DNS 도메인을 사용할 때는 두 번째 인자로 전달한다.
+
+```bash
+./configure-from-cluster-env.sh /path/to/cluster.env portal.example.com
+```
+
+현재 CP-Portal chart에는 온프레미스 IaaS 유형이 없으므로 기본 호환 값은 AWS(`1`)를
+사용한다. 다른 유형이 필요하면 `CP_PORTAL_IAAS_TYPE=2`처럼 지정한다. 스크립트는
+변경 전 파일을 `cp-portal-vars.sh.bak.<timestamp>`로 백업하며 현재 kubeconfig의 API
+주소와 StorageClass도 가능한 경우 확인한다.
+
+```bash
+CP_PORTAL_IAAS_TYPE=2 \
+  ./configure-from-cluster-env.sh /path/to/cluster.env
+```
+
+자동 설정 후 비밀번호와 인증 관련 값은 직접 편집한다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
 vi cp-portal-vars.sh
 ```
 
