@@ -41,7 +41,7 @@ then
   CMD_HELM_ORIG="helm --kube-context={TG_CTX}"
 
   # remove host_domain cert
-  remove_host_ca "${HOST_DOMAIN}.crt"
+  remove_host_ca "${HOST_DOMAIN}-ca.crt"
 
   for IDX in 1 2; do
     echo "[Remove resources in cluster${IDX}]..."

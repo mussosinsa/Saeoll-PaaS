@@ -72,9 +72,9 @@ inject_cert_and_build_image() {
 
   TEMPLATE="../values/ui/Dockerfile.template"
   OUTPUT="../values/ui/Dockerfile"
-  CRT_FILE="${HOST_DOMAIN}.crt"
+  CRT_FILE="ca.crt"
 
-  cp ../certs/${HOST_DOMAIN}.crt ../values/ui
+  cp ../certs/ca.crt ../values/ui
   for APP_NAME in "${BUILD_APPS[@]}"; do
     sed -e "s|{APP_NAME}|${APP_NAME}|g" \
         -e "s|{CRT_FILE}|${CRT_FILE}|g" \
@@ -95,6 +95,19 @@ inject_cert_and_build_image() {
     rm -f "$OUTPUT"
   done
 
+}
+
+preflight_source_ui_images() {
+  local app source_image
+  for app in cp-portal-ui cp-portal-migration-ui; do
+    source_image="$K_PAAS_REGISTRY/$K_PAAS_REPO/$app:$IMAGE_TAGS"
+    echo "[INFO] Pulling source image: $source_image"
+    if ! sudo podman pull "$source_image"; then
+      echo "[ERROR] Cannot pull $source_image from the K-PaaS registry." >&2
+      echo "[ERROR] Check DNS, outbound HTTPS, the system public CA bundle, and the image tag." >&2
+      return 1
+    fi
+  done
 }
 
 main_pre_cp_portal() {
@@ -189,6 +202,7 @@ main_pre_cp_portal() {
   find ../values -type f -exec sed -i "s/{EXPOSE_TYPE}/${DEPLOY_CONFIG[EXPOSE_TYPE]}/g" {} +
   # Pull the chart to prepare for installation
   chart_pull
+  preflight_source_ui_images || return 1
 
   # Generate cert and enc_keys
   for f in gen-cert.sh gen-enc-keys.sh; do
@@ -196,7 +210,7 @@ main_pre_cp_portal() {
   done
 
   # Setup the certificate in cluster
-  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/${HOST_DOMAIN}.crt)"
+  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/ca.crt)"
   while :
   do
     POD_COUNT=$((kubectl get pods -n $CP_CERT_SETUP_NAMESPACE -l $CP_CERT_SETUP_SELECTOR --field-selector status.phase!=Running --no-headers | wc -l) 2> /dev/null)
@@ -207,7 +221,7 @@ main_pre_cp_portal() {
     fi
     sleep 5
   done
-  install_host_ca "../certs/${HOST_DOMAIN}.crt"
+  install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 
   # Deploy the secrets management
   chmod +x ../secmg/deploy-secmg.sh
@@ -278,7 +292,7 @@ main_cp_portal() {
     -n ${NAMESPACE[4]} \
     --set-string tlsSecret.tls.crt="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)" \
     --set-string tlsSecret.tls.key="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.key)" \
-    --set-string secret[0].data.CHART_REPO_CRT="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)" \
+    --set-string secret[0].data.CHART_REPO_CRT="$(base64 -w 0 < ../certs/ca.crt)" \
 
   terraman_ssh_key_copy
   # Uninstall cp-cert-setup

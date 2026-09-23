@@ -114,6 +114,49 @@ vi cp-portal-vars.sh
 운영 환경에서는 파일에 포함된 기본 비밀번호와 Keycloak client secret을 반드시
 교체하고 변수 파일 권한을 제한한다.
 
+### 이미지 공급 경로와 인증서
+
+초기 설치에서 사용하는 이미지가 모두 내부 Harbor에서 공급되는 것은 아니다.
+
+| 구분 | 이미지 공급처 | 인증/인증서 요구 사항 |
+| --- | --- | --- |
+| CP-Portal API 및 백엔드 | `registry.k-paas.org/kpaas` | 기본 설정은 anonymous pull이며 Rocky Linux 시스템의 공인 CA bundle 사용 |
+| 최초 UI 기반 이미지 | `registry.k-paas.org/kpaas/cp-portal-ui` 및 `cp-portal-migration-ui` | 관리 노드의 Podman이 공인 CA로 pull |
+| 인증서가 포함된 UI 이미지 | 배포 중 생성한 `harbor.<HOST_DOMAIN>/cp-portal-repository` | Harbor 계정과 자체 CA 필요 |
+| Harbor/OpenBao/Chaos Mesh/ChartMuseum | 주로 `registry.k-paas.org` | 각 Kubernetes 노드가 공인 CA로 pull |
+| MariaDB/Keycloak 및 일부 부가 구성 | `docker.io` | 각 Kubernetes 노드의 외부 HTTPS 접근 필요 |
+
+배포 스크립트는 Helm chart를 `oci://registry.k-paas.org/kpaas`에서 받고, 두 UI 기반
+이미지를 K-PaaS registry에서 먼저 pull한다. 이 단계에는 포털용 자체 서명 인증서가
+필요하지 않다. `registry.k-paas.org`의 TLS 검증에는 Rocky Linux의
+`ca-certificates`가 제공하는 공인 CA bundle을 사용한다. 사설 프록시가 HTTPS를
+검사하는 환경에서만 해당 프록시의 루트 CA를 관리 노드와 모든 Kubernetes 노드에
+추가해야 한다.
+
+반면 배포 중 생성하는 인증서는 내부 Harbor, Portal, Keycloak, OpenBao,
+ChartMuseum의 `*.${HOST_DOMAIN}` HTTPS용이다. 자동 생성 모드에서는 다음 파일을
+구분해서 사용한다.
+
+| 파일 | 용도 |
+| --- | --- |
+| `certs/ca.crt` | 관리 노드·Kubernetes 노드·UI Java truststore에 등록할 CA 인증서 |
+| `certs/${HOST_DOMAIN}.crt` | Ingress TLS secret에 넣는 서버 인증서 |
+| `certs/${HOST_DOMAIN}.key` | 서버 인증서의 개인 키; 외부 공유 금지 |
+
+외부 인증서를 사용하는 `TLS_CERT_AUTO_GENERATED=N` 구성에서는 서버 인증서와 키
+외에 발급 CA chain 파일을 `TLS_CA_CERT_PATH`에 반드시 지정한다. 서버 인증서를 CA
+trust anchor로 대신 사용하지 않는다.
+
+배포 전에 다음 사전 점검으로 K-PaaS registry 접근과 UI 기반 이미지 존재 여부를
+확인할 수 있다.
+
+```bash
+source /workspace/Saeoll-PaaS/cp-portal-deployment/script/cp-portal-vars.sh
+curl --fail --silent --show-error https://registry.k-paas.org/v2/ >/dev/null
+sudo podman pull "$K_PAAS_REGISTRY/$K_PAAS_REPO/cp-portal-ui:$IMAGE_TAGS"
+sudo podman pull "$K_PAAS_REGISTRY/$K_PAAS_REPO/cp-portal-migration-ui:$IMAGE_TAGS"
+```
+
 ```bash
 chmod 600 cp-portal-vars.sh
 kubectl config current-context
@@ -200,8 +243,8 @@ containerd가 신뢰해야 한다. 각 control-plane/worker 노드로 인증서�
 
 ```bash
 sudo install -D -m 0644 \
-  /workspace/Saeoll-PaaS/cp-portal-deployment/certs/<HOST_DOMAIN>.crt \
-  /etc/pki/ca-trust/source/anchors/<HOST_DOMAIN>.crt
+  /workspace/Saeoll-PaaS/cp-portal-deployment/certs/ca.crt \
+  /etc/pki/ca-trust/source/anchors/<HOST_DOMAIN>-ca.crt
 sudo update-ca-trust extract
 sudo systemctl restart containerd
 sudo systemctl restart kubelet
@@ -259,7 +302,7 @@ chmod +x recover-ui-images.sh
 ./recover-ui-images.sh 2>&1 | tee recover-ui-images.log
 ```
 
-복구 스크립트에는 배포 과정에서 생성된 `../certs/<HOST_DOMAIN>.crt`와
+복구 스크립트에는 배포 과정에서 생성된 `../certs/ca.crt`와
 `../values/ui/Dockerfile.template`이 필요하다. Harbor 프로젝트 자체가 없으면 먼저
 `cp-portal-repository` 프로젝트를 생성해야 한다. 수정된 기본 배포 스크립트는 이후
 `podman build` 또는 `podman push`가 실패하면 포털 chart 설치로 계속 진행하지 않고

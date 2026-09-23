@@ -10,7 +10,7 @@ source ./deploy-cp-portal.sh
 
 REPOSITORY_HOST=${REPOSITORY_URL#*://}
 REPOSITORY_HOST=${REPOSITORY_HOST%%/*}
-CERT_FILE="../certs/${HOST_DOMAIN}.crt"
+CERT_FILE="../certs/ca.crt"
 
 [[ -f "$CERT_FILE" ]] || {
   echo "[ERROR] Generated portal certificate not found: $CERT_FILE" >&2

@@ -47,7 +47,7 @@ main_uninstall_cp_portal() {
     helm plugin remove cm-push
 
     # remove host_domain cert
-    remove_host_ca "${HOST_DOMAIN}.crt"
+    remove_host_ca "${HOST_DOMAIN}-ca.crt"
 
     # delete directories
     sudo rm -r ../secmg

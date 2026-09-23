@@ -64,9 +64,9 @@ inject_cert_and_build_image() {
 
   TEMPLATE="../values/ui/Dockerfile.template"
   OUTPUT="../values/ui/Dockerfile"
-  CRT_FILE="${HOST_DOMAIN}.crt"
+  CRT_FILE="ca.crt"
 
-  cp ../certs/${HOST_DOMAIN}.crt ../values/ui
+  cp ../certs/ca.crt ../values/ui
   for APP_NAME in "${BUILD_APPS[@]}"; do
     sed -e "s|{APP_NAME}|${APP_NAME}|g" \
         -e "s|{CRT_FILE}|${CRT_FILE}|g" \
@@ -203,7 +203,7 @@ for IDX in 1 2; do
   CMD_KCTL=$(echo "$CMD_KCTL_ORIG" | sed "s/{TG_CTX}/${!TARGET_CTX}/")
   CMD_HELM=$(echo "$CMD_HELM_ORIG" | sed "s/{TG_CTX}/${!TARGET_CTX}/")
   # Setup the cert to each node
-  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/${HOST_DOMAIN}.crt)"
+  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/ca.crt)"
   while :
   do
     POD_COUNT=$(($CMD_KCTL get pods -n $CP_CERT_SETUP_NAMESPACE -l $CP_CERT_SETUP_SELECTOR --field-selector status.phase!=Running --no-headers | wc -l) 2> /dev/null)
@@ -215,7 +215,7 @@ for IDX in 1 2; do
     sleep 5
   done
 done
-install_host_ca "../certs/${HOST_DOMAIN}.crt"
+install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 
 # Deploy the secrets management
 chmod +x ../secmg/deploy-secmg-mc.sh
@@ -298,7 +298,7 @@ for IDX in 2 1; do
     # ui,api,chaos-api,chaos-collector,terraman,catalog-api
     $CMD_HELM install -f ../values/${RELEASE_NAME}-mc1.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
-              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)
+              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/ca.crt)
     # common-api-svc,metric-api-svc
     $CMD_HELM template -f ../values/${RELEASE_NAME}-mc2.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
@@ -307,7 +307,7 @@ for IDX in 2 1; do
     # common-api,metric-api
     $CMD_HELM install -f ../values/${RELEASE_NAME}-mc2.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
-              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)
+              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/ca.crt)
   fi
   # Uninstall cp-cert-setup
   $CMD_HELM uninstall ${CHART_NAME[7]} -n $CP_CERT_SETUP_NAMESPACE

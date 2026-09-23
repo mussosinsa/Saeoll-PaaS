@@ -41,8 +41,18 @@ CERT_DIR="../certs"
 mkdir -p "$CERT_DIR"
 
 if [[ "$TLS_CERT_AUTO_GENERATED" == "N" ]]; then
+  for cert_file in "$TLS_CERT_PATH" "$TLS_KEY_PATH" "$TLS_CA_CERT_PATH"; do
+    if [[ ! -r "$cert_file" ]]; then
+      echo "[ERROR] TLS file is not readable: $cert_file" >&2
+      return 1 2>/dev/null || exit 1
+    fi
+  done
+  openssl x509 -in "$TLS_CERT_PATH" -noout >/dev/null || return 1
+  openssl x509 -in "$TLS_CA_CERT_PATH" -noout >/dev/null || return 1
+  openssl pkey -in "$TLS_KEY_PATH" -noout >/dev/null || return 1
   cp "$TLS_CERT_PATH" "${CERT_DIR}/${HOST_DOMAIN}.crt"
   cp "$TLS_KEY_PATH" "${CERT_DIR}/${HOST_DOMAIN}.key"
+  cp "$TLS_CA_CERT_PATH" "${CERT_DIR}/ca.crt"
   chmod ug+r "${CERT_DIR}"/*
 else
   generatedCA
