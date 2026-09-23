@@ -174,6 +174,103 @@ podman login "harbor.${HOST_DOMAIN}"
 - 인증서 오류: `trust list | grep -i "$HOST_DOMAIN"`로 관리 노드의 trust 등록을
   확인한다.
 
+### UI Pod의 `ImagePullBackOff` 복구
+
+`cp-portal-ui`와 `cp-portal-migration-ui`는 배포 중 생성한 인증서를 포함하도록 다시
+빌드한 뒤 내부 Harbor에서 가져오는 이미지이다. 따라서 두 Pod만
+`ImagePullBackOff`이면 먼저 이벤트의 실제 원인을 확인한다.
+
+```bash
+kubectl -n cp-portal get pod \
+  -l 'app in (cp-portal-ui,cp-portal-migration-ui)' \
+  -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[*].image,SECRET:.spec.imagePullSecrets[*].name'
+
+kubectl -n cp-portal describe pod \
+  -l 'app in (cp-portal-ui,cp-portal-migration-ui)' \
+  | sed -n '/Events:/,$p'
+```
+
+출력된 이벤트 메시지별 복구 방법은 다음과 같다.
+
+#### `x509: certificate signed by unknown authority`
+
+Harbor의 자체 서명 인증서를 **관리 노드뿐 아니라 모든 Kubernetes 노드**의
+containerd가 신뢰해야 한다. 각 control-plane/worker 노드로 인증서를 복사한 뒤
+다음을 실행한다.
+
+```bash
+sudo install -D -m 0644 \
+  /workspace/Saeoll-PaaS/cp-portal-deployment/certs/<HOST_DOMAIN>.crt \
+  /etc/pki/ca-trust/source/anchors/<HOST_DOMAIN>.crt
+sudo update-ca-trust extract
+sudo systemctl restart containerd
+sudo systemctl restart kubelet
+```
+
+각 노드에서 이미지 pull을 직접 확인한다.
+
+```bash
+sudo crictl pull \
+  harbor.<HOST_DOMAIN>/cp-portal-repository/cp-portal-ui:v1.7.0
+```
+
+#### `unauthorized` 또는 `pull access denied`
+
+Pod가 `cp-regcred`를 참조하는지 확인하고 Harbor 인증 secret을 다시 만든다.
+
+```bash
+source /workspace/Saeoll-PaaS/cp-portal-deployment/script/cp-portal-vars.sh
+REPOSITORY_HOST=${REPOSITORY_URL#*://}
+REPOSITORY_HOST=${REPOSITORY_HOST%%/*}
+
+kubectl -n cp-portal delete secret "$IMAGE_PULL_SECRET" --ignore-not-found
+kubectl -n cp-portal create secret docker-registry "$IMAGE_PULL_SECRET" \
+  --docker-server="$REPOSITORY_HOST" \
+  --docker-username="$REPOSITORY_USERNAME" \
+  --docker-password="$REPOSITORY_PASSWORD"
+
+kubectl -n cp-portal patch serviceaccount default \
+  -p "{\"imagePullSecrets\":[{\"name\":\"$IMAGE_PULL_SECRET\"}]}"
+```
+
+Secret의 registry 주소는 Pod의 이미지 주소와 정확히 같아야 한다.
+
+#### `manifest unknown` 또는 `not found`
+
+Harbor 프로젝트에 두 이미지와 설정된 tag가 실제로 push되었는지 확인한다.
+
+```bash
+source /workspace/Saeoll-PaaS/cp-portal-deployment/script/cp-portal-vars.sh
+
+curl -sku "$REPOSITORY_USERNAME:$REPOSITORY_PASSWORD" \
+  "${REPOSITORY_URL}/v2/${REPOSITORY_PROJECT_NAME}/cp-portal-ui/tags/list"
+curl -sku "$REPOSITORY_USERNAME:$REPOSITORY_PASSWORD" \
+  "${REPOSITORY_URL}/v2/${REPOSITORY_PROJECT_NAME}/cp-portal-migration-ui/tags/list"
+```
+
+`IMAGE_TAGS`에 지정된 tag가 없으면 배포 로그에서 `podman build`/`podman push` 실패를
+확인한 뒤 해당 이미지를 다시 빌드하여 push한다. Harbor 프로젝트가 없으면 먼저
+`cp-portal-repository` 프로젝트를 생성해야 한다.
+
+#### DNS 또는 연결 오류
+
+모든 노드에서 Harbor 도메인이 MetalLB Ingress IP로 해석되고 443 포트에 연결되는지
+확인한다.
+
+```bash
+getent hosts "harbor.<HOST_DOMAIN>"
+curl -kv "https://harbor.<HOST_DOMAIN>/v2/"
+```
+
+수정 후 두 Deployment를 재시작하고 상태를 확인한다.
+
+```bash
+kubectl -n cp-portal rollout restart deployment/cp-portal-ui-deployment
+kubectl -n cp-portal rollout restart deployment/cp-portal-migration-ui-deployment
+kubectl -n cp-portal rollout status deployment/cp-portal-ui-deployment --timeout=5m
+kubectl -n cp-portal rollout status deployment/cp-portal-migration-ui-deployment --timeout=5m
+```
+
 ## 7. 제거
 
 제거하면 포털 구성요소의 namespace와 PV가 삭제될 수 있으므로 먼저 데이터를
