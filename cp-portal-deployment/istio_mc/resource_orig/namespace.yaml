@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    kubernetes.io/metadata.name: {ISTIO_NAMESPACE}
+    topology.istio.io/network: {TG_NETWORK}
+  name: {ISTIO_NAMESPACE}

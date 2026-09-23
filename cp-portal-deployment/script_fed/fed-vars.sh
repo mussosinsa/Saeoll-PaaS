@@ -1,0 +1,16 @@
+# KARMADA
+KARMADA_CONFIG_PATH="/etc/karmada/karmada-apiserver.config"
+
+# NATS
+NATS_CHART_NAME="nats"
+NATS_CHART_VERSION="9.0.28"
+NATS_ID="cpnats"
+NATS_PASSWORD="cpnats"
+
+# CP_PORTAL
+MEMBER_IAAS_TYPE=(
+"OPENSTACK"
+"NAVER"
+"NHN"
+"KT"
+)

@@ -1,0 +1,191 @@
+# Default values for container platform portal in istio resources
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+global:
+  namespace: {ISTIO_NAMESPACE}
+  gateway: cp-gateway
+
+tlsSecret:
+  name: {TLS_SECRET}
+  tls:
+    crt: tls.crt
+    key: tls.key
+
+gateway:
+  name: cp-gateway
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      name: http
+      protocol: HTTP
+      number: 80
+    hosts:
+      - "*"
+    tls:
+      httpsRedirect: true
+  - port:
+      name: https
+      protocol: HTTPS
+      number: 443
+    hosts:
+      - "*"
+    tls:
+      mode: SIMPLE
+      credentialName: {TLS_SECRET}
+
+virtualService:
+- name : openbao
+  hosts:
+  - "{SECMG_HOST}"
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: openbao.{SECMG_NAMESPACE}.svc.cluster.local
+        port:
+          number: 8200
+- name : harbor
+  hosts:
+  - "{REPOSITORY_HOST}"
+  http:
+  - match:
+    - uri:
+        prefix: /api/
+    - uri:
+        prefix: /service/
+    - uri:
+        prefix: /v2/
+    - uri:
+        prefix: /c/
+    route:
+    - destination:
+        host: harbor-core.{REPOSITORY_NAMESPACE}.svc.cluster.local
+        port:
+          number: 80
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: harbor-portal.{REPOSITORY_NAMESPACE}.svc.cluster.local
+        port:
+          number: 80
+- name : keycloak
+  hosts:
+  - "{KEYCLOAK_HOST}"
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: keycloak.{KEYCLOAK_NAMESPACE}.svc.cluster.local
+        port:
+          number: 80
+- name : chartmuseum
+  hosts:
+  - "{CHART_REPOSITORY_HOST}"
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: chartmuseum.{CHART_REPOSITORY_NAMESPACE}.svc.cluster.local
+        port:
+          number: 8080
+- name : cp-portal
+  hosts:
+    - "{CP_PORTAL_HOST}"
+  http:
+  - match:
+    - uri:
+        regex: /cpapi(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpapi(/|$)(.*)
+        rewrite: /\2
+    route:
+    - destination:
+        host: cp-portal-api-service.{NAMESPACE}.svc.cluster.local
+        port:
+          number: 3333
+  - match:
+    - uri:
+        regex: /cpcatalog(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpcatalog(/|$)(.*)
+        rewrite: /\2
+    route:
+    - destination:
+        host: cp-portal-catalog-api-service.{NAMESPACE}.svc.cluster.local
+        port:
+          number: 8093
+  - match:
+    - uri:
+        regex: /cpchaos(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpchaos(/|$)(.*)
+        rewrite: /\2
+    route:
+    - destination:
+        host: cp-portal-chaos-api-service.{NAMESPACE}.svc.cluster.local
+        port:
+          number: 8092
+  - match:
+      - uri:
+          regex: /cpremote(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpremote(/|$)(.*)
+        rewrite: /\2
+    route:
+      - destination:
+          host: cp-portal-remote-api-service.{NAMESPACE}.svc.cluster.local
+          port:
+            number: 8095
+  - match:
+      - uri:
+          regex: /cpmig(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpmig(/|$)(.*)
+        rewrite: /\2
+    route:
+      - destination:
+          host: cp-portal-migration-api-service.{NAMESPACE}.svc.cluster.local
+          port:
+            number: 8901
+  - match:
+      - uri:
+          regex: /cpmigauth(/|$)(.*)
+    rewrite:
+      uriRegexRewrite:
+        match: /cpmigauth(/|$)(.*)
+        rewrite: /\2
+    route:
+      - destination:
+          host: cp-portal-migration-auth-service.{NAMESPACE}.svc.cluster.local
+          port:
+            number: 8911
+  - match:
+      - uri:
+          regex: /(cpmigui/.*)
+    route:
+      - destination:
+          host: cp-portal-migration-ui-service.{NAMESPACE}.svc.cluster.local
+          port:
+            number: 8097
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: cp-portal-ui-service.{NAMESPACE}.svc.cluster.local
+        port:
+          number: 8090

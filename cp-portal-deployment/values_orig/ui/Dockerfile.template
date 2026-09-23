@@ -1,0 +1,4 @@
+FROM {K_PAAS_REGISTRY}/{K_PAAS_REPO}/{APP_NAME}:{IMAGE_TAGS}
+COPY {CRT_FILE} /tmp/{CRT_FILE}
+RUN keytool -import -trustcacerts -keystore $JAVA_HOME/lib/security/cacerts -storepass changeit -noprompt -alias keycloak -file /tmp/{CRT_FILE}
+ENTRYPOINT ["java","-jar","-Dspring.profiles.active=prod","/home/1000/{APP_NAME}.war"]

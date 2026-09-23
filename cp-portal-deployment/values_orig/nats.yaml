@@ -1,0 +1,41 @@
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  registry: docker.io
+  repository: bitnamilegacy/nats
+
+podSecurityContext:
+  enabled: true
+  fsGroupChangePolicy: Always
+  sysctls: []
+  supplementalGroups: []
+  fsGroup: 1001
+
+containerSecurityContext:
+  enabled: true
+  seLinuxOptions: {}
+  runAsUser: 1001
+  runAsGroup: 1001
+  runAsNonRoot: true
+  privileged: false
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: "RuntimeDefault"
+
+jetstream:
+  enabled: true
+
+auth:
+  enabled: true
+  credentials:
+    - user: "{NATS_ID}"
+      password: "{NATS_PASSWORD}"
+
+persistence:
+  enabled: true
+  storageClass: "{CP_PORTAL_STORAGECLASS}"

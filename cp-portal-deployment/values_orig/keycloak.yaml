@@ -1,0 +1,106 @@
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  registry: docker.io
+  repository: bitnamilegacy/keycloak
+
+auth:
+  adminUser: "{KEYCLOAK_ADMIN_USERNAME}"
+  adminPassword: "{KEYCLOAK_ADMIN_PASSWORD}"
+
+tls:
+  enabled: false
+
+production: true
+proxyHeaders: "xforwarded"
+extraStartupArgs: "--import-realm"
+
+resources:
+  requests:
+    cpu: 300m
+    memory: 512Mi
+  limits:
+    cpu: 750m
+    memory: 768Mi
+
+podSecurityContext:
+  enabled: true
+  fsGroupChangePolicy: Always
+  sysctls: []
+  supplementalGroups: []
+  fsGroup: 1001
+
+containerSecurityContext:
+  enabled: true
+  seLinuxOptions: {}
+  runAsUser: 1001
+  runAsGroup: 1001
+  runAsNonRoot: true
+  privileged: false
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: "RuntimeDefault"
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/edge
+              operator: DoesNotExist
+
+extraEnvVars:
+  - name: KC_DB
+    value: "{KEYCLOAK_DB_VENDOR}"
+  - name: KC_DB_SCHEMA
+    value: "{KEYCLOAK_DB_SCHEMA}"
+  - name: KC_DB_URL
+    value: "jdbc:{KEYCLOAK_DB_VENDOR}://{DATABASE_URL}/{KEYCLOAK_DB_SCHEMA}"
+  - name: KC_DB_USERNAME
+    value: "{DATABASE_USER_ID}"
+  - name: KC_DB_PASSWORD
+    value: "{DATABASE_USER_PASSWORD}"
+  - name: KC_PROXY
+    value: "edge"
+  - name: KC_HTTP_ENABLED
+    value: "true"
+
+replicaCount: {KEYCLOAK_SESSIONS_COUNT}
+
+extraVolumes:
+  - name: {KEYCLOAK_CP_REALM}
+    configMap:
+      name: {KEYCLOAK_CP_REALM}
+extraVolumeMounts:
+  - name: {KEYCLOAK_CP_REALM}
+    mountPath: /opt/bitnami/keycloak/data/import/{KEYCLOAK_CP_REALM}-realm.json
+    subPath: {KEYCLOAK_CP_REALM}-realm.json
+
+ingress:
+  enabled: {INGRESS_ENABLED}
+  ingressClassName: "{INGRESS_CLASS_NAME}"
+  hostname: {KEYCLOAK_HOST}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 2500m
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 12k
+  tls: true
+  selfSigned: false
+  extraTls:
+    - hosts:
+        - {KEYCLOAK_HOST}
+      secretName: "{TLS_SECRET}"
+
+postgresql:
+  enabled: false
+
+externalDatabase:
+  host: {DATABASE_HOST}
+  port: {DATABASE_PORT}
+  database: {KEYCLOAK_DB_SCHEMA}
+  user: {DATABASE_USER_ID}
+  password: {DATABASE_USER_PASSWORD}
