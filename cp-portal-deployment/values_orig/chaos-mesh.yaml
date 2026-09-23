@@ -1,0 +1,94 @@
+controllerManager:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: chaos-mesh/chaos-mesh
+  service:
+    type: ClusterIP
+  replicaCount: 1
+  securityContext:
+    fsGroupChangePolicy: Always
+    sysctls: []
+    supplementalGroups: []
+    fsGroup: 1001
+    runAsGroup: 1001
+    runAsUser: 1001
+    runAsNonRoot: true
+    seLinuxOptions: {}
+    seccompProfile:
+      type: "RuntimeDefault"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+
+chaosDaemon:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: chaos-mesh/chaos-daemon
+  runtime: crio
+  socketPath: /var/run/crio/crio.sock
+  securityContext:
+    fsGroupChangePolicy: Always
+    sysctls: []
+    supplementalGroups: []
+    seLinuxOptions: {}
+    seccompProfile:
+      type: "RuntimeDefault"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+
+dashboard:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: chaos-mesh/chaos-dashboard
+  service:
+    type: ClusterIP
+  securityContext:
+    fsGroupChangePolicy: Always
+    sysctls: []
+    supplementalGroups: []
+    fsGroup: 1001
+    runAsGroup: 1001
+    runAsUser: 1001
+    runAsNonRoot: true
+    seLinuxOptions: {}
+    seccompProfile:
+      type: "RuntimeDefault"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+
+dnsServer:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: chaos-mesh/chaos-coredns
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - chaos-dns-server
+            topologyKey: kubernetes.io/hostname
+          weight: 100
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist

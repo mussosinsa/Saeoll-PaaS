@@ -14,15 +14,15 @@
     state: absent
 
 - name: Install OpenSSH build dependencies
-  apt:
+  dnf:
     name:
-    - make
-    - gcc
-    - zlib1g-dev
-    - libssl-dev
-    - libpam-dev
+      - make
+      - gcc
+      - zlib-devel
+      - openssl-devel
+      - pam-devel
     state: present
-    update_cache: yes
+    update_cache: true
 
 - name: Download OpenSSH 9.8p1 source archive
   get_url:
@@ -77,8 +77,7 @@
 - name: Enable and start OpenSSH
   shell: |
     systemctl daemon-reload
-    systemctl stop sshd
-    systemctl disnable sshd
+    systemctl disable --now sshd.service
     systemctl start opensshd.service
     systemctl enable opensshd.service
 

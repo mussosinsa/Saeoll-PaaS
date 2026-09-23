@@ -1,0 +1,11 @@
+# Default values for container platform certificate setup.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+metadata:
+  name: {CP_CERT_SETUP_NAME}
+  namespace: {CP_CERT_SETUP_NAMESPACE}
+
+data:
+  target:
+    cert: cert
+    script: echo "$CA_CERT" > /usr/local/share/ca-certificates/{HOST_DOMAIN}.crt && update-ca-certificates && for cr in crio containerd; do if [ $(systemctl is-enabled $cr 2> /dev/null) ]; then systemctl restart "$cr"; fi; done

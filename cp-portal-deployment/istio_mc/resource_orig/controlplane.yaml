@@ -1,0 +1,27 @@
+apiVersion: install.istio.io/v1alpha1
+metadata:
+  name: istio-controlplane
+  namespace: {ISTIO_NAMESPACE}
+kind: IstioOperator
+spec:
+  profile: demo
+  meshConfig:
+    enablePrometheusMerge: true
+    defaultConfig:
+      proxyMetadata:
+        ISTIO_META_DNS_CAPTURE: "true"
+  components:
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: false
+  values:
+    sidecarInjectorWebhook:
+      rewriteAppHTTPProbe: false
+    global:
+      meshID: usmesh
+      multiCluster:
+        clusterName: {TG_CLUSTER_NAME}
+      network: {TG_NETWORK}

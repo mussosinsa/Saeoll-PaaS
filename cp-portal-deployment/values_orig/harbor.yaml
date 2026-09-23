@@ -1,0 +1,142 @@
+expose:
+  type: {EXPOSE_TYPE}
+  tls:
+    enabled: {INGRESS_ENABLED}
+    certSource: secret
+    secret:
+      secretName: "{TLS_SECRET}"
+  ingress:
+    hosts:
+      core: {REPOSITORY_HOST}
+    className: "{INGRESS_CLASS_NAME}"
+
+externalURL: "{REPOSITORY_URL}"
+
+persistence:
+  enabled: true
+  persistentVolumeClaim:
+    registry:
+      storageClass: "{REPOSITORY_STORAGECLASS}"
+      size: 20Gi
+    jobservice:
+      jobLog:
+        storageClass: "{REPOSITORY_STORAGECLASS}"
+    database:
+      storageClass: "{REPOSITORY_STORAGECLASS}"
+    redis:
+      storageClass: "{REPOSITORY_STORAGECLASS}"
+    trivy:
+      storageClass: "{REPOSITORY_STORAGECLASS}"
+
+harborAdminPassword: "{REPOSITORY_PASSWORD}"
+
+ipFamily:
+  ipv6:
+    enabled: {IPV6_ENABLED}
+
+containerSecurityContext:
+  privileged: false
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+nginx:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/nginx-photon
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+portal:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/harbor-portal
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+core:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/harbor-core
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+jobservice:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/harbor-jobservice
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+registry:
+  registry:
+    image:
+      repository: {K_PAAS_REGISTRY}/goharbor/registry-photon
+  controller:
+    image:
+      repository: {K_PAAS_REGISTRY}/goharbor/harbor-registryctl
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+trivy:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/trivy-adapter-photon
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+database:
+  internal:
+    image:
+      repository: {K_PAAS_REGISTRY}/goharbor/harbor-db
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/edge
+                  operator: DoesNotExist
+redis:
+  internal:
+    image:
+      repository: {K_PAAS_REGISTRY}/goharbor/redis-photon
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/edge
+                  operator: DoesNotExist
+exporter:
+  image:
+    repository: {K_PAAS_REGISTRY}/goharbor/harbor-exporter
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist

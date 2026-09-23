@@ -1,0 +1,324 @@
+# Default values for container platform portal.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+global:
+  name: cp-portal
+  namespace: {NAMESPACE}
+  image:
+    registry: {K_PAAS_REGISTRY}/{K_PAAS_REPO}
+    tag: {IMAGE_TAGS}
+    pullPolicy: {IMAGE_PULL_POLICY}
+    pullSecrets: {IMAGE_PULL_SECRET}
+  expose:
+    type: {SERVICE_TYPE}
+    protocol: {SERVICE_PROTOCOL}
+  probe:
+    liveness:
+      path: /actuator/health/liveness
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /actuator/health/readiness
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      failureThreshold: 3
+  envFrom:
+    - configMapRef:
+        name: cp-portal-configmap
+    - secretRef:
+        name: cp-portal-secret
+
+imageCredentials:
+  name: {IMAGE_PULL_SECRET}
+  registry: {REPOSITORY_HOST}
+  username: {REPOSITORY_USERNAME}
+  password: {REPOSITORY_PASSWORD}
+
+apps:
+  - name: cp-portal-ui
+    image:
+      pullPolicy: Always
+      registry: {REPOSITORY_HOST}/{REPOSITORY_PROJECT_NAME}
+    replicas: 1
+    expose:
+      port: 8090
+      targetPort: 8090
+  - name: cp-portal-api
+    replicas: 1
+    expose:
+      port: 3333
+      targetPort: 3333
+  - name: cp-portal-common-api
+    replicas: 1
+    expose:
+      port: 3334
+      targetPort: 3334
+  - name: cp-portal-metric-api
+    replicas: 1
+    expose:
+      port: 8900
+      targetPort: 8900
+  - name: cp-portal-chaos-api
+    replicas: 1
+    expose:
+      port: 8092
+      targetPort: 8092
+  - name: cp-portal-chaos-collector
+    replicas: 1
+    expose:
+      port: 8094
+      targetPort: 8094
+  - name: cp-portal-remote-api
+    replicas: 1
+    expose:
+      port: 8095
+      targetPort: 8095
+  - name: cp-portal-terraman
+    replicas: 1
+    expose:
+      port: 8091
+      targetPort: 8091
+    volumes:
+      name: data
+      path: /home/1000/.ssh
+  - name: cp-portal-catalog-api
+    replicas: 1
+    expose:
+      port: 8093
+      targetPort: 8093
+    volumes:
+      name: data
+      path: /home/1000/helm
+  - name: cp-portal-migration-api
+    replicas: 1
+    expose:
+      port: 8901
+      targetPort: 8901
+    extraEnvFrom:
+      - secretRef:
+          name: cp-portal-migration-secret
+  - name: cp-portal-migration-ui
+    image:
+      pullPolicy: Always
+      registry: {REPOSITORY_HOST}/{REPOSITORY_PROJECT_NAME}
+    replicas: 1
+    probe:
+      liveness:
+        path: /cpmigui/actuator/health/liveness
+      readiness:
+        path: /cpmigui/actuator/health/readiness
+    expose:
+      port: 8097
+      targetPort: 8097
+    extraEnvFrom:
+      - secretRef:
+          name: cp-portal-migration-secret
+  - name: cp-portal-migration-auth
+    replicas: 1
+    expose:
+      port: 8911
+      targetPort: 8911
+    extraEnvFrom:
+      - secretRef:
+          name: cp-portal-migration-secret
+  - name: cp-portal-federation-api
+    replicas: 1
+    serviceAccountName: cp-portal-federation-sa
+    expose:
+      port: 8000
+      targetPort: 8000
+    args:
+      - --karmada-kubeconfig=/etc/kubeconfig
+      - --karmada-context=karmada-apiserver
+      - --insecure-bind-address=0.0.0.0
+      - --bind-address=0.0.0.0
+    volumes:
+      name: kubeconfig
+      type: secret
+      secretName: kubeconfig
+      path: /etc/kubeconfig
+      subPath: kubeconfig
+    extraEnvFrom:
+      - configMapRef:
+          name: cp-portal-federation-configmap
+      - secretRef:
+          name: cp-portal-federation-secret
+  - name: cp-portal-federation-collector
+    replicas: 1
+    expose:
+      port: 8001
+      targetPort: 8001
+    extraEnvFrom:
+      - configMapRef:
+          name: cp-portal-federation-configmap
+      - secretRef:
+          name: cp-portal-federation-secret
+  - name: cp-portal-federation-ui
+    replicas: 1
+    expose:
+      port: 8002
+      targetPort: 8002
+    extraEnvFrom:
+      - configMapRef:
+          name: cp-portal-federation-configmap
+      - secretRef:
+          name: cp-portal-federation-secret
+    initContainers:
+      - name: prepare-ui
+        image: registry.k-paas.org/kpaas/cp-portal-federation-ui:v1.7.0
+        command: ["sh", "-c"]
+        args:
+          - >
+            cp -r /usr/share/nginx/html-original/* /usr/share/nginx/html/ &&
+            echo "window._env_ = {" > /usr/share/nginx/html/env-config.js &&
+            echo "  VITE_CP_PORTAL_FEDERATION_API_URL: \"${VITE_CP_PORTAL_FEDERATION_API_URL}\"," >> /usr/share/nginx/html/env-config.js &&
+            echo "  VITE_CP_PORTAL_UI_URI: \"${VITE_CP_PORTAL_UI_URI}\"" >> /usr/share/nginx/html/env-config.js &&
+            echo "};" >> /usr/share/nginx/html/env-config.js
+        envFrom:
+          - configMapRef:
+              name: cp-portal-federation-configmap
+        volumeMounts:
+          - name: html-dir
+            mountPath: /usr/share/nginx/html
+    volumes:
+      - name: nginx-cache
+        type: emptyDir
+        path: /var/cache/nginx
+      - name: run-dir
+        type: emptyDir
+        path: /run
+      - name: html-dir
+        type: emptyDir
+        path: /usr/share/nginx/html
+
+ingress:
+  host: {CP_PORTAL_HOST}
+  className: "{INGRESS_CLASS_NAME}"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+  paths:
+    - path: /(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-ui-service
+      port: 8090
+    - path: /cpapi/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-api-service
+      port: 3333
+    - path: /cpcatalog/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-catalog-api-service
+      port: 8093
+    - path: /cpchaos/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-chaos-api-service
+      port: 8092
+    - path: /cpremote/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-remote-api-service
+      port: 8095
+    - path: /cpmig/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-migration-api-service
+      port: 8901
+    - path: /cpmigauth/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-migration-auth-service
+      port: 8911
+    - path: /(cpmigui/.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-migration-ui-service
+      port: 8097
+    - path: /cpfed/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-federation-api-service
+      port: 8000
+    - path: /cpfedui/(.*)
+      pathType: ImplementationSpecific
+      service: cp-portal-federation-ui-service
+      port: 8002
+  tls:
+    secretName: "{TLS_SECRET}"
+
+tlsSecret:
+  name: {TLS_SECRET}
+  tls:
+    crt: tls.crt
+    key: tls.key
+
+persistence:
+  persistentVolumeClaim:
+    - name: cp-portal-terraman
+      accessMode: ReadWriteOnce
+      storageClass: {CP_PORTAL_STORAGECLASS}
+      size: 5Gi
+    - name: cp-portal-catalog-api
+      accessMode: ReadWriteOnce
+      storageClass: {CP_PORTAL_STORAGECLASS}
+      size: 5Gi
+
+configmap:
+  - name: cp-portal-configmap
+    data:
+      K8S_MASTER_NODE_IP: {K8S_MASTER_NODE_IP}
+      KEYCLOAK_DB_SCHEMA: {KEYCLOAK_DB_SCHEMA}
+      KEYCLOAK_CP_REALM: {KEYCLOAK_CP_REALM}
+      KEYCLOAK_URI: {KEYCLOAK_URL}
+      REPOSITORY_URL: {REPOSITORY_URL}
+      DATABASE_URL: {DATABASE_URL}
+      VAULT_URL: http://openbao.{SECMG_NAMESPACE}.svc.cluster.local:8200
+      CP_PORTAL_UI_URI: {CP_PORTAL_URL}
+      CP_PORTAL_API_URI: {CP_PORTAL_URL}/cpapi
+      CP_PORTAL_CATALOG_API_URI: {CP_PORTAL_URL}/cpcatalog
+      CP_PORTAL_CHAOS_API_URI: {CP_PORTAL_URL}/cpchaos
+      CP_PORTAL_REMOTE_API_URI: {CP_PORTAL_URL}/cpremote
+      CP_PORTAL_MIGRATION_UI_URI: {CP_PORTAL_URL}/cpmigui
+      CP_MIGRATION_API_URI: {CP_PORTAL_URL}/cpmig
+      CP_MIGRATION_AUTH_URI: {CP_PORTAL_URL}/cpmigauth
+      CP_PORTAL_FEDERATION_UI_URI: {CP_PORTAL_URL}/cpfedui
+      CP_PORTAL_COMMON_API_URI: http://cp-portal-common-api-service.{NAMESPACE}.svc.cluster.local:3334
+      CP_PORTAL_TERRAMAN_API_URI: http://cp-portal-terraman-service.{NAMESPACE}.svc.cluster.local:8091
+      CP_PORTAL_METRIC_COLLECTOR_API_URI: http://cp-portal-metric-api-service.{NAMESPACE}.svc.cluster.local:8900
+      CP_PORTAL_CHAOS_COLLECTOR_API_URI: http://cp-portal-chaos-collector-service.{NAMESPACE}.svc.cluster.local:8094
+      CHAOS_DASHBOARD_API_URI: http://chaos-dashboard.{CHAOS_MESH_NAMESPACE}.svc.cluster.local:2333
+      HELM_REPO_CA: /home/1000/helm/cert
+      HELM_REPO_CACHE: /home/1000/helm/cache
+      HELM_REPO_CONFIG: /home/1000/helm/repositories.yaml
+      CHART_REPO_NAME: {CHART_REPOSITORY_NAME}
+      CHART_REPO_URL: {CHART_REPOSITORY_URL}
+  - name: cp-portal-federation-configmap
+    data:
+      GIN_MODE: release
+      HOST_CLUSTER_NAME: {HOST_CLUSTER_ID}
+      KARMADA_API: https://karmada-apiserver.karmada-system.svc.cluster.local:5443
+      NATS_BUCKET_NAME: recent_values
+      NATS_SUBJECT_NAME: cluster.metrics
+      NATS_URL: nats://nats.{NAMESPACE}.svc.cluster.local:4222
+      VITE_CP_PORTAL_FEDERATION_API_URL: {CP_PORTAL_URL}/cpfed
+      VITE_CP_PORTAL_UI_URI: {CP_PORTAL_URL}
+      
+
+secret:
+  - name: cp-portal-secret
+    data:
+      KEYCLOAK_ADMIN_USERNAME: {KEYCLOAK_ADMIN_USERNAME}
+      KEYCLOAK_ADMIN_PASSWORD: {KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_CP_REALM_ID: {KEYCLOAK_CP_REALM_ID}
+      KEYCLOAK_CP_CLIENT_ID: {KEYCLOAK_CP_CLIENT_ID}
+      KEYCLOAK_CP_CLIENT_SECRET: {KEYCLOAK_CP_CLIENT_SECRET}
+      DATABASE_USER_ID: {DATABASE_USER_ID}
+      DATABASE_USER_PASSWORD: {DATABASE_USER_PASSWORD}
+      DATABASE_TERRAMAN_ID: {DATABASE_TERRAMAN_ID}
+      DATABASE_TERRAMAN_PASSWORD: {DATABASE_TERRAMAN_PASSWORD}
+      VAULT_ROLE_NAME: {SECMG_ROLE_NAME}
+      VAULT_ROLE_ID: {SECMG_ROLE_ID}
+      VAULT_SECRET_ID: {SECMG_SECRET_ID}
+      CHART_REPO_USERNAME: NOAUTH
+      CHART_REPO_PASSWORD: NOAUTH
+      CHART_REPO_CRT: tls.crt
+  - name: cp-portal-federation-secret
+    data:
+      KARMADA_TOKEN: karmada_token
+      NATS_ID: {NATS_ID}
+      NATS_PASSWORD: {NATS_PASSWORD}

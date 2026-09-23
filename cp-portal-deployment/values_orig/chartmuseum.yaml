@@ -1,0 +1,51 @@
+image:
+  repository: {K_PAAS_REGISTRY}/library/chartmuseum
+
+env:
+  open:
+    DISABLE_API: false
+
+ingress:
+  enabled: {INGRESS_ENABLED}
+  ingressClassName: "{INGRESS_CLASS_NAME}"
+  pathType: "ImplementationSpecific"
+  hosts:
+  - name: {CHART_REPOSITORY_HOST}
+    path: /
+    tls: true
+    tlsSecret: "{TLS_SECRET}"
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 80m
+    memory: 64Mi
+
+containerSecurityContext:
+  seLinuxOptions: {}
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  privileged: false
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: "RuntimeDefault"
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/edge
+              operator: DoesNotExist
+
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  storageClass: "{CHART_REPOSITORY_STORAGECLASS}"

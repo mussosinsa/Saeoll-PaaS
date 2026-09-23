@@ -1,0 +1,29 @@
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cp-portal-federation-sa
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: cp-portal-federation-sa
+    namespace: ${TG_NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cp-portal-federation-sa
+  namespace: ${TG_NAMESPACE}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cp-portal-federation-sa
+  namespace: ${TG_NAMESPACE}
+  annotations:
+    kubernetes.io/service-account.name: cp-portal-federation-sa
+type: kubernetes.io/service-account-token

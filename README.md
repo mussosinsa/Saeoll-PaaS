@@ -74,6 +74,26 @@
 ## 릴리즈
 - https://github.com/K-PaaS/cp-portal-release
 
+### 기존 Kubernetes에 CP-Portal 설치
+
+`standalone/install-existing-k8s.sh`는 CP-Portal을 포함하여 설치하지만, CP-Portal
+배포 파일은 이 저장소가 아닌 위의 `cp-portal-release` 저장소에서 별도로
+제공됩니다. 릴리즈를 내려받은 뒤 manifest 경로를 명시하여 실행합니다.
+
+```bash
+CP_PORTAL_MANIFEST=/root/cp-portal-release/<manifest-path> \
+  /root/Saeoll-PaaS/standalone/install-existing-k8s.sh
+```
+
+CP-Portal을 Helm chart로 패키징한 환경에서는 manifest 대신 실제 chart 참조와
+필요한 values 파일을 지정할 수 있습니다.
+
+```bash
+CP_PORTAL_CHART=/path/to/cp-portal-chart \
+CP_PORTAL_VALUES_FILE=/path/to/values.yaml \
+  /root/Saeoll-PaaS/standalone/install-existing-k8s.sh
+```
+
 ## 메인
 - https://github.com/K-PaaS/container-platform
 

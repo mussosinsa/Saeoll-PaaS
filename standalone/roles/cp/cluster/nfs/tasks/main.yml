@@ -1,6 +1,6 @@
 ---
-- name: Install nfs-common package
-  apt:
-    name: nfs-common
+- name: Install Rocky Linux NFS client utilities
+  dnf:
+    name: nfs-utils
     state: present
-    update_cache: yes
+    update_cache: true

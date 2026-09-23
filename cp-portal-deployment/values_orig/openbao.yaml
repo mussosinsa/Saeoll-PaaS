@@ -1,0 +1,96 @@
+injector:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: "openbao/vault-k8s"
+  agentImage:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: "openbao/openbao"
+  securityContext:
+    pod:
+      runAsUser: 1000
+      fsGroup: 1000
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      runAsNonRoot: true
+      seccompProfile:
+        type: "RuntimeDefault"
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ template "openbao.name" . }}-agent-injector
+              app.kubernetes.io/instance: "{{ .Release.Name }}"
+              component: webhook
+          topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+server:
+  image:
+    registry: "{K_PAAS_REGISTRY}"
+    repository: "openbao/openbao"
+  ingress:
+    enabled: {INGRESS_ENABLED}
+    ingressClassName: "{INGRESS_CLASS_NAME}"
+    hosts:
+      - host: {SECMG_HOST}
+    tls:
+    - secretName: "{TLS_SECRET}"
+      hosts:
+        - {SECMG_HOST}
+  dataStorage:
+    storageClass: "{SECMG_STORAGECLASS}"
+  statefulSet:
+    securityContext:
+      pod:
+        runAsUser: 1000
+        fsGroup: 1000
+      container:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        runAsNonRoot: true
+        seccompProfile:
+          type: "RuntimeDefault"
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ template "openbao.name" . }}
+              app.kubernetes.io/instance: "{{ .Release.Name }}"
+              component: server
+          topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: DoesNotExist
+csi:
+  daemonSet:
+    securityContext:
+      pod:
+        runAsUser: 1000
+        fsGroup: 1000
+      container:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        runAsNonRoot: true
+        seccompProfile:
+          type: "RuntimeDefault"
+  pod:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/edge
+                  operator: DoesNotExist
