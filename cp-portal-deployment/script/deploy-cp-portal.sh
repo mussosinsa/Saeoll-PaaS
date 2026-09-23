@@ -64,6 +64,7 @@ terraman_ssh_key_copy() {
 }
 
 inject_cert_and_build_image() {
+  local IMAGE_REF
   BUILD_APPS=(
     "cp-portal-ui"
     "cp-portal-migration-ui"
@@ -79,8 +80,17 @@ inject_cert_and_build_image() {
         -e "s|{CRT_FILE}|${CRT_FILE}|g" \
         "$TEMPLATE" > "$OUTPUT"
 
-    sudo podman build -t "$REPOSITORY_HOST/$REPOSITORY_PROJECT_NAME/$APP_NAME:$IMAGE_TAGS" ../values/ui
-    sudo podman push "$REPOSITORY_HOST/$REPOSITORY_PROJECT_NAME/$APP_NAME:$IMAGE_TAGS"
+    IMAGE_REF="$REPOSITORY_HOST/$REPOSITORY_PROJECT_NAME/$APP_NAME:$IMAGE_TAGS"
+    if ! sudo podman build -t "$IMAGE_REF" ../values/ui; then
+      echo "[ERROR] Failed to build UI image: $IMAGE_REF" >&2
+      rm -f "$OUTPUT"
+      return 1
+    fi
+    if ! sudo podman push "$IMAGE_REF"; then
+      echo "[ERROR] Failed to push UI image to Harbor: $IMAGE_REF" >&2
+      rm -f "$OUTPUT"
+      return 1
+    fi
 
     rm -f "$OUTPUT"
   done
@@ -225,10 +235,11 @@ main_pre_cp_portal() {
   done
 
   curl -u $REPOSITORY_USERNAME:$REPOSITORY_PASSWORD -k $REPOSITORY_URL/api/v2.0/projects -XPOST --data-binary "{\"project_name\": \"$REPOSITORY_PROJECT_NAME\", \"public\": false}" -H "Content-Type: application/json" -i
-  sudo podman login $REPOSITORY_HOST --username $REPOSITORY_USERNAME --password $REPOSITORY_PASSWORD
+  printf '%s' "$REPOSITORY_PASSWORD" | sudo podman login "$REPOSITORY_HOST" \
+    --username "$REPOSITORY_USERNAME" --password-stdin || return 1
 
   # Build ui image by adding generated self-signed certificate into keystore
-  inject_cert_and_build_image
+  inject_cert_and_build_image || return 1
 
   # Deploy the keycloak
   kubectl create namespace ${NAMESPACE[3]}
@@ -276,8 +287,8 @@ main_cp_portal() {
 
 
 main() {
-  main_pre_cp_portal
-  main_cp_portal
+  main_pre_cp_portal || return 1
+  main_cp_portal || return 1
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main

@@ -249,8 +249,21 @@ curl -sku "$REPOSITORY_USERNAME:$REPOSITORY_PASSWORD" \
 ```
 
 `IMAGE_TAGS`에 지정된 tag가 없으면 배포 로그에서 `podman build`/`podman push` 실패를
-확인한 뒤 해당 이미지를 다시 빌드하여 push한다. Harbor 프로젝트가 없으면 먼저
-`cp-portal-repository` 프로젝트를 생성해야 한다.
+확인한다. Harbor 프로젝트는 있지만 두 repository가 비어 있는 경우 다음 복구
+스크립트가 인증서를 포함한 두 UI 이미지를 다시 빌드하고 push한다. 이어서 pull
+secret을 갱신하고 두 Deployment의 rollout 완료까지 확인한다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
+chmod +x recover-ui-images.sh
+./recover-ui-images.sh 2>&1 | tee recover-ui-images.log
+```
+
+복구 스크립트에는 배포 과정에서 생성된 `../certs/<HOST_DOMAIN>.crt`와
+`../values/ui/Dockerfile.template`이 필요하다. Harbor 프로젝트 자체가 없으면 먼저
+`cp-portal-repository` 프로젝트를 생성해야 한다. 수정된 기본 배포 스크립트는 이후
+`podman build` 또는 `podman push`가 실패하면 포털 chart 설치로 계속 진행하지 않고
+즉시 실패한다.
 
 #### DNS 또는 연결 오류
 
