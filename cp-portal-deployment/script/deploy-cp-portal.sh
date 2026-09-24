@@ -4,6 +4,48 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/../lib/rocky-linux.sh"
 require_rocky_linux_9_7 || return 1 2>/dev/null || exit 1
 source ../script/cp-portal-vars.sh
+
+configure_portal_vars_if_needed() {
+  local cluster_env=${CLUSTER_ENV_FILE:-}
+  local -a candidates=()
+
+  if [[ "$HOST_DOMAIN" != *'{'* && "$K8S_MASTER_NODE_IP" != *'{'* ]]; then
+    return 0
+  fi
+
+  if [[ -n "$cluster_env" ]]; then
+    [[ -r "$cluster_env" ]] || {
+      echo "[ERROR] CLUSTER_ENV_FILE is not readable: $cluster_env" >&2
+      return 1
+    }
+  else
+    while IFS= read -r file; do
+      candidates+=("$file")
+    done < <(find "$HOME" -maxdepth 5 -type f -name cluster.env 2>/dev/null | sort)
+
+    if ((${#candidates[@]} == 1)); then
+      cluster_env=${candidates[0]}
+    elif ((${#candidates[@]} > 1)); then
+      echo "[ERROR] Multiple cluster.env files were found:" >&2
+      printf '  %s\n' "${candidates[@]}" >&2
+      echo "[ERROR] Select one with: CLUSTER_ENV_FILE=/path/to/cluster.env ./deploy-cp-portal.sh" >&2
+      return 1
+    else
+      echo "[ERROR] cp-portal-vars.sh still contains placeholders and cluster.env was not found under $HOME." >&2
+      echo "[ERROR] Run: CLUSTER_ENV_FILE=/path/to/cluster.env ./deploy-cp-portal.sh" >&2
+      return 1
+    fi
+  fi
+
+  echo "[INFO] Configuring CP-Portal variables from: $cluster_env"
+  CP_PORTAL_VARS_FILE="$SCRIPT_DIR/cp-portal-vars.sh" \
+    "$SCRIPT_DIR/configure-from-cluster-env.sh" "$cluster_env" || return 1
+  # Reload the values written by the configurator into this process.
+  # shellcheck source=cp-portal-vars.sh
+  source "$SCRIPT_DIR/cp-portal-vars.sh"
+}
+
+configure_portal_vars_if_needed || return 1 2>/dev/null || exit 1
 declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
 DEPLOY_CONFIG[INGRESS_ENABLED]=true

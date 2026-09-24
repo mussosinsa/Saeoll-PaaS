@@ -65,6 +65,20 @@ chmod +x configure-from-cluster-env.sh
 ./configure-from-cluster-env.sh /path/to/cluster.env
 ```
 
+`cp-portal-vars.sh`에 기본 placeholder가 남아 있는 상태에서
+`deploy-cp-portal.sh`를 바로 실행해도 `$HOME` 아래 5단계 이내에서 `cluster.env`를
+하나만 찾으면 자동으로 위 설정을 수행한다. 파일이 다른 위치에 있거나 여러 개이면
+다음처럼 정확한 경로를 지정해 배포한다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
+CLUSTER_ENV_FILE=/실제/경로/cluster.env ./deploy-cp-portal.sh
+```
+
+자동 구성은 `cp-portal-vars.sh.bak.<timestamp>` 백업을 만든 후 현재 배포 프로세스에
+새 값을 다시 로드한다. 클러스터 설정에서 알 수 없는 Harbor, MariaDB, Keycloak
+비밀번호는 여전히 `cp-portal-vars.sh`에서 운영 값으로 변경해야 한다.
+
 자동 설정 스크립트의 매핑은 다음과 같다.
 
 | `cluster.env` | `cp-portal-vars.sh` | 예시 결과 |
