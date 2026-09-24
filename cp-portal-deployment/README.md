@@ -179,6 +179,45 @@ Keycloak, ChartMuseum, Chaos Mesh와 CP-Portal을 순서대로 배포한다. 실
 `certs`, `values`, `secmg` 디렉터리와 `secmg/unseal-key`는 민감 정보이므로 백업
 매체에서도 접근 권한을 제한한다.
 
+### OpenBao 초기화 및 Unseal 확인
+
+배포 스크립트는 OpenBao API를 최대 10분 동안 기다린 다음 초기화 여부를 확인한다.
+처음 배포할 때만 key share 3개와 threshold 2로 초기화하고, 두 key를 제출한 뒤
+`/v1/sys/seal-status`를 다시 조회하여 `sealed=false`가 확인되어야 다음 단계로
+진행한다. 이미 초기화 및 unseal된 OpenBao에서는 작업을 반복하지 않는다.
+
+초기화 응답 전체는 다음 파일에 권한 `600`으로 저장된다.
+
+```text
+/workspace/Saeoll-PaaS/cp-portal-deployment/secmg/unseal-key
+```
+
+이 파일에는 unseal key와 root token이 모두 있으므로 안전한 비밀 저장소에 즉시
+백업하고 일반 백업이나 Git에 포함하지 않는다. OpenBao가 이미 초기화된 상태에서 이
+파일을 잃어버리면 스크립트가 key를 재발급할 수 없으며, 원본 key 백업을 복원해야
+한다.
+
+배포 후 상태는 다음과 같이 확인한다.
+
+```bash
+curl -sk "https://openbao.${HOST_DOMAIN}/v1/sys/init"
+curl -sk "https://openbao.${HOST_DOMAIN}/v1/sys/seal-status"
+kubectl -n openbao get pods
+```
+
+정상 결과에는 각각 `"initialized":true`, `"sealed":false`가 포함되어야 한다.
+OpenBao Pod가 재시작된 후 다시 sealed 상태가 되면 보관한 JSON의
+`keys_base64`에서 서로 다른 key 두 개를 사용해 unseal한다.
+
+```bash
+export BAO_ADDR="https://openbao.${HOST_DOMAIN}"
+curl -sk -H 'Content-Type: application/json' -X POST \
+  --data '{"key":"<keys_base64의 첫 번째 key>"}' "$BAO_ADDR/v1/sys/unseal"
+curl -sk -H 'Content-Type: application/json' -X POST \
+  --data '{"key":"<keys_base64의 두 번째 key>"}' "$BAO_ADDR/v1/sys/unseal"
+curl -sk "$BAO_ADDR/v1/sys/seal-status"
+```
+
 ## 5. 배포 확인 및 접속
 
 ```bash

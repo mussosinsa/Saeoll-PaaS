@@ -225,7 +225,7 @@ main_pre_cp_portal() {
 
   # Deploy the secrets management
   chmod +x ../secmg/deploy-secmg.sh
-  . ../secmg/deploy-secmg.sh
+  . ../secmg/deploy-secmg.sh || return 1
   find ../values -type f -exec sed -i "s/{SECMG_ROLE_ID}/$SECMG_ROLE_ID/g" {} +
   find ../values -type f -exec sed -i "s/{SECMG_SECRET_ID}/$SECMG_SECRET_ID/g" {} +
 

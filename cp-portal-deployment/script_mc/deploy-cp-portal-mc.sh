@@ -219,7 +219,7 @@ install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 
 # Deploy the secrets management
 chmod +x ../secmg/deploy-secmg-mc.sh
-. ../secmg/deploy-secmg-mc.sh
+. ../secmg/deploy-secmg-mc.sh || exit 1
 find ../values -type f -exec sed -i "s/{SECMG_ROLE_ID}/$SECMG_ROLE_ID/g" {} +
 find ../values -type f -exec sed -i "s/{SECMG_SECRET_ID}/$SECMG_SECRET_ID/g" {} +
 
