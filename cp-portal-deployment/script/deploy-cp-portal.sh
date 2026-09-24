@@ -110,6 +110,22 @@ preflight_source_ui_images() {
   done
 }
 
+wait_for_cert_setup() {
+  local daemonset="${CHART_NAME[7]}-daemonset"
+  echo "[INFO] Waiting for $daemonset to install the Harbor CA on every node..."
+  if kubectl -n "$CP_CERT_SETUP_NAMESPACE" rollout status \
+    "daemonset/$daemonset" --timeout=5m; then
+    return 0
+  fi
+
+  echo "[ERROR] Certificate setup failed. Pod status and init-container logs follow." >&2
+  kubectl -n "$CP_CERT_SETUP_NAMESPACE" get pods -l "$CP_CERT_SETUP_SELECTOR" -o wide >&2 || true
+  kubectl -n "$CP_CERT_SETUP_NAMESPACE" describe pods -l "$CP_CERT_SETUP_SELECTOR" >&2 || true
+  kubectl -n "$CP_CERT_SETUP_NAMESPACE" logs -l "$CP_CERT_SETUP_SELECTOR" \
+    --all-containers --prefix --tail=100 >&2 || true
+  return 1
+}
+
 main_pre_cp_portal() {
   ### EXECUTION ########################################
   # Create cluster-admin token
@@ -211,16 +227,7 @@ main_pre_cp_portal() {
 
   # Setup the certificate in cluster
   helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/ca.crt)"
-  while :
-  do
-    POD_COUNT=$((kubectl get pods -n $CP_CERT_SETUP_NAMESPACE -l $CP_CERT_SETUP_SELECTOR --field-selector status.phase!=Running --no-headers | wc -l) 2> /dev/null)
-    echo "[remaining: $POD_COUNT] Adding certificates to each node’s container runtime..."
-    if [[ $POD_COUNT -lt 1 ]]; then
-      echo "Completed..."
-      break
-    fi
-    sleep 5
-  done
+  wait_for_cert_setup || return 1
   install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 
   # Deploy the secrets management

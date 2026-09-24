@@ -204,16 +204,16 @@ for IDX in 1 2; do
   CMD_HELM=$(echo "$CMD_HELM_ORIG" | sed "s/{TG_CTX}/${!TARGET_CTX}/")
   # Setup the cert to each node
   helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/ca.crt)"
-  while :
-  do
-    POD_COUNT=$(($CMD_KCTL get pods -n $CP_CERT_SETUP_NAMESPACE -l $CP_CERT_SETUP_SELECTOR --field-selector status.phase!=Running --no-headers | wc -l) 2> /dev/null)
-    echo "[remaining: $POD_COUNT] Adding certificates to each node’s container runtime..."
-    if [[ $POD_COUNT -lt 1 ]]; then
-      echo "Completed..."
-      break
-    fi
-    sleep 5
-  done
+  CERT_DAEMONSET="${CHART_NAME[7]}-daemonset"
+  if ! $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" rollout status \
+    "daemonset/$CERT_DAEMONSET" --timeout=5m; then
+    echo "[ERROR] Certificate setup failed in cluster${IDX}." >&2
+    $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" describe pods \
+      -l "$CP_CERT_SETUP_SELECTOR" >&2 || true
+    $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" logs -l "$CP_CERT_SETUP_SELECTOR" \
+      --all-containers --prefix --tail=100 >&2 || true
+    exit 1
+  fi
 done
 install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 

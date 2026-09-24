@@ -218,6 +218,47 @@ curl -sk -H 'Content-Type: application/json' -X POST \
 curl -sk "$BAO_ADDR/v1/sys/seal-status"
 ```
 
+### `cp-cert-setup` Init 컨테이너 CrashLoopBackOff
+
+`cp-cert-setup-daemonset`은 내부 Harbor CA를 각 Kubernetes 노드의 Rocky Linux trust
+store에 등록한다. 먼저 실패한 init 컨테이너의 실제 메시지를 확인한다.
+
+```bash
+kubectl -n kube-system get pods -l app=cp-cert-setup -o wide
+kubectl -n kube-system logs -l app=cp-cert-setup \
+  --all-containers --prefix --tail=100
+kubectl -n kube-system describe pods -l app=cp-cert-setup
+```
+
+이전 스크립트에서는 CA 등록 후 init 컨테이너 안에서 `systemctl restart containerd`가
+실패하면 전체 작업이 실패했다. 수정된 값은 CA 등록과 `update-ca-trust extract`는
+필수로 유지하되, init 컨테이너에서 runtime 재시작만 수행할 수 없는 경우 경고를
+출력하고 완료한다. 현재 실패한 release는 다음 명령으로 갱신한다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
+chmod +x recover-node-ca.sh
+./recover-node-ca.sh 2>&1 | tee recover-node-ca.log
+```
+
+복구 스크립트는 최신 Rocky Linux용 값을 사용하여 기존 Helm release를 upgrade하고,
+DaemonSet rollout을 최대 5분간 확인한다. 실패 시 Pod 상태, 이벤트 및 모든 init
+컨테이너 로그를 자동 출력한다. 성공하면 UI Deployment를 다시 시작한다. 이미지
+pull이 정상화된 뒤 출력된 `helm uninstall cp-cert-setup -n kube-system` 명령으로
+임시 DaemonSet을 제거한다.
+
+로그에 `Could not restart containerd` 경고가 있으면 각 Kubernetes 노드에서 한 번씩
+다음을 실행한 후 UI Deployment를 다시 시작한다.
+
+```bash
+sudo update-ca-trust extract
+sudo systemctl restart containerd
+sudo systemctl restart kubelet
+
+kubectl -n cp-portal rollout restart deployment/cp-portal-ui-deployment
+kubectl -n cp-portal rollout restart deployment/cp-portal-migration-ui-deployment
+```
+
 ## 5. 배포 확인 및 접속
 
 ```bash
