@@ -10,6 +10,12 @@ source ./cp-portal-vars.sh
 source ../lib/rocky-linux.sh
 require_rocky_linux_9_7
 
+[[ "$HOST_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || {
+  echo "[ERROR] HOST_DOMAIN is not configured: '$HOST_DOMAIN'" >&2
+  echo "[ERROR] Run configure-from-cluster-env.sh or edit cp-portal-vars.sh first." >&2
+  exit 1
+}
+
 CHART_FILE="../charts/${CHART_NAME[7]}-${CHART_VERSION[${CHART_NAME[7]}]}.tgz"
 CA_FILE=../certs/ca.crt
 DAEMONSET="${CHART_NAME[7]}-daemonset"
@@ -36,7 +42,9 @@ if ! kubectl -n "$CP_CERT_SETUP_NAMESPACE" rollout status \
   kubectl -n "$CP_CERT_SETUP_NAMESPACE" describe pods \
     -l "$CP_CERT_SETUP_SELECTOR" >&2 || true
   kubectl -n "$CP_CERT_SETUP_NAMESPACE" logs \
-    -l "$CP_CERT_SETUP_SELECTOR" --all-containers --prefix --tail=100 >&2 || true
+    -l "$CP_CERT_SETUP_SELECTOR" -c setup --prefix --tail=100 >&2 || true
+  kubectl -n "$CP_CERT_SETUP_NAMESPACE" logs \
+    -l "$CP_CERT_SETUP_SELECTOR" -c setup --previous --prefix --tail=100 >&2 || true
   exit 1
 fi
 

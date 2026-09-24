@@ -10,6 +10,36 @@ DEPLOY_CONFIG[INGRESS_ENABLED]=true
 DEPLOY_CONFIG[EXPOSE_TYPE]="ingress"
 CMD_CREATE_TLS_SECRET="kubectl create secret tls $TLS_SECRET --cert=../certs/${HOST_DOMAIN}.crt  --key=../certs/${HOST_DOMAIN}.key"
 APP_TERRAMAN="cp-portal-terraman"
+
+validate_portal_configuration() {
+  local invalid=0
+
+  if [[ ! "$HOST_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+    echo "[ERROR] HOST_DOMAIN is not configured: '$HOST_DOMAIN'" >&2
+    invalid=1
+  fi
+  if [[ ! "$K8S_MASTER_NODE_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "[ERROR] K8S_MASTER_NODE_IP is not configured: '$K8S_MASTER_NODE_IP'" >&2
+    invalid=1
+  fi
+  if [[ ! "$K8S_CLUSTER_API_SERVER" =~ ^https://[^[:space:]{}]+:[0-9]+$ ]]; then
+    echo "[ERROR] K8S_CLUSTER_API_SERVER is invalid: '$K8S_CLUSTER_API_SERVER'" >&2
+    invalid=1
+  fi
+  if [[ -z "$K8S_STORAGECLASS" || "$K8S_STORAGECLASS" == *'{'* ]]; then
+    echo "[ERROR] K8S_STORAGECLASS is not configured: '$K8S_STORAGECLASS'" >&2
+    invalid=1
+  fi
+
+  if ((invalid)); then
+    echo "[ERROR] Run configure-from-cluster-env.sh or edit cp-portal-vars.sh before deployment." >&2
+    return 1
+  fi
+  if ! kubectl get storageclass "$K8S_STORAGECLASS" >/dev/null 2>&1; then
+    echo "[ERROR] StorageClass does not exist in the current cluster: $K8S_STORAGECLASS" >&2
+    return 1
+  fi
+}
 # -----------------------------------------------------------------------------
 # helm_install <index> [release_name] [namespace] [additional helm install args...]
 # Examples:
@@ -122,15 +152,22 @@ wait_for_cert_setup() {
   kubectl -n "$CP_CERT_SETUP_NAMESPACE" get pods -l "$CP_CERT_SETUP_SELECTOR" -o wide >&2 || true
   kubectl -n "$CP_CERT_SETUP_NAMESPACE" describe pods -l "$CP_CERT_SETUP_SELECTOR" >&2 || true
   kubectl -n "$CP_CERT_SETUP_NAMESPACE" logs -l "$CP_CERT_SETUP_SELECTOR" \
-    --all-containers --prefix --tail=100 >&2 || true
+    -c setup --prefix --tail=100 >&2 || true
+  kubectl -n "$CP_CERT_SETUP_NAMESPACE" logs -l "$CP_CERT_SETUP_SELECTOR" \
+    -c setup --previous --prefix --tail=100 >&2 || true
   return 1
 }
 
 main_pre_cp_portal() {
   ### EXECUTION ########################################
+  validate_portal_configuration || return 1
+
   # Create cluster-admin token
-  kubectl create sa $K8S_CLUSTER_ADMIN -n $K8S_CLUSTER_ADMIN_NAMESPACE
-  kubectl create clusterrolebinding $K8S_CLUSTER_ADMIN --clusterrole=cluster-admin --serviceaccount=$K8S_CLUSTER_ADMIN_NAMESPACE:$K8S_CLUSTER_ADMIN
+  kubectl create sa $K8S_CLUSTER_ADMIN -n $K8S_CLUSTER_ADMIN_NAMESPACE \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create clusterrolebinding $K8S_CLUSTER_ADMIN --clusterrole=cluster-admin \
+    --serviceaccount=$K8S_CLUSTER_ADMIN_NAMESPACE:$K8S_CLUSTER_ADMIN \
+    --dry-run=client -o yaml | kubectl apply -f -
   K8S_CLUSTER_ADMIN_TOKEN=$(kubectl create token $K8S_CLUSTER_ADMIN --duration=999999h -n $K8S_CLUSTER_ADMIN_NAMESPACE)
 
   # Create a secrets mgmt bound cidr
@@ -222,7 +259,7 @@ main_pre_cp_portal() {
 
   # Generate cert and enc_keys
   for f in gen-cert.sh gen-enc-keys.sh; do
-    chmod +x "../script/$f" && . "../script/$f"
+    chmod +x "../script/$f" && . "../script/$f" || return 1
   done
 
   # Setup the certificate in cluster

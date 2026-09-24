@@ -223,10 +223,43 @@ curl -sk "$BAO_ADDR/v1/sys/seal-status"
 `cp-cert-setup-daemonset`은 내부 Harbor CA를 각 Kubernetes 노드의 Rocky Linux trust
 store에 등록한다. 먼저 실패한 init 컨테이너의 실제 메시지를 확인한다.
 
+`openssl` 출력에 `genrsa: Extra option: "domain}.key"`가 있었다면 직접 원인은
+`cp-portal-vars.sh`의 `HOST_DOMAIN="{host domain}"` 기본 placeholder를 실제 값으로
+바꾸지 않은 것이다. 공백이 포함된 placeholder 때문에 인증서 파일명이 여러 shell
+인자로 분리되었고, 이어서 유효하지 않은 CA가 `cp-cert-setup`에 전달된 것이다.
+수정된 배포 스크립트는 Kubernetes 리소스를 만들기 전에 도메인, API 주소,
+master IP, StorageClass를 검증하고 이런 설정이면 즉시 중단한다.
+
+해당 실패 상태에서는 OpenBao 설치 전이므로 다음 순서로 정리하고 다시 실행한다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
+
+# cluster.env의 CONTROL_PLANE_VIP, HAPROXY_PORT, DEFAULT_STORAGE_CLASS,
+# METALLB_POOL을 이용해 실제 값을 설정한다.
+./configure-from-cluster-env.sh /path/to/cluster.env
+
+source ./cp-portal-vars.sh
+printf 'HOST_DOMAIN=%s\nAPI=%s\nSTORAGE=%s\n' \
+  "$HOST_DOMAIN" "$K8S_CLUSTER_API_SERVER" "$K8S_STORAGECLASS"
+
+# 실패한 초기 설치 산출물만 제거한다. OpenBao를 이미 초기화한 환경에서는
+# secmg/unseal-key를 삭제하면 안 된다.
+helm uninstall cp-cert-setup -n kube-system --ignore-not-found
+rm -rf ../certs ../values ../secmg
+
+./deploy-cp-portal.sh 2>&1 | tee cp-portal-deploy.log
+```
+
+제공된 HA cluster.env 예시를 사용하면 예상값은
+`HOST_DOMAIN=192.168.20.155.nip.io`,
+`K8S_CLUSTER_API_SERVER=https://192.168.20.150:8443`,
+`K8S_STORAGECLASS=nfs-client`이다.
+
 ```bash
 kubectl -n kube-system get pods -l app=cp-cert-setup -o wide
 kubectl -n kube-system logs -l app=cp-cert-setup \
-  --all-containers --prefix --tail=100
+  -c setup --previous --prefix --tail=100
 kubectl -n kube-system describe pods -l app=cp-cert-setup
 ```
 

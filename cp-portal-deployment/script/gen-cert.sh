@@ -2,19 +2,19 @@ function generatedCA() {
   echo "Please wait for the certificate to be generated..."
   pushd "$CERT_DIR" >/dev/null
 
-  openssl genrsa -out ca.key 4096
+  openssl genrsa -out ca.key 4096 || return 1
 
   openssl req -x509 -new -nodes -sha512 -days 3650 \
    -subj "/C=KR/ST=Seoul/L=Seoul/O=Personal/OU=Personal/CN=${HOST_DOMAIN}" \
    -key ca.key \
-   -out ca.crt
+   -out ca.crt || return 1
 
-  openssl genrsa -out ${HOST_DOMAIN}.key 4096
+  openssl genrsa -out "${HOST_DOMAIN}.key" 4096 || return 1
 
   openssl req -sha512 -new \
    -subj "/C=KR/ST=Seoul/L=Seoul/O=Personal/OU=Personal/CN=${HOST_DOMAIN}" \
-   -key ${HOST_DOMAIN}.key \
-   -out ${HOST_DOMAIN}.csr
+   -key "${HOST_DOMAIN}.key" \
+   -out "${HOST_DOMAIN}.csr" || return 1
 
   cat > v3.ext <<-EOF
 authorityKeyIdentifier=keyid,issuer
@@ -31,8 +31,10 @@ EOF
   openssl x509 -req -sha512 -days 3650 \
       -extfile v3.ext \
       -CA ca.crt -CAkey ca.key -CAcreateserial \
-      -in ${HOST_DOMAIN}.csr \
-      -out ${HOST_DOMAIN}.crt
+      -in "${HOST_DOMAIN}.csr" \
+      -out "${HOST_DOMAIN}.crt" || return 1
+
+  openssl verify -CAfile ca.crt "${HOST_DOMAIN}.crt" || return 1
 
   popd >/dev/null
 }
@@ -55,5 +57,5 @@ if [[ "$TLS_CERT_AUTO_GENERATED" == "N" ]]; then
   cp "$TLS_CA_CERT_PATH" "${CERT_DIR}/ca.crt"
   chmod ug+r "${CERT_DIR}"/*
 else
-  generatedCA
+  generatedCA || return 1 2>/dev/null || exit 1
 fi

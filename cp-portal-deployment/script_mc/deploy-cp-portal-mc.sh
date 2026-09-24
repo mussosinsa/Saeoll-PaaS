@@ -4,6 +4,10 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/../lib/rocky-linux.sh"
 require_rocky_linux_9_7 || exit 1
 source cp-portal-vars-mc.sh
+if [[ ! "$HOST_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+  echo "[ERROR] HOST_DOMAIN is not configured: '$HOST_DOMAIN'" >&2
+  exit 1
+fi
 declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
 DEPLOY_CONFIG[INGRESS_ENABLED]=false
@@ -189,7 +193,7 @@ chart_pull
 
 # Generate cert and enc_keys
 for f in gen-cert.sh gen-enc-keys.sh; do
-  chmod +x "../script/$f" && . "../script/$f"
+  chmod +x "../script/$f" && . "../script/$f" || exit 1
 done
 
 # Deploy istio resources
