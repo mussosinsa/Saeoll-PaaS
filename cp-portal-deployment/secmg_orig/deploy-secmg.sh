@@ -6,12 +6,14 @@ source "$SECMG_SCRIPT_DIR/openbao-common.sh"
 
 # 1.Deploy Secrets Management
 kubectl create namespace ${NAMESPACE[0]}
-$CMD_CREATE_TLS_SECRET -n ${NAMESPACE[0]}
+create_tls_secret "${NAMESPACE[0]}"
 helm_install 0
 echo
 
 # 2.Wait, initialize, and verify unseal
-prepare_openbao || return 1
+OPENBAO_NAMESPACE=${NAMESPACE[0]}
+start_openbao_port_forward || return 1
+prepare_openbao || { stop_openbao_port_forward; return 1; }
 
 # 5.Enable AppRole
 ${CURL_CMD} \
@@ -62,4 +64,5 @@ SECMG_GET_SECRET_ID_RESP=$(${CURL_CMD} \
     "${SECMG_URL}/v1/auth/approle/role/${SECMG_ROLE_NAME}/secret-id")
 SECMG_SECRET_ID=`echo $SECMG_GET_SECRET_ID_RESP | sed 's/.*secret_id":"//g' | sed 's/".*//g'`
 
+stop_openbao_port_forward
 unset SECMG_ROOT_TOKEN

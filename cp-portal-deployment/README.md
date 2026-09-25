@@ -232,6 +232,44 @@ curl -sk -H 'Content-Type: application/json' -X POST \
 curl -sk "$BAO_ADDR/v1/sys/seal-status"
 ```
 
+#### OpenBao Pod는 Running인데 API 대기가 반복되는 경우
+
+`openbao-0`와 `openbao-agent-injector`가 `Running`인데
+`Waiting for OpenBao API (n/120)`만 반복되면 OpenBao 자체가 시작되지 않은 것이
+아니라, 설치 관리 노드에서 `https://openbao.<HOST_DOMAIN>` Ingress까지의 DNS 또는
+라우팅이 아직 준비되지 않은 경우가 많다. OpenBao는 초기화 전에는 `openbao-0`이
+`0/1 Running`으로 표시될 수도 있다.
+
+수정된 배포는 초기화와 unseal을 외부 Ingress로 수행하지 않는다. 사용 가능한 로컬
+포트를 자동 선택하고 다음과 같은 Kubernetes API port-forward를 백그라운드로 열어
+`openbao.openbao.svc:8200`에 접속한다.
+
+```text
+http://127.0.0.1:<임시 포트> -> service/openbao.openbao:8200
+```
+
+초기화, unseal, AppRole 및 secret 설정을 마치면 tunnel을 자동으로 종료하고 원래의
+`SECMG_URL`을 복원한다. port-forward가 중간에 종료되면 로그를 출력하고 즉시 실패하므로
+더 이상 10분 동안 원인을 숨긴 채 대기하지 않는다. 기존 설치 프로세스는 `Ctrl+C`로
+중단한 다음 최신 스크립트로 다시 실행한다. 재실행 시 Helm release는
+`upgrade --install`로 갱신되고, 생성된 values/template은 새 원본으로 갱신되며, 기존
+인증서와 `secmg/unseal-key`는 보존된다.
+
+```bash
+cd /workspace/Saeoll-PaaS/cp-portal-deployment/script
+./deploy-cp-portal.sh 2>&1 | tee cp-portal-deploy-resume.log
+```
+
+이미 생성된 PVC를 유지해야 하는 경우 `secmg/unseal-key`를 삭제하거나 OpenBao
+namespace를 제거하지 않는다.
+
+수동으로 서비스 접근을 확인하려면 별도 터미널에서 다음을 실행한다.
+
+```bash
+kubectl -n openbao port-forward service/openbao 18200:8200
+curl -s http://127.0.0.1:18200/v1/sys/init
+```
+
 ### `cp-cert-setup` Init 컨테이너 CrashLoopBackOff
 
 `cp-cert-setup-daemonset`은 내부 Harbor CA를 각 Kubernetes 노드의 Rocky Linux trust

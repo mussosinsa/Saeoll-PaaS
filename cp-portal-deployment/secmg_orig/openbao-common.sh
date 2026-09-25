@@ -3,6 +3,9 @@
 OPENBAO_INIT_FILE=${OPENBAO_INIT_FILE:-../secmg/unseal-key}
 OPENBAO_WAIT_ATTEMPTS=${OPENBAO_WAIT_ATTEMPTS:-120}
 OPENBAO_WAIT_INTERVAL=${OPENBAO_WAIT_INTERVAL:-5}
+OPENBAO_PORT_FORWARD_PID=
+OPENBAO_EXTERNAL_URL=
+OPENBAO_PORT_FORWARD_LOG=
 
 openbao_json_scalar() {
   local field=$1
@@ -14,9 +17,52 @@ openbao_json_array() {
   python3 -c 'import json,sys; [print(value) for value in (json.load(sys.stdin).get(sys.argv[1]) or [])]' "$field"
 }
 
+start_openbao_port_forward() {
+  local kubectl_cmd=${OPENBAO_KUBECTL_CMD:-kubectl}
+  local namespace=${OPENBAO_NAMESPACE:-openbao}
+  local service=${OPENBAO_SERVICE:-openbao}
+  local port
+
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || return 1
+  OPENBAO_PORT_FORWARD_LOG=$(mktemp)
+  OPENBAO_EXTERNAL_URL=$SECMG_URL
+
+  # The management host may not resolve or route the external Ingress yet.
+  # Reach the ClusterIP service through the Kubernetes API instead.
+  $kubectl_cmd -n "$namespace" port-forward "service/$service" \
+    --address 127.0.0.1 "$port:8200" >"$OPENBAO_PORT_FORWARD_LOG" 2>&1 &
+  OPENBAO_PORT_FORWARD_PID=$!
+  SECMG_URL="http://127.0.0.1:$port"
+
+  sleep 1
+  if ! kill -0 "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null; then
+    echo "[ERROR] Failed to start OpenBao port-forward." >&2
+    cat "$OPENBAO_PORT_FORWARD_LOG" >&2
+    stop_openbao_port_forward
+    return 1
+  fi
+  echo "[INFO] OpenBao API tunnel: $SECMG_URL -> service/$service.$namespace:8200"
+}
+
+stop_openbao_port_forward() {
+  if [[ -n "${OPENBAO_PORT_FORWARD_PID:-}" ]]; then
+    kill "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null || true
+    wait "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null || true
+    OPENBAO_PORT_FORWARD_PID=
+  fi
+  [[ -n "${OPENBAO_PORT_FORWARD_LOG:-}" ]] && rm -f "$OPENBAO_PORT_FORWARD_LOG"
+  [[ -n "${OPENBAO_EXTERNAL_URL:-}" ]] && SECMG_URL=$OPENBAO_EXTERNAL_URL
+}
+
 wait_for_openbao_api() {
   local attempt response
   for ((attempt=1; attempt<=OPENBAO_WAIT_ATTEMPTS; attempt++)); do
+    if [[ -n "${OPENBAO_PORT_FORWARD_PID:-}" ]] && \
+      ! kill -0 "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null; then
+      echo "[ERROR] OpenBao port-forward stopped unexpectedly." >&2
+      cat "$OPENBAO_PORT_FORWARD_LOG" >&2
+      return 1
+    fi
     if response=$(curl --fail --silent --show-error --insecure \
       "${SECMG_URL}/v1/sys/init" 2>/dev/null); then
       if [[ -n "$response" ]]; then

@@ -50,8 +50,15 @@ declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
 DEPLOY_CONFIG[INGRESS_ENABLED]=true
 DEPLOY_CONFIG[EXPOSE_TYPE]="ingress"
-CMD_CREATE_TLS_SECRET="kubectl create secret tls $TLS_SECRET --cert=../certs/${HOST_DOMAIN}.crt  --key=../certs/${HOST_DOMAIN}.key"
 APP_TERRAMAN="cp-portal-terraman"
+
+create_tls_secret() {
+  local namespace=$1
+  kubectl create secret tls "$TLS_SECRET" \
+    --cert="../certs/${HOST_DOMAIN}.crt" \
+    --key="../certs/${HOST_DOMAIN}.key" \
+    --namespace "$namespace" --dry-run=client -o yaml | kubectl apply -f -
+}
 
 validate_portal_configuration() {
   local invalid=0
@@ -99,7 +106,7 @@ helm_install() {
   local chart_path="../charts/${chart_name}-${version}.tgz"
 
   shift $(( $# < 3 ? $# : 3 ))
-  helm install -f "$value_path" "$release_name" "$chart_path" -n "$namespace" "$@"
+  helm upgrade --install -f "$value_path" "$release_name" "$chart_path" -n "$namespace" "$@"
 }
 chart_pull(){
   mkdir -p ../charts
@@ -218,7 +225,11 @@ main_pre_cp_portal() {
   SECMG_BOUND_CIDR="${SECMG_BOUND_CIDR%,}"
 
   # Copy the directory
-  cp -r ../secmg_orig ../secmg
+  # Refresh generated templates on retry, but preserve OpenBao initialization
+  # material such as ../secmg/unseal-key.
+  mkdir -p ../secmg
+  cp -r ../secmg_orig/. ../secmg/
+  rm -rf ../values
   cp -r ../values_orig ../values
 
   # Set a iaas type
@@ -322,7 +333,7 @@ main_pre_cp_portal() {
 
   # Deploy the harbor
   kubectl create namespace ${NAMESPACE[2]}
-  $CMD_CREATE_TLS_SECRET -n ${NAMESPACE[2]}
+  create_tls_secret "${NAMESPACE[2]}"
   helm_install 2
   while :
   do
@@ -343,13 +354,13 @@ main_pre_cp_portal() {
 
   # Deploy the keycloak
   kubectl create namespace ${NAMESPACE[3]}
-  $CMD_CREATE_TLS_SECRET -n ${NAMESPACE[3]}
+  create_tls_secret "${NAMESPACE[3]}"
   kubectl create configmap $KEYCLOAK_CP_REALM --from-file=../values/$KEYCLOAK_CP_REALM-realm.json -n ${NAMESPACE[3]}
   helm_install 3
 
   # Deploy the chartmuseum
   kubectl create namespace ${NAMESPACE[5]}
-  $CMD_CREATE_TLS_SECRET -n ${NAMESPACE[5]}
+  create_tls_secret "${NAMESPACE[5]}"
   helm_install 5
   while :
   do

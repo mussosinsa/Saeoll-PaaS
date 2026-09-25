@@ -57,5 +57,14 @@ if [[ "$TLS_CERT_AUTO_GENERATED" == "N" ]]; then
   cp "$TLS_CA_CERT_PATH" "${CERT_DIR}/ca.crt"
   chmod ug+r "${CERT_DIR}"/*
 else
-  generatedCA || return 1 2>/dev/null || exit 1
+  if [[ -s "$CERT_DIR/ca.crt" && -s "$CERT_DIR/${HOST_DOMAIN}.crt" && \
+        -s "$CERT_DIR/${HOST_DOMAIN}.key" ]] && \
+     openssl verify -CAfile "$CERT_DIR/ca.crt" "$CERT_DIR/${HOST_DOMAIN}.crt" >/dev/null 2>&1; then
+    echo "[INFO] Reusing the existing certificate for $HOST_DOMAIN."
+  else
+    rm -f "$CERT_DIR/ca.crt" "$CERT_DIR/ca.key" "$CERT_DIR/ca.srl" \
+      "$CERT_DIR/${HOST_DOMAIN}.crt" "$CERT_DIR/${HOST_DOMAIN}.csr" \
+      "$CERT_DIR/${HOST_DOMAIN}.key" "$CERT_DIR/v3.ext"
+    generatedCA || return 1 2>/dev/null || exit 1
+  fi
 fi
