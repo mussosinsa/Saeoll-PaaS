@@ -3,6 +3,7 @@
 OPENBAO_INIT_FILE=${OPENBAO_INIT_FILE:-../secmg/unseal-key}
 OPENBAO_WAIT_ATTEMPTS=${OPENBAO_WAIT_ATTEMPTS:-120}
 OPENBAO_WAIT_INTERVAL=${OPENBAO_WAIT_INTERVAL:-5}
+OPENBAO_PORT_FORWARD_RESTARTS=${OPENBAO_PORT_FORWARD_RESTARTS:-5}
 OPENBAO_PORT_FORWARD_PID=
 OPENBAO_EXTERNAL_URL=
 OPENBAO_PORT_FORWARD_LOG=
@@ -17,15 +18,97 @@ openbao_json_array() {
   python3 -c 'import json,sys; [print(value) for value in (json.load(sys.stdin).get(sys.argv[1]) or [])]' "$field"
 }
 
-start_openbao_port_forward() {
+openbao_pod_status() {
+  local kubectl_cmd=${OPENBAO_KUBECTL_CMD:-kubectl}
+  local namespace=${OPENBAO_NAMESPACE:-openbao}
+  local selector=${OPENBAO_SERVER_SELECTOR:-app.kubernetes.io/name=openbao,component=server}
+
+  # Prints one line per server pod: <name> <phase> <running:true|false> <detail>
+  $kubectl_cmd -n "$namespace" --request-timeout=10s get pods -l "$selector" -o json 2>/dev/null | \
+    python3 -c '
+import json, sys
+for pod in json.load(sys.stdin).get("items", []):
+    status = pod.get("status", {})
+    phase = status.get("phase", "Unknown")
+    running = False
+    detail = ""
+    for cs in status.get("containerStatuses") or []:
+        state = cs.get("state", {})
+        if "running" in state:
+            running = True
+        elif "waiting" in state:
+            detail = state["waiting"].get("reason", "") + ": " + state["waiting"].get("message", "")
+        elif "terminated" in state:
+            detail = "Terminated: " + state["terminated"].get("reason", "")
+    if not detail:
+        for cond in status.get("conditions") or []:
+            if cond.get("status") != "True" and cond.get("reason"):
+                detail = cond.get("reason", "") + ": " + cond.get("message", "")
+                break
+    print(pod["metadata"]["name"], phase, str(running).lower(), " ".join(detail.split())[:300])
+'
+}
+
+diagnose_openbao_pod() {
+  local kubectl_cmd=${OPENBAO_KUBECTL_CMD:-kubectl}
+  local namespace=${OPENBAO_NAMESPACE:-openbao}
+  local selector=${OPENBAO_SERVER_SELECTOR:-app.kubernetes.io/name=openbao,component=server}
+
+  echo "[ERROR] ===== OpenBao diagnostics (namespace: $namespace) =====" >&2
+  $kubectl_cmd -n "$namespace" get pods,pvc -o wide >&2 || true
+  $kubectl_cmd get storageclass >&2 || true
+  $kubectl_cmd -n "$namespace" describe pods -l "$selector" >&2 || true
+  $kubectl_cmd -n "$namespace" describe pvc >&2 || true
+  $kubectl_cmd -n "$namespace" get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 30 >&2 || true
+  $kubectl_cmd -n "$namespace" logs -l "$selector" --tail=50 --prefix >&2 2>/dev/null || true
+  cat >&2 <<'HINT'
+[HINT] Pending 원인별 확인 사항
+  - PVC Pending / "unbound immediate PersistentVolumeClaims":
+      K8S_STORAGECLASS의 provisioner 동작 여부(NFS 서버 접근, nfs-utils 설치)를 확인한다.
+  - ErrImagePull / ImagePullBackOff:
+      각 노드에서 K_PAAS_REGISTRY 이미지 pull(DNS, 프록시, CA)을 확인한다.
+  - Unschedulable / didn't match pod anti-affinity / taint:
+      control-plane taint가 없는 일반 worker 노드가 있는지, edge 라벨 노드만 있는지 확인한다.
+HINT
+}
+
+wait_for_openbao_pod_running() {
+  local attempts=${OPENBAO_POD_WAIT_ATTEMPTS:-$OPENBAO_WAIT_ATTEMPTS}
+  local attempt line name phase running detail
+
+  for ((attempt=1; attempt<=attempts; attempt++)); do
+    line=$(openbao_pod_status | head -n 1)
+    read -r name phase running detail <<<"$line"
+    if [[ "$phase" == "Running" && "$running" == "true" ]]; then
+      echo "[OK] OpenBao pod $name is Running (sealed pods stay 0/1 until unsealed)."
+      return 0
+    fi
+    case "$detail" in
+      ErrImagePull*|ImagePullBackOff*|InvalidImageName*|CreateContainerConfigError*)
+        if ((attempt >= 24)); then
+          echo "[ERROR] OpenBao pod $name cannot start: $detail" >&2
+          diagnose_openbao_pod
+          return 1
+        fi
+        ;;
+    esac
+    echo "[INFO] Waiting for OpenBao pod (${attempt}/${attempts}): ${name:-<none>} ${phase:-NotFound} ${detail}"
+    sleep "$OPENBAO_WAIT_INTERVAL"
+  done
+  echo "[ERROR] OpenBao pod did not reach Running state." >&2
+  diagnose_openbao_pod
+  return 1
+}
+
+open_openbao_tunnel() {
   local kubectl_cmd=${OPENBAO_KUBECTL_CMD:-kubectl}
   local namespace=${OPENBAO_NAMESPACE:-openbao}
   local service=${OPENBAO_SERVICE:-openbao}
   local port
 
   port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || return 1
-  OPENBAO_PORT_FORWARD_LOG=$(mktemp)
-  OPENBAO_EXTERNAL_URL=$SECMG_URL
+  [[ -n "${OPENBAO_PORT_FORWARD_LOG:-}" ]] || OPENBAO_PORT_FORWARD_LOG=$(mktemp)
+  : >"$OPENBAO_PORT_FORWARD_LOG"
 
   # The management host may not resolve or route the external Ingress yet.
   # Reach the ClusterIP service through the Kubernetes API instead.
@@ -34,14 +117,32 @@ start_openbao_port_forward() {
   OPENBAO_PORT_FORWARD_PID=$!
   SECMG_URL="http://127.0.0.1:$port"
 
-  sleep 1
+  sleep 2
   if ! kill -0 "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null; then
     echo "[ERROR] Failed to start OpenBao port-forward." >&2
     cat "$OPENBAO_PORT_FORWARD_LOG" >&2
-    stop_openbao_port_forward
+    OPENBAO_PORT_FORWARD_PID=
     return 1
   fi
   echo "[INFO] OpenBao API tunnel: $SECMG_URL -> service/$service.$namespace:8200"
+}
+
+start_openbao_port_forward() {
+  OPENBAO_EXTERNAL_URL=$SECMG_URL
+  # kubectl port-forward exits immediately while the backing pod is Pending,
+  # so wait for the server container to run before opening the tunnel.
+  wait_for_openbao_pod_running || return 1
+  open_openbao_tunnel || { stop_openbao_port_forward; return 1; }
+}
+
+restart_openbao_port_forward() {
+  if [[ -n "${OPENBAO_PORT_FORWARD_PID:-}" ]]; then
+    kill "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null || true
+    wait "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null || true
+    OPENBAO_PORT_FORWARD_PID=
+  fi
+  wait_for_openbao_pod_running || return 1
+  open_openbao_tunnel
 }
 
 stop_openbao_port_forward() {
@@ -51,17 +152,27 @@ stop_openbao_port_forward() {
     OPENBAO_PORT_FORWARD_PID=
   fi
   [[ -n "${OPENBAO_PORT_FORWARD_LOG:-}" ]] && rm -f "$OPENBAO_PORT_FORWARD_LOG"
+  OPENBAO_PORT_FORWARD_LOG=
   [[ -n "${OPENBAO_EXTERNAL_URL:-}" ]] && SECMG_URL=$OPENBAO_EXTERNAL_URL
+  OPENBAO_EXTERNAL_URL=
+  return 0
 }
 
 wait_for_openbao_api() {
-  local attempt response
+  local attempt response restarts=0
   for ((attempt=1; attempt<=OPENBAO_WAIT_ATTEMPTS; attempt++)); do
-    if [[ -n "${OPENBAO_PORT_FORWARD_PID:-}" ]] && \
-      ! kill -0 "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null; then
-      echo "[ERROR] OpenBao port-forward stopped unexpectedly." >&2
-      cat "$OPENBAO_PORT_FORWARD_LOG" >&2
-      return 1
+    if [[ -n "${OPENBAO_EXTERNAL_URL:-}" ]] && \
+      { [[ -z "${OPENBAO_PORT_FORWARD_PID:-}" ]] || ! kill -0 "$OPENBAO_PORT_FORWARD_PID" 2>/dev/null; }; then
+      echo "[WARN] OpenBao port-forward stopped:" >&2
+      cat "$OPENBAO_PORT_FORWARD_LOG" >&2 2>/dev/null
+      if ((restarts >= OPENBAO_PORT_FORWARD_RESTARTS)); then
+        echo "[ERROR] OpenBao port-forward failed $restarts times." >&2
+        diagnose_openbao_pod
+        return 1
+      fi
+      restarts=$((restarts + 1))
+      echo "[INFO] Restarting OpenBao port-forward (${restarts}/${OPENBAO_PORT_FORWARD_RESTARTS})..."
+      restart_openbao_port_forward || return 1
     fi
     if response=$(curl --fail --silent --show-error --insecure \
       "${SECMG_URL}/v1/sys/init" 2>/dev/null); then
@@ -110,6 +221,11 @@ initialize_openbao() {
   fi
 
   umask 077
+  if [[ -s "$OPENBAO_INIT_FILE" ]]; then
+    # A stale file from an earlier OpenBao data volume must not be lost silently.
+    cp -p "$OPENBAO_INIT_FILE" "${OPENBAO_INIT_FILE}.$(date +%Y%m%d%H%M%S).bak"
+    echo "[WARN] Previous $OPENBAO_INIT_FILE was backed up before re-initialization." >&2
+  fi
   printf '%s\n' "$init_response" > "$OPENBAO_INIT_FILE"
   chmod 600 "$OPENBAO_INIT_FILE"
   echo "[OK] OpenBao initialized. Initialization material saved to $OPENBAO_INIT_FILE (mode 600)."

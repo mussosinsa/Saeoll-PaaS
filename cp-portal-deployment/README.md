@@ -249,8 +249,37 @@ http://127.0.0.1:<임시 포트> -> service/openbao.openbao:8200
 ```
 
 초기화, unseal, AppRole 및 secret 설정을 마치면 tunnel을 자동으로 종료하고 원래의
-`SECMG_URL`을 복원한다. port-forward가 중간에 종료되면 로그를 출력하고 즉시 실패하므로
-더 이상 10분 동안 원인을 숨긴 채 대기하지 않는다. 기존 설치 프로세스는 `Ctrl+C`로
+`SECMG_URL`을 복원한다.
+
+#### `unable to forward port because pod is not running. Current status=Pending`
+
+`kubectl port-forward`는 대상 Pod가 `Pending`이면 즉시 종료된다. Helm 설치 직후에는
+PVC 바인딩과 이미지 pull이 끝나지 않아 `openbao-0`이 잠시 `Pending`이므로, 스크립트는
+tunnel을 열기 전에 OpenBao server 컨테이너가 실제로 `Running`이 될 때까지 최대 10분
+대기한다(`Waiting for OpenBao pod (n/120): openbao-0 Pending <원인>`). sealed 상태의
+OpenBao는 readiness probe가 실패하여 `0/1 Running`으로 표시되므로 Ready가 아니라
+Running을 기준으로 판단한다. 대기 중 port-forward가 끊기면 Pod 상태를 다시 확인한 뒤
+최대 5회(`OPENBAO_PORT_FORWARD_RESTARTS`) 재연결한다.
+
+제한 시간 안에 Running이 되지 않거나 `ImagePullBackOff`가 약 2분 이상 지속되면
+Pod/PVC/StorageClass 상태, `describe`, 최근 이벤트를 출력하고 실패한다. 주요 원인은
+다음과 같다.
+
+| 이벤트/상태 | 원인 및 조치 |
+| --- | --- |
+| `pod has unbound immediate PersistentVolumeClaims`, PVC `Pending` | `K8S_STORAGECLASS`의 provisioner(NFS 서버 접근, 각 노드 `nfs-utils`)를 확인 |
+| `ErrImagePull`, `ImagePullBackOff` | 각 노드에서 `K_PAAS_REGISTRY` 이미지 pull(DNS, 프록시, CA) 확인 |
+| `didn't match pod anti-affinity`, `untolerated taint` | control-plane taint가 없는 일반 worker 노드가 있는지 확인 |
+
+```bash
+kubectl -n openbao get pods,pvc -o wide
+kubectl -n openbao describe pod openbao-0
+kubectl -n openbao get events --sort-by=.lastTimestamp | tail -30
+```
+
+원인을 해결한 뒤 스크립트를 다시 실행하면 된다. OpenBao 데이터 PVC가 새로 만들어져
+초기화가 다시 필요한 경우 기존 `secmg/unseal-key`는 `unseal-key.<시각>.bak`로 백업된 뒤
+새 초기화 결과로 교체된다. 기존 설치 프로세스는 `Ctrl+C`로
 중단한 다음 최신 스크립트로 다시 실행한다. 재실행 시 Helm release는
 `upgrade --install`로 갱신되고, 생성된 values/template은 새 원본으로 갱신되며, 기존
 인증서와 `secmg/unseal-key`는 보존된다.
