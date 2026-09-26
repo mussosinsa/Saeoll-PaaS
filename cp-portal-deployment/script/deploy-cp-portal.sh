@@ -89,6 +89,76 @@ validate_portal_configuration() {
     return 1
   fi
 }
+ingress_controller_running() {
+  kubectl -n "$INGRESS_NAMESPACE" get pods -l "$INGRESS_CONTROLLER_SELECTOR" \
+    --field-selector=status.phase=Running -o name 2>/dev/null | grep -q .
+}
+
+# ingress-nginx must exist before OpenBao/Harbor/Keycloak Ingresses are created
+# and before SECMG_BOUND_CIDR is derived from the controller pod IPs.
+ensure_ingress_controller() {
+  local manifest=${INGRESS_MANIFEST:-"$SCRIPT_DIR/../../applications/ingress-nginx-1.13.3/deploy.yaml"}
+  local service=${INGRESS_SERVICE:-ingress-nginx-controller}
+  local lb_ip=${INGRESS_LB_IP:-}
+  local ip attempt
+
+  # HOST_DOMAIN such as 192.168.40.216.nip.io must resolve to the ingress LB IP.
+  if [[ -z "$lb_ip" && "$HOST_DOMAIN" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})\.nip\.io$ ]]; then
+    lb_ip=${BASH_REMATCH[1]}
+  fi
+
+  if ! ingress_controller_running; then
+    if [[ "${INSTALL_INGRESS_NGINX:-true}" != "true" ]]; then
+      echo "[ERROR] No running ingress controller in namespace $INGRESS_NAMESPACE ($INGRESS_CONTROLLER_SELECTOR)." >&2
+      echo "[ERROR] Install ingress-nginx or unset INSTALL_INGRESS_NGINX=false." >&2
+      return 1
+    fi
+    [[ -f "$manifest" ]] || {
+      echo "[ERROR] ingress-nginx manifest not found: $manifest (set INGRESS_MANIFEST)" >&2
+      return 1
+    }
+    echo "[INFO] ingress-nginx is not running. Installing from $manifest"
+    kubectl apply -f "$manifest" || return 1
+  fi
+
+  if ! kubectl -n "$INGRESS_NAMESPACE" rollout status "deployment/$service" --timeout=300s; then
+    echo "[ERROR] ingress-nginx controller did not become ready." >&2
+    kubectl -n "$INGRESS_NAMESPACE" get pods -o wide >&2 || true
+    kubectl -n "$INGRESS_NAMESPACE" describe pods -l "$INGRESS_CONTROLLER_SELECTOR" >&2 || true
+    return 1
+  fi
+  kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || {
+    echo "[ERROR] IngressClass does not exist: $INGRESS_CLASS_NAME" >&2
+    return 1
+  }
+
+  if [[ -n "$lb_ip" ]]; then
+    ip=$(kubectl -n "$INGRESS_NAMESPACE" get service "$service" \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+    if [[ "$ip" != "$lb_ip" ]]; then
+      echo "[INFO] Requesting MetalLB address $lb_ip for $INGRESS_NAMESPACE/$service"
+      kubectl -n "$INGRESS_NAMESPACE" annotate service "$service" --overwrite \
+        "metallb.universe.tf/loadBalancerIPs=$lb_ip" || return 1
+    fi
+  fi
+
+  for ((attempt=1; attempt<=60; attempt++)); do
+    ip=$(kubectl -n "$INGRESS_NAMESPACE" get service "$service" \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+    if [[ -n "$ip" && ( -z "$lb_ip" || "$ip" == "$lb_ip" ) ]]; then
+      echo "[OK] ingress-nginx External IP: $ip"
+      return 0
+    fi
+    echo "[INFO] Waiting for ingress-nginx External IP (${attempt}/60): current='${ip:-<pending>}' expected='${lb_ip:-any}'"
+    sleep 5
+  done
+  echo "[ERROR] MetalLB did not assign ${lb_ip:-an address} to $INGRESS_NAMESPACE/$service." >&2
+  echo "[ERROR] Check that the IP is inside a MetalLB IPAddressPool and not used by another Service." >&2
+  kubectl -n "$INGRESS_NAMESPACE" describe service "$service" >&2 || true
+  kubectl get ipaddresspools.metallb.io -A >&2 2>/dev/null || true
+  kubectl get service -A --field-selector spec.type=LoadBalancer >&2 || true
+  return 1
+}
 # -----------------------------------------------------------------------------
 # helm_install <index> [release_name] [namespace] [additional helm install args...]
 # Examples:
@@ -210,6 +280,7 @@ wait_for_cert_setup() {
 main_pre_cp_portal() {
   ### EXECUTION ########################################
   validate_portal_configuration || return 1
+  ensure_ingress_controller || return 1
 
   # Create cluster-admin token
   kubectl create sa $K8S_CLUSTER_ADMIN -n $K8S_CLUSTER_ADMIN_NAMESPACE \
@@ -221,6 +292,10 @@ main_pre_cp_portal() {
 
   # Create a secrets mgmt bound cidr
   SECMG_BOUND_CIDR_ARR=($(kubectl get pods -n $INGRESS_NAMESPACE --selector=$INGRESS_CONTROLLER_SELECTOR --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{@.status.podIP}{"/16"}{"\t"}{end}'))
+  if ((${#SECMG_BOUND_CIDR_ARR[@]} == 0)); then
+    echo "[ERROR] No running ingress controller pod IPs found for SECMG_BOUND_CIDR." >&2
+    return 1
+  fi
   printf -v SECMG_BOUND_CIDR '"%s",' "${SECMG_BOUND_CIDR_ARR[@]}"
   SECMG_BOUND_CIDR="${SECMG_BOUND_CIDR%,}"
 

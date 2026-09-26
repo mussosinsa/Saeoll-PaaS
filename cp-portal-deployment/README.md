@@ -193,6 +193,28 @@ Keycloak, ChartMuseum, Chaos Mesh와 CP-Portal을 순서대로 배포한다. 실
 `certs`, `values`, `secmg` 디렉터리와 `secmg/unseal-key`는 민감 정보이므로 백업
 매체에서도 접근 권한을 제한한다.
 
+### ingress-nginx 사전 점검
+
+`deploy-cp-portal.sh`는 설정을 검증한 다음 `ingress-nginx` namespace에서 실행 중인
+컨트롤러를 확인한다. OpenBao, Harbor, Keycloak, ChartMuseum과 Portal은 모두 Ingress로
+노출되며, OpenBao AppRole의 `SECMG_BOUND_CIDR`도 컨트롤러 Pod IP로 만들어지므로
+컨트롤러가 없으면 배포를 진행하지 않는다.
+
+- 컨트롤러가 없으면 저장소의 `applications/ingress-nginx-1.13.3/deploy.yaml`을
+  적용한다. 다른 manifest는 `INGRESS_MANIFEST`로 지정하고, 자동 설치를 막으려면
+  `INSTALL_INGRESS_NGINX=false`로 실행한다.
+- `HOST_DOMAIN`이 `192.168.40.216.nip.io` 형식이면 해당 IP를 MetalLB
+  `metallb.universe.tf/loadBalancerIPs` annotation으로 요청하고 External IP가 일치할
+  때까지 최대 5분 대기한다. 다른 도메인을 사용하면 `INGRESS_LB_IP`로 지정한다.
+- IP가 할당되지 않으면 해당 IP가 MetalLB `IPAddressPool` 범위에 있는지, 다른
+  LoadBalancer Service가 이미 사용 중인지 확인한다.
+
+```bash
+kubectl -n ingress-nginx get pods,svc -o wide
+kubectl get ingressclass
+kubectl get ipaddresspools.metallb.io -A
+```
+
 ### OpenBao 초기화 및 Unseal 확인
 
 배포 스크립트는 OpenBao API를 최대 10분 동안 기다린 다음 초기화 여부를 확인한다.
