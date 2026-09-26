@@ -1,0 +1,35 @@
+# Default values for container platform pipeline jenkins.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+metadata:
+  name: cp-pipeline-jenkins
+  namespace: {NAMESPACE}
+
+spec:
+  replicas: 1
+
+image:
+  registry: {K_PAAS_REGISTRY}/{K_PAAS_REPO}
+  name: cp-pipeline-jenkins
+  tags: {IMAGE_TAGS}
+  pullPolicy: {IMAGE_PULL_POLICY}
+  isPrivileged: true
+
+persistent:
+  accessModes: ReadWriteOnce
+  storage:
+    class: {K8S_STORAGECLASS}
+    size: 20Gi
+
+service:
+  type: {SERVICE_TYPE}
+  protocol: {SERVICE_PROTOCOL}
+  port: 8080
+  targetPort: 8080
+
+env:
+  HARBOR_URL: {REPOSITORY_HOST}
+  JENKINS_URL: "cp-pipeline-jenkins-service.{NAMESPACE}.svc.cluster.local:8080"
+  SONARQUBE_URL: "cp-pipeline-sonarqube-sonarqube.{NAMESPACE}.svc.cluster.local:9000"
+  GIT_SSL_NO_VERIFY: "0"
