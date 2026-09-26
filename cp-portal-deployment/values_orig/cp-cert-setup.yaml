@@ -8,4 +8,4 @@ metadata:
 data:
   target:
     cert: cert
-    script: echo "$CA_CERT" > /usr/local/share/ca-certificates/{HOST_DOMAIN}.crt && update-ca-certificates && for cr in crio containerd; do if [ $(systemctl is-enabled $cr 2> /dev/null) ]; then systemctl restart "$cr"; fi; done
+    script: mkdir -p /etc/pki/ca-trust/source/anchors && printf '%s\n' "$CA_CERT" > /etc/pki/ca-trust/source/anchors/{HOST_DOMAIN}-ca.crt && chmod 0644 /etc/pki/ca-trust/source/anchors/{HOST_DOMAIN}-ca.crt && update-ca-trust extract && for cr in crio containerd; do if systemctl is-enabled --quiet "$cr" 2> /dev/null; then systemctl restart "$cr" || echo "[WARN] Could not restart $cr from the certificate setup container"; fi; done

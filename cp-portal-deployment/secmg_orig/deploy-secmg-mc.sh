@@ -1,5 +1,8 @@
 #!/bin/bash
 CURL_CMD="curl --silent --show-error -k"
+SECMG_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=openbao-common.sh
+source "$SECMG_SCRIPT_DIR/openbao-common.sh"
 
 # 1.Deploy Secrets Management
 for IDX in 2 1; do
@@ -17,37 +20,11 @@ for IDX in 2 1; do
   fi
 done
 
-# 2.Check Status
-while :
-do
-  SECMG_STATUS_HTTP_CODE=$(curl -L -k -s -o /dev/null -w "%{http_code}\n" ${SECMG_URL}/v1/sys/init)
-  echo "[$SECMG_STATUS_HTTP_CODE] Please wait until the secrets management service is deployed..."
-  if [ $SECMG_STATUS_HTTP_CODE -eq 200 ]; then
-    break
-  fi
-  sleep 5
-done
-
-# 3.Init
-SECMG_INIT_RESP=$(${CURL_CMD} \
-    -X POST \
-    -d '{"secret_shares": 3, "secret_threshold": 2}' \
-    "${SECMG_URL}/v1/sys/init")
-echo $SECMG_INIT_RESP | sed 's/.*{//g' | sed 's/,"root_token".*//g' > ../secmg/unseal-key
-SECMG_ROOT_TOKEN=`echo $SECMG_INIT_RESP | sed 's/.*root_token":"//g' | sed 's/".*//g'`
-SECMG_UNSEAL_KEY_BASE64_STR=(`echo $SECMG_INIT_RESP | sed 's/.*keys_base64":\[//g' | sed 's/],"root_token".*//g' | tr -d '"'`)
-declare -a SECMG_UNSEAL_KEY_ARR=($(echo $SECMG_UNSEAL_KEY_BASE64_STR | tr "," " "))
-
-# 4.Unseal
-${CURL_CMD} --output /dev/null \
-    -X POST \
-    -d '{"key":'"\"${SECMG_UNSEAL_KEY_ARR[0]}\""'}' \
-    "${SECMG_URL}/v1/sys/unseal"
-
-${CURL_CMD} --output /dev/null \
-    -X POST \
-    -d '{"key":'"\"${SECMG_UNSEAL_KEY_ARR[1]}\""'}' \
-    "${SECMG_URL}/v1/sys/unseal"
+# 2.Wait, initialize, and verify unseal
+OPENBAO_NAMESPACE=${NAMESPACE[0]}
+OPENBAO_KUBECTL_CMD=$CMD_KCTL
+start_openbao_port_forward || return 1
+prepare_openbao || { stop_openbao_port_forward; return 1; }
 
 # 5.Enable AppRole
 ${CURL_CMD} \
@@ -106,7 +83,5 @@ SECMG_GET_SECRET_ID_RESP=$(${CURL_CMD} \
     "${SECMG_URL}/v1/auth/approle/role/${SECMG_ROLE_NAME}/secret-id")
 SECMG_SECRET_ID=`echo $SECMG_GET_SECRET_ID_RESP | sed 's/.*secret_id":"//g' | sed 's/".*//g'`
 
-unset SECMG_INIT_RESP
-unset SECMG_UNSEAL_KEY_BASE64_STR
-unset SECMG_UNSEAL_KEY_ARR
+stop_openbao_port_forward
 unset SECMG_ROOT_TOKEN

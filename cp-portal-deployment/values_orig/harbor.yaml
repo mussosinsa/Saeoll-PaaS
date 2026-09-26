@@ -9,6 +9,16 @@ expose:
     hosts:
       core: {REPOSITORY_HOST}
     className: "{INGRESS_CLASS_NAME}"
+    # Stream large image layers straight to Harbor instead of spooling them in
+    # the ingress controller, and allow slow NFS-backed writes to finish.
+    annotations:
+      ingress.kubernetes.io/proxy-body-size: "0"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
 
 externalURL: "{REPOSITORY_URL}"
 
