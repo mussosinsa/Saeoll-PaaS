@@ -558,3 +558,15 @@ chmod +x uninstall-cp-portal.sh
 `script_mc/cp-portal-vars-mc.sh`를 구성한 뒤 각각의 디렉터리에서
 `deploy-istio-mc.sh`, `deploy-cp-portal-mc.sh` 순서로 실행한다. 두 kubeconfig
 context가 올바른 클러스터를 가리키는지 실행 전에 반드시 확인한다.
+
+### 포털 대시보드가 계속 로딩되거나 클러스터 정보가 `-`로 표시되는 경우
+
+포털 API는 MariaDB `cp.cp_clusters`의 host cluster ID로 OpenBao
+`secret/cluster/<ID>`에서 API 주소와 token을 읽어 Kubernetes를 조회한다. 다음 읽기 전용
+점검 스크립트로 Pod 상태, OpenBao seal 상태, DB와 OpenBao의 cluster ID 일치 여부,
+token 유효성, AppRole bound CIDR, metrics-server, API 로그 오류를 한 번에 확인한다.
+
+```bash
+cd cp-portal-deployment/script
+./check-cp-portal.sh
+```
