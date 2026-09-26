@@ -202,7 +202,7 @@ initialize_openbao() {
     fi
     if ! python3 -m json.tool "$OPENBAO_INIT_FILE" >/dev/null 2>&1; then
       echo "[ERROR] $OPENBAO_INIT_FILE is not the complete OpenBao initialization JSON." >&2
-      echo "[ERROR] Restore a backup containing keys_base64, secret_threshold, and root_token." >&2
+      echo "[ERROR] Restore a backup containing keys_base64 and root_token." >&2
       return 1
     fi
     return 0
@@ -220,13 +220,19 @@ initialize_openbao() {
     return 1
   fi
 
+  local old_umask
+  old_umask=$(umask)
   umask 077
   if [[ -s "$OPENBAO_INIT_FILE" ]]; then
     # A stale file from an earlier OpenBao data volume must not be lost silently.
     cp -p "$OPENBAO_INIT_FILE" "${OPENBAO_INIT_FILE}.$(date +%Y%m%d%H%M%S).bak"
     echo "[WARN] Previous $OPENBAO_INIT_FILE was backed up before re-initialization." >&2
   fi
-  printf '%s\n' "$init_response" > "$OPENBAO_INIT_FILE"
+  # /v1/sys/init returns only keys and root_token; keep the requested
+  # share/threshold values alongside them for manual recovery.
+  printf '%s' "$init_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.setdefault("secret_shares", 3); d.setdefault("secret_threshold", 2); print(json.dumps(d, indent=2))' \
+    > "$OPENBAO_INIT_FILE" || { umask "$old_umask"; return 1; }
+  umask "$old_umask"
   chmod 600 "$OPENBAO_INIT_FILE"
   echo "[OK] OpenBao initialized. Initialization material saved to $OPENBAO_INIT_FILE (mode 600)."
 }
@@ -237,17 +243,22 @@ unseal_openbao() {
 
   init_json=$(cat "$OPENBAO_INIT_FILE") || return 1
   SECMG_ROOT_TOKEN=$(printf '%s' "$init_json" | openbao_json_scalar root_token) || return 1
-  threshold=$(printf '%s' "$init_json" | openbao_json_scalar secret_threshold) || return 1
+  seal_status=$(curl --fail --silent --show-error --insecure "${SECMG_URL}/v1/sys/seal-status") || return 1
+  # The server reports the authoritative threshold as "t"; older init files
+  # written from the raw /v1/sys/init response do not contain secret_threshold.
+  threshold=$(printf '%s' "$seal_status" | openbao_json_scalar t) || return 1
+  if [[ ! "$threshold" =~ ^[1-9][0-9]*$ ]]; then
+    threshold=$(printf '%s' "$init_json" | openbao_json_scalar secret_threshold) || return 1
+  fi
   mapfile -t unseal_keys < <(printf '%s' "$init_json" | openbao_json_array keys_base64)
 
   [[ -n "$SECMG_ROOT_TOKEN" ]] || { echo "[ERROR] root_token is missing from $OPENBAO_INIT_FILE" >&2; return 1; }
-  [[ "$threshold" =~ ^[1-9][0-9]*$ ]] || { echo "[ERROR] Invalid secret_threshold in $OPENBAO_INIT_FILE" >&2; return 1; }
+  [[ "$threshold" =~ ^[1-9][0-9]*$ ]] || { echo "[ERROR] Cannot determine the OpenBao unseal threshold." >&2; return 1; }
   ((${#unseal_keys[@]} >= threshold)) || {
     echo "[ERROR] Only ${#unseal_keys[@]} unseal keys are available; $threshold are required." >&2
     return 1
   }
 
-  seal_status=$(curl --fail --silent --show-error --insecure "${SECMG_URL}/v1/sys/seal-status") || return 1
   sealed=$(printf '%s' "$seal_status" | openbao_json_scalar sealed) || return 1
   if [[ "$sealed" == "false" ]]; then
     echo "[OK] OpenBao is already unsealed."
