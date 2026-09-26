@@ -212,6 +212,44 @@ terraman_ssh_key_copy() {
   kubectl cp $SSH_KEY_FILE ${NAMESPACE[4]}/${CP_PORTAL_TERRAMAN_POD}:/home/1000/.ssh/master-key
 }
 
+push_image_with_retry() {
+  local image=$1 attempt attempts=${IMAGE_PUSH_ATTEMPTS:-3}
+  for ((attempt=1; attempt<=attempts; attempt++)); do
+    if sudo podman push --help 2>/dev/null | grep -q -- '--retry'; then
+      sudo podman push --retry 3 "$image" && return 0
+    else
+      sudo podman push "$image" && return 0
+    fi
+    echo "[WARN] Image push failed (${attempt}/${attempts}): $image" >&2
+    ((attempt < attempts)) || break
+    wait_for_harbor_ready || return 1
+    sleep 10
+  done
+  return 1
+}
+
+# /api/v2.0/projects answers as soon as harbor-core is up, but blob uploads
+# also need harbor-registry (and its storage) to be ready.
+wait_for_harbor_ready() {
+  local ns=${NAMESPACE[2]} code attempt
+  echo "[INFO] Waiting for all Harbor pods in namespace $ns to be Ready..."
+  if kubectl -n "$ns" get pods -l app=harbor -o name | grep -q . && \
+    ! kubectl -n "$ns" wait --for=condition=Ready pod -l app=harbor --timeout=600s; then
+    echo "[ERROR] Harbor pods are not Ready." >&2
+    kubectl -n "$ns" get pods,pvc -o wide >&2 || true
+    return 1
+  fi
+  for ((attempt=1; attempt<=60; attempt++)); do
+    # The registry API answers 401 (auth required) once it can serve pushes.
+    code=$(curl -k -s -o /dev/null -w '%{http_code}' "$REPOSITORY_URL/v2/")
+    [[ "$code" == "401" || "$code" == "200" ]] && { echo "[OK] Harbor registry API is ready."; return 0; }
+    echo "[INFO] Waiting for Harbor registry API (${attempt}/60): HTTP $code"
+    sleep 5
+  done
+  echo "[ERROR] Harbor registry API did not become ready: $REPOSITORY_URL/v2/" >&2
+  return 1
+}
+
 inject_cert_and_build_image() {
   local IMAGE_REF
   BUILD_APPS=(
@@ -235,8 +273,9 @@ inject_cert_and_build_image() {
       rm -f "$OUTPUT"
       return 1
     fi
-    if ! sudo podman push "$IMAGE_REF"; then
+    if ! push_image_with_retry "$IMAGE_REF"; then
       echo "[ERROR] Failed to push UI image to Harbor: $IMAGE_REF" >&2
+      echo "[ERROR] Check: kubectl -n ${NAMESPACE[2]} get pods; kubectl -n ${NAMESPACE[2]} logs deploy/harbor-registry -c registry --tail=50" >&2
       rm -f "$OUTPUT"
       return 1
     fi
@@ -425,6 +464,7 @@ main_pre_cp_portal() {
     --username "$REPOSITORY_USERNAME" --password-stdin || return 1
 
   # Build ui image by adding generated self-signed certificate into keystore
+  wait_for_harbor_ready || return 1
   inject_cert_and_build_image || return 1
 
   # Deploy the keycloak
