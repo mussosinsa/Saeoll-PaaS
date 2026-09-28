@@ -1,0 +1,20 @@
+# Default values for container platform pipeline in istio resources
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+global:
+  namespace: {ISTIO_NAMESPACE}
+  gateway: cp-gateway
+
+virtualService:
+- name : cp-pipeline
+  hosts:
+  - "{CP_PIPELINE_HOST}"
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: cp-pipeline-ui-service.{NAMESPACE}.svc.cluster.local
+        port:
+          number: 8084
