@@ -1,11 +1,9 @@
 #!/bin/bash
-# command line tool
-KUBECTL_VERSION="1.33.4"
-HELM_VERSION="3.18.4"
-STEP_VERSION="0.24.4"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=tool-versions.sh
+source "$SCRIPT_DIR/tool-versions.sh"
 
 # Istio
-ISTIO_VERSION="1.28.0"
 ISTIO_NAMESPACE="istio-system"
 
 # get all the contexts in kubeconfig

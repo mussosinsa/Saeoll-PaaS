@@ -74,6 +74,11 @@
 ## 릴리즈
 - https://github.com/K-PaaS/cp-portal-release
 
+## Rocky Linux 9.7 CP-Portal 배포
+
+이 저장소에 포함된 CP-Portal 배포 파일을 사용하려면 Kubernetes 클러스터 구성 후
+[Rocky Linux 9.7 CP-Portal 배포 가이드](cp-portal-deployment/README.md)를 따른다.
+
 ### 기존 Kubernetes에 CP-Portal 설치
 
 `standalone/install-existing-k8s.sh`는 CP-Portal을 포함하여 설치하지만, CP-Portal

@@ -1,0 +1,81 @@
+# Placeholders replaced by the Jenkinsfile:
+#   __APP__ __NAMESPACE__ __IMAGE__ __HOST__ __REPLICAS__ __TLS_SECRET__ __PULL_SECRET__
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: __APP__
+  namespace: __NAMESPACE__
+  labels:
+    app: __APP__
+spec:
+  replicas: __REPLICAS__
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: __APP__
+  template:
+    metadata:
+      labels:
+        app: __APP__
+    spec:
+      imagePullSecrets:
+        - name: __PULL_SECRET__
+      containers:
+        - name: __APP__
+          image: __IMAGE__
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_NAME
+              value: __APP__
+          readinessProbe:
+            httpGet:
+              path: /healthz.php
+              port: 8080
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz.php
+              port: 8080
+            initialDelaySeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: __APP__
+  namespace: __NAMESPACE__
+spec:
+  selector:
+    app: __APP__
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: __APP__
+  namespace: __NAMESPACE__
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - __HOST__
+      secretName: __TLS_SECRET__
+  rules:
+    - host: __HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: __APP__
+                port:
+                  number: 80

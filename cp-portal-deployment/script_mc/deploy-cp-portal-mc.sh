@@ -1,5 +1,13 @@
 #!/bin/bash
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/rocky-linux.sh
+source "$SCRIPT_DIR/../lib/rocky-linux.sh"
+require_rocky_linux_9_7 || exit 1
 source cp-portal-vars-mc.sh
+if [[ ! "$HOST_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+  echo "[ERROR] HOST_DOMAIN is not configured: '$HOST_DOMAIN'" >&2
+  exit 1
+fi
 declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
 DEPLOY_CONFIG[INGRESS_ENABLED]=false
@@ -60,9 +68,9 @@ inject_cert_and_build_image() {
 
   TEMPLATE="../values/ui/Dockerfile.template"
   OUTPUT="../values/ui/Dockerfile"
-  CRT_FILE="${HOST_DOMAIN}.crt"
+  CRT_FILE="ca.crt"
 
-  cp ../certs/${HOST_DOMAIN}.crt ../values/ui
+  cp ../certs/ca.crt ../values/ui
   for APP_NAME in "${BUILD_APPS[@]}"; do
     sed -e "s|{APP_NAME}|${APP_NAME}|g" \
         -e "s|{CRT_FILE}|${CRT_FILE}|g" \
@@ -185,7 +193,7 @@ chart_pull
 
 # Generate cert and enc_keys
 for f in gen-cert.sh gen-enc-keys.sh; do
-  chmod +x "../script/$f" && . "../script/$f"
+  chmod +x "../script/$f" && . "../script/$f" || exit 1
 done
 
 # Deploy istio resources
@@ -199,24 +207,23 @@ for IDX in 1 2; do
   CMD_KCTL=$(echo "$CMD_KCTL_ORIG" | sed "s/{TG_CTX}/${!TARGET_CTX}/")
   CMD_HELM=$(echo "$CMD_HELM_ORIG" | sed "s/{TG_CTX}/${!TARGET_CTX}/")
   # Setup the cert to each node
-  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/${HOST_DOMAIN}.crt)"
-  while :
-  do
-    POD_COUNT=$(($CMD_KCTL get pods -n $CP_CERT_SETUP_NAMESPACE -l $CP_CERT_SETUP_SELECTOR --field-selector status.phase!=Running --no-headers | wc -l) 2> /dev/null)
-    echo "[remaining: $POD_COUNT] Adding certificates to each node’s container runtime..."
-    if [[ $POD_COUNT -lt 1 ]]; then
-      echo "Completed..."
-      break
-    fi
-    sleep 5
-  done
+  helm_install 7 "" $CP_CERT_SETUP_NAMESPACE --set data.target.cert="$(cat ../certs/ca.crt)"
+  CERT_DAEMONSET="${CHART_NAME[7]}-daemonset"
+  if ! $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" rollout status \
+    "daemonset/$CERT_DAEMONSET" --timeout=5m; then
+    echo "[ERROR] Certificate setup failed in cluster${IDX}." >&2
+    $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" describe pods \
+      -l "$CP_CERT_SETUP_SELECTOR" >&2 || true
+    $CMD_KCTL -n "$CP_CERT_SETUP_NAMESPACE" logs -l "$CP_CERT_SETUP_SELECTOR" \
+      --all-containers --prefix --tail=100 >&2 || true
+    exit 1
+  fi
 done
-sudo cp ../certs/${HOST_DOMAIN}.crt /usr/local/share/ca-certificates/
-sudo update-ca-certificates
+install_host_ca "../certs/ca.crt" "${HOST_DOMAIN}-ca.crt"
 
 # Deploy the secrets management
 chmod +x ../secmg/deploy-secmg-mc.sh
-. ../secmg/deploy-secmg-mc.sh
+. ../secmg/deploy-secmg-mc.sh || exit 1
 find ../values -type f -exec sed -i "s/{SECMG_ROLE_ID}/$SECMG_ROLE_ID/g" {} +
 find ../values -type f -exec sed -i "s/{SECMG_SECRET_ID}/$SECMG_SECRET_ID/g" {} +
 
@@ -295,7 +302,7 @@ for IDX in 2 1; do
     # ui,api,chaos-api,chaos-collector,terraman,catalog-api
     $CMD_HELM install -f ../values/${RELEASE_NAME}-mc1.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
-              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)
+              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/ca.crt)
     # common-api-svc,metric-api-svc
     $CMD_HELM template -f ../values/${RELEASE_NAME}-mc2.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
@@ -304,7 +311,7 @@ for IDX in 2 1; do
     # common-api,metric-api
     $CMD_HELM install -f ../values/${RELEASE_NAME}-mc2.yaml -f ../values/cp-portal-migration-secret.yaml \
               ${RELEASE_NAME} $(chart_path_for 4) -n ${NAMESPACE[4]} \
-              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)
+              --set-string secret[0].data.CHART_REPO_CRT=$(base64 -w 0 < ../certs/ca.crt)
   fi
   # Uninstall cp-cert-setup
   $CMD_HELM uninstall ${CHART_NAME[7]} -n $CP_CERT_SETUP_NAMESPACE

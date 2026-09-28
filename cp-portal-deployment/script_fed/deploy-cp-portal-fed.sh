@@ -82,7 +82,7 @@ main_cp_portal_fed() {
     -n ${NAMESPACE[4]} \
     --set-string tlsSecret.tls.crt="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)" \
     --set-string tlsSecret.tls.key="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.key)" \
-    --set-string secret[0].data.CHART_REPO_CRT="$(base64 -w 0 < ../certs/${HOST_DOMAIN}.crt)" \
+    --set-string secret[0].data.CHART_REPO_CRT="$(base64 -w 0 < ../certs/ca.crt)" \
     --set-string secret[1].data.KARMADA_TOKEN="$KARMADA_TOKEN"
 
   terraman_ssh_key_copy

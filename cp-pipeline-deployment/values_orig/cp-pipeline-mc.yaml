@@ -1,0 +1,78 @@
+# Default values for container platform pipeline in multi cluster
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+global:
+  name: cp-pipeline
+  namespace: {NAMESPACE}
+  image:
+    registry: {K_PAAS_REGISTRY}/{K_PAAS_REPO}
+    tag: {IMAGE_TAGS}
+    pullPolicy: {IMAGE_PULL_POLICY}
+  expose:
+    type: {SERVICE_TYPE}
+    protocol: {SERVICE_PROTOCOL}
+  probe:
+    liveness:
+      path: /actuator/health/liveness
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /actuator/health/readiness
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      failureThreshold: 3
+
+apps:
+  - name: cp-pipeline-ui
+    replicas: 1
+    expose:
+      port: 8084
+      targetPort: 8084
+  - name: cp-pipeline-api
+    replicas: 1
+    expose:
+      port: 8082
+      targetPort: 8082
+  - name: cp-pipeline-common-api
+    replicas: 1
+    expose:
+      port: 8081
+      targetPort: 8081
+  - name: cp-pipeline-config-server
+    replicas: 1
+    expose:
+      port: 8080
+      targetPort: 8080
+  - name: cp-pipeline-inspection-api
+    replicas: 1
+    expose:
+      port: 8085
+      targetPort: 8085
+
+configmap:
+  data:
+    PIPELINE_UI_PUBLIC_URL: {CP_PIPELINE_URL}
+    CP_PIPELINE_API_URI: http://cp-pipeline-api-service.{NAMESPACE}.svc.cluster.local:8082
+    CP_PIPELINE_COMMON_API_URI: http://cp-pipeline-common-api-service.{NAMESPACE}.svc.cluster.local:8081
+    CP_PIPELINE_INSPECTION_API_URI: http://cp-pipeline-inspection-api-service.{NAMESPACE}.svc.cluster.local:8085
+    CONFIG_SERVER_URL: http://cp-pipeline-config-server-service.{NAMESPACE}.svc.cluster.local:8080
+    INSPECTION_SERVER_URL: http://cp-pipeline-sonarqube-sonarqube.{NAMESPACE}.svc.cluster.local:9000
+    DATABASE_URL: {DATABASE_URL}
+    HARBOR_API_URL: {REPOSITORY_URL}
+    KEYCLOAK_URL: {KEYCLOAK_URL}
+    KEYCLOAK_CLUSTER_ADMIN_ROLE: {KEYCLOAK_CLUSTER_ADMIN_ROLE}
+    KEYCLOAK_CP_REALM: {KEYCLOAK_CP_REALM}
+
+secret:
+  data:
+    INSPECTION_ADMIN_ID: {INSPECTION_ADMIN_ID}
+    INSPECTION_ADMIN_PASSWORD: {INSPECTION_ADMIN_PASSWORD}
+    DATABASE_USER_ID: {DATABASE_USER_ID}
+    DATABASE_USER_PASSWORD: {DATABASE_USER_PASSWORD}
+    HARBOR_ADMIN_USER: {REPOSITORY_USERNAME}
+    HARBOR_ADMIN_PASSWORD: {REPOSITORY_PASSWORD}
+    KEYCLOAK_ADMIN_ID: {KEYCLOAK_ADMIN_ID}
+    KEYCLOAK_ADMIN_PASSWORD: {KEYCLOAK_ADMIN_PASSWORD}
+    KEYCLOAK_CP_CLIENT_ID: {KEYCLOAK_CP_CLIENT_ID}
+    KEYCLOAK_CP_CLIENT_SECRET: {KEYCLOAK_CP_CLIENT_SECRET}
