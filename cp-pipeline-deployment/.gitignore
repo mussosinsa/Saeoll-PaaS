@@ -1,3 +1,4 @@
 values/
 charts/
 *.kubeconfig
+vendors/

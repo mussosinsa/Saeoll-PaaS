@@ -1,64 +1,106 @@
-// PHP build & deploy pipeline for the K-PaaS cp-pipeline Jenkins
-// (requires the PHP-enabled Jenkins image: php, composer, buildah, kubectl).
+// Vendor PHP pipeline for the K-PaaS cp-pipeline Jenkins
+// (PHP-enabled Jenkins image: php, composer, buildah, kubectl).
 //
-// Jenkins credentials to create beforehand:
-//   harbor-credentials : Username/Password for Harbor
-//   php-deployer-kubeconfig : Secret file created by script/create-php-deployer.sh
+//   dev  : job <app>-dev,  branch develop, SCM polling -> <vendor>-dev
+//   prod : job <app>-prod, branch refs/tags/${RELEASE_TAG}, run by operators,
+//          approval required -> <vendor>-prod
+//
+// Folder-scoped Jenkins credentials (created by script/onboard-php-vendor.sh):
+//   <vendor>-harbor-robot      Username/Password (Harbor robot account)
+//   <vendor>-kubeconfig-dev    Secret file
+//   <vendor>-kubeconfig-prod   Secret file
 pipeline {
   agent any
-  options { disableConcurrentBuilds() }
+  options {
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
 
   parameters {
-    string(name: 'APP_NAME',       defaultValue: 'php-sample',            description: 'Deployment/Service/Ingress name')
-    string(name: 'TARGET_NS',      defaultValue: 'php-apps',              description: 'Kubernetes namespace')
-    string(name: 'HARBOR_HOST',    defaultValue: 'harbor.192.168.40.216.nip.io', description: 'Harbor host')
-    string(name: 'HARBOR_PROJECT', defaultValue: 'php-apps',              description: 'Harbor project')
-    string(name: 'APP_HOST',       defaultValue: 'php-sample.192.168.40.216.nip.io', description: 'Ingress host')
-    string(name: 'PULL_SECRET',    defaultValue: 'harbor-regcred',        description: 'imagePullSecret in TARGET_NS')
-    string(name: 'APP_DIR',        defaultValue: '.',                     description: 'Directory containing composer.json and Dockerfile')
+    choice(name: 'DEPLOY_ENV', choices: ['dev', 'prod'], description: 'dev: develop branch, prod: release tag')
+    string(name: 'VENDOR',      defaultValue: 'vendor-a',              description: 'Vendor id (namespace prefix, Harbor project)')
+    string(name: 'APP_NAME',    defaultValue: 'php-sample',            description: 'Application name (lowercase, -)')
+    string(name: 'BASE_DOMAIN', defaultValue: '192.168.40.216.nip.io', description: 'Cluster HOST_DOMAIN')
+    string(name: 'RELEASE_TAG', defaultValue: '',                      description: 'prod only: release tag, e.g. v1.2.0')
+    string(name: 'APPROVERS',   defaultValue: 'admin',                 description: 'prod only: Jenkins users/groups allowed to approve')
   }
 
   environment {
-    IMAGE = "${params.HARBOR_HOST}/${params.HARBOR_PROJECT}/${params.APP_NAME}:${env.BUILD_NUMBER}"
-    STORAGE_DRIVER = 'vfs'
+    TARGET_NS    = "${params.VENDOR}-${params.DEPLOY_ENV}"
+    HARBOR_HOST  = "harbor.${params.BASE_DOMAIN}"
+    APP_HOST     = "${params.DEPLOY_ENV == 'prod' ? "${params.APP_NAME}-${params.VENDOR}" : "${params.APP_NAME}-${params.VENDOR}-dev"}.${params.BASE_DOMAIN}"
+    REPLICAS     = "${params.DEPLOY_ENV == 'prod' ? '2' : '1'}"
+    TLS_SECRET   = "${params.BASE_DOMAIN}-tls"
+    PULL_SECRET  = 'harbor-regcred'
+    STORAGE_DRIVER    = 'vfs'
     BUILDAH_ISOLATION = 'chroot'
   }
 
   stages {
+    stage('Prepare') {
+      steps {
+        script {
+          if (!(params.APP_NAME ==~ /[a-z0-9]([a-z0-9-]*[a-z0-9])?/)) {
+            error "APP_NAME must be lowercase letters, digits and '-': ${params.APP_NAME}"
+          }
+          def commit = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim()
+          if (params.DEPLOY_ENV == 'prod') {
+            if (!(params.RELEASE_TAG ==~ /v\d+\.\d+\.\d+/)) {
+              error "prod deployment requires RELEASE_TAG like v1.2.0 (got '${params.RELEASE_TAG}')"
+            }
+            def headTags = sh(script: 'git tag --points-at HEAD', returnStdout: true).trim().split('\n')
+            if (!headTags.contains(params.RELEASE_TAG)) {
+              error "Checked-out commit ${commit} is not tag ${params.RELEASE_TAG}. Set the job branch to refs/tags/\${RELEASE_TAG}."
+            }
+            env.IMAGE_TAG = params.RELEASE_TAG
+          } else {
+            env.IMAGE_TAG = "dev-${commit}-${env.BUILD_NUMBER}"
+          }
+          env.IMAGE = "${env.HARBOR_HOST}/${params.VENDOR}/${params.APP_NAME}:${env.IMAGE_TAG}"
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.DEPLOY_ENV} ${env.IMAGE_TAG}"
+          echo "Image: ${env.IMAGE}\nNamespace: ${env.TARGET_NS}\nURL: https://${env.APP_HOST}"
+        }
+      }
+    }
+
     stage('Composer install') {
       steps {
-        dir(params.APP_DIR) {
-          sh 'php -v && composer --version'
-          sh 'composer install --no-interaction --no-progress --prefer-dist'
-        }
+        sh 'php -v && composer --version'
+        sh 'composer validate --no-check-publish'
+        sh 'composer install --no-interaction --no-progress --prefer-dist'
       }
     }
 
     stage('Lint & Test') {
       steps {
-        dir(params.APP_DIR) {
-          sh '''
-            find . -path ./vendor -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l
-            if [ -x vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo "phpunit not installed - skipping tests"; fi
-          '''
+        sh '''
+          find . -path ./vendor -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l
+          if [ -x vendor/bin/phpunit ]; then
+            vendor/bin/phpunit --log-junit phpunit-report.xml
+          else
+            echo "phpunit is not installed (require-dev) - unit tests skipped"
+          fi
+        '''
+      }
+      post {
+        always {
+          script {
+            if (fileExists('phpunit-report.xml')) { junit 'phpunit-report.xml' }
+          }
         }
       }
     }
 
     stage('Build image') {
       steps {
-        dir(params.APP_DIR) {
-          sh 'buildah bud --layers --format docker -t "$IMAGE" .'
-        }
+        sh 'buildah bud --layers --format docker -t "$IMAGE" .'
       }
     }
 
     stage('Push to Harbor') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'harbor-credentials',
+        withCredentials([usernamePassword(credentialsId: "${params.VENDOR}-harbor-robot",
                                           usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASS')]) {
-          // Harbor uses the portal's self-signed CA; trust it via /etc/containers/certs.d
-          // or keep --tls-verify=false for an internal registry.
           sh '''
             printf '%s' "$HARBOR_PASS" | buildah login --tls-verify=false -u "$HARBOR_USER" --password-stdin "$HARBOR_HOST"
             buildah push --tls-verify=false "$IMAGE" "docker://$IMAGE"
@@ -68,25 +110,48 @@ pipeline {
       }
     }
 
+    stage('Approval') {
+      when { expression { params.DEPLOY_ENV == 'prod' } }
+      steps {
+        timeout(time: 1, unit: 'HOURS') {
+          input message: "Deploy ${env.IMAGE} to ${env.TARGET_NS}?", ok: 'Deploy', submitter: params.APPROVERS
+        }
+      }
+    }
+
     stage('Deploy') {
       steps {
-        withCredentials([file(credentialsId: 'php-deployer-kubeconfig', variable: 'KUBECONFIG')]) {
-          dir(params.APP_DIR) {
-            sh '''
-              sed -e "s|__APP__|$APP_NAME|g" -e "s|__NAMESPACE__|$TARGET_NS|g" \
-                  -e "s|__IMAGE__|$IMAGE|g" -e "s|__HOST__|$APP_HOST|g" \
-                  -e "s|__PULL_SECRET__|$PULL_SECRET|g" k8s/app.yaml > /tmp/app-$BUILD_NUMBER.yaml
-              kubectl apply -f /tmp/app-$BUILD_NUMBER.yaml
-              kubectl -n "$TARGET_NS" rollout status deployment/"$APP_NAME" --timeout=300s
-              rm -f /tmp/app-$BUILD_NUMBER.yaml
-            '''
-          }
+        withCredentials([file(credentialsId: "${params.VENDOR}-kubeconfig-${params.DEPLOY_ENV}", variable: 'KUBECONFIG')]) {
+          sh '''
+            prev=$(kubectl -n "$TARGET_NS" get deployment "$APP_NAME" \
+              -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+            echo "Previous image: ${prev:-<none>}"
+            sed -e "s|__APP__|$APP_NAME|g" -e "s|__NAMESPACE__|$TARGET_NS|g" \
+                -e "s|__IMAGE__|$IMAGE|g" -e "s|__HOST__|$APP_HOST|g" \
+                -e "s|__REPLICAS__|$REPLICAS|g" -e "s|__TLS_SECRET__|$TLS_SECRET|g" \
+                -e "s|__PULL_SECRET__|$PULL_SECRET|g" k8s/app.yaml > "k8s-rendered.yaml"
+            kubectl apply -f k8s-rendered.yaml
+            kubectl annotate deployment "$APP_NAME" -n "$TARGET_NS" --overwrite \
+              kubernetes.io/change-cause="jenkins #$BUILD_NUMBER $IMAGE_TAG"
+            if ! kubectl -n "$TARGET_NS" rollout status deployment/"$APP_NAME" --timeout=300s; then
+              echo "Rollout failed - rolling back"
+              kubectl -n "$TARGET_NS" rollout undo deployment/"$APP_NAME" || true
+              exit 1
+            fi
+          '''
         }
+      }
+    }
+
+    stage('Smoke test') {
+      steps {
+        sh 'curl -fsSk --retry 5 --retry-delay 5 "https://$APP_HOST/healthz.php"'
       }
     }
   }
 
   post {
-    success { echo "Deployed ${env.IMAGE} -> https://${params.APP_HOST}" }
+    success { echo "Deployed ${env.IMAGE} -> https://${env.APP_HOST}" }
+    always  { sh 'rm -f k8s-rendered.yaml' }
   }
 }

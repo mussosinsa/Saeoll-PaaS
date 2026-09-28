@@ -1,4 +1,5 @@
-# Placeholders are replaced by the Jenkinsfile: __APP__ __NAMESPACE__ __IMAGE__ __HOST__ __PULL_SECRET__
+# Placeholders replaced by the Jenkinsfile:
+#   __APP__ __NAMESPACE__ __IMAGE__ __HOST__ __REPLICAS__ __TLS_SECRET__ __PULL_SECRET__
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +8,8 @@ metadata:
   labels:
     app: __APP__
 spec:
-  replicas: 1
+  replicas: __REPLICAS__
+  revisionHistoryLimit: 10
   selector:
     matchLabels:
       app: __APP__
@@ -62,6 +64,10 @@ metadata:
   namespace: __NAMESPACE__
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - __HOST__
+      secretName: __TLS_SECRET__
   rules:
     - host: __HOST__
       http:

@@ -66,43 +66,21 @@ kubectl -n cp-pipeline exec deploy/cp-pipeline-jenkins-deployment -- sh -c 'php 
 ```
 (Deployment 이름은 `kubectl -n cp-pipeline get deploy`로 확인)
 
-### 3-2. 배포 대상 namespace와 Jenkins credential 준비
+### 3-2. 업체별 관리·배포
 
-```bash
-./create-php-deployer.sh php-apps          # namespace, Harbor 프로젝트, pull secret, 전용 SA
-```
+업체 온보딩(`script/onboard-php-vendor.sh`), SCM 계정·저장소 권한, 개발(`develop`) 자동 배포,
+운영(릴리스 태그 + 승인) 배포 절차는
+[PHP 유지보수 업체별 소스 관리·배포 가이드](docs/php-vendor-deploy-guide.md)를 따른다.
 
-생성된 `php-deployer-php-apps.kubeconfig`와 Harbor 계정을 Jenkins에 등록한다.
-
-| Credential ID | 종류 | 값 |
-| --- | --- | --- |
-| `php-deployer-kubeconfig` | Secret file | 생성된 kubeconfig (등록 후 로컬 파일 삭제) |
-| `harbor-credentials` | Username with password | Harbor 계정 |
-
-ServiceAccount는 대상 namespace에만 `edit` 권한을 가진다.
-
-### 3-3. Jenkins Pipeline job 생성
-
-Jenkins UI는 Ingress 없이 ClusterIP로만 노출되므로 port-forward로 접속한다.
-
-```bash
-kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080
-# 브라우저: http://127.0.0.1:8080
-```
-
-1. New Item → Pipeline
-2. Pipeline script from SCM → Git 저장소 URL, 브랜치, Script Path `Jenkinsfile`
-3. Build with Parameters: `APP_NAME`, `TARGET_NS`, `HARBOR_HOST`, `HARBOR_PROJECT`, `APP_HOST`
-
-### 3-4. PHP 저장소 구성
+### 3-3. PHP 저장소 구성
 
 `php-sample/`을 PHP 저장소 루트에 복사해 시작한다.
 
 | 파일 | 역할 |
 | --- | --- |
-| `Jenkinsfile` | composer → lint/test → buildah build/push → kubectl 배포 |
+| `Jenkinsfile` | composer → lint/test → buildah build/push → (prod 승인) → kubectl 배포 → smoke test |
 | `Dockerfile` | composer 멀티스테이지 + `php:8.3-apache`(8080 포트, `public/` DocumentRoot) |
-| `k8s/app.yaml` | Deployment/Service/Ingress 템플릿 |
+| `k8s/app.yaml` | Deployment/Service/Ingress(TLS) 템플릿 |
 | `public/` | 웹 루트 (`index.php`, `healthz.php`) |
 
 클러스터에서 Docker Hub 접근이 막혀 있으면 `php:8.3-apache`, `composer:2`를 Harbor에

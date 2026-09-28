@@ -2,3 +2,7 @@
 vendor
 k8s
 Jenkinsfile
+tests
+phpunit-report.xml
+k8s-rendered.yaml
+.phpunit.result.cache
