@@ -159,6 +159,50 @@ ensure_ingress_controller() {
   kubectl get service -A --field-selector spec.type=LoadBalancer >&2 || true
   return 1
 }
+metrics_api_available() {
+  [[ "$(kubectl get apiservice v1beta1.metrics.k8s.io \
+    -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null)" == "True" ]]
+}
+
+# The portal overview (node CPU/Memory usage, TOP 5 nodes) reads the
+# metrics.k8s.io API, which kubeadm clusters do not provide by default.
+ensure_metrics_server() {
+  local manifest=${METRICS_SERVER_MANIFEST:-"$SCRIPT_DIR/../../applications/metrics-server-0.8.0/deploy.yaml"}
+  local attempt
+
+  if metrics_api_available; then
+    echo "[OK] metrics.k8s.io API is available."
+    return 0
+  fi
+  if [[ "${INSTALL_METRICS_SERVER:-true}" != "true" ]]; then
+    echo "[WARN] metrics-server is not available; portal usage charts will stay empty." >&2
+    return 0
+  fi
+  [[ -f "$manifest" ]] || {
+    echo "[ERROR] metrics-server manifest not found: $manifest (set METRICS_SERVER_MANIFEST)" >&2
+    return 1
+  }
+  echo "[INFO] Installing metrics-server from $manifest"
+  if [[ -n "${METRICS_SERVER_IMAGE:-}" ]]; then
+    sed "s|image: .*metrics-server:.*|image: $METRICS_SERVER_IMAGE|" "$manifest" | kubectl apply -f - || return 1
+  else
+    kubectl apply -f "$manifest" || return 1
+  fi
+  if ! kubectl -n kube-system rollout status deployment/metrics-server --timeout=300s; then
+    echo "[ERROR] metrics-server did not become ready." >&2
+    kubectl -n kube-system describe pods -l k8s-app=metrics-server >&2 || true
+    kubectl -n kube-system logs deployment/metrics-server --tail=50 >&2 || true
+    return 1
+  fi
+  for ((attempt=1; attempt<=24; attempt++)); do
+    metrics_api_available && { echo "[OK] metrics.k8s.io API is available."; return 0; }
+    echo "[INFO] Waiting for metrics.k8s.io API (${attempt}/24)..."
+    sleep 5
+  done
+  echo "[ERROR] metrics.k8s.io APIService is not Available." >&2
+  kubectl describe apiservice v1beta1.metrics.k8s.io >&2 || true
+  return 1
+}
 # -----------------------------------------------------------------------------
 # helm_install <index> [release_name] [namespace] [additional helm install args...]
 # Examples:
@@ -320,6 +364,7 @@ main_pre_cp_portal() {
   ### EXECUTION ########################################
   validate_portal_configuration || return 1
   ensure_ingress_controller || return 1
+  ensure_metrics_server || return 1
 
   # Create cluster-admin token
   kubectl create sa $K8S_CLUSTER_ADMIN -n $K8S_CLUSTER_ADMIN_NAMESPACE \

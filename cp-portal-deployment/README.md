@@ -570,3 +570,20 @@ token 유효성, AppRole bound CIDR, metrics-server, API 로그 오류를 한 �
 cd cp-portal-deployment/script
 ./check-cp-portal.sh
 ```
+
+### metrics-server
+
+포털 Overview의 CPU/Memory 사용률과 TOP 5 Nodes는 `metrics.k8s.io` API를 사용한다.
+kubeadm으로 구축한 클러스터에는 metrics-server가 없으므로 `deploy-cp-portal.sh`가
+사전 점검 단계에서 `applications/metrics-server-0.8.0/deploy.yaml`을 설치한다
+(kubeadm kubelet 인증서 때문에 `--kubelet-insecure-tls` 사용). 이미 배포된 환경에서는
+다음으로 단독 설치한다.
+
+```bash
+cd cp-portal-deployment/script
+./install-metrics-server.sh
+# registry.k-paas.org 이미지를 받을 수 없으면
+METRICS_SERVER_IMAGE=registry.k8s.io/metrics-server/metrics-server:v0.8.0 ./install-metrics-server.sh
+```
+
+자동 설치를 끄려면 `INSTALL_METRICS_SERVER=false`로 실행한다.
