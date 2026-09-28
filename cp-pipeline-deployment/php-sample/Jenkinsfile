@@ -1,0 +1,92 @@
+// PHP build & deploy pipeline for the K-PaaS cp-pipeline Jenkins
+// (requires the PHP-enabled Jenkins image: php, composer, buildah, kubectl).
+//
+// Jenkins credentials to create beforehand:
+//   harbor-credentials : Username/Password for Harbor
+//   php-deployer-kubeconfig : Secret file created by script/create-php-deployer.sh
+pipeline {
+  agent any
+  options { disableConcurrentBuilds() }
+
+  parameters {
+    string(name: 'APP_NAME',       defaultValue: 'php-sample',            description: 'Deployment/Service/Ingress name')
+    string(name: 'TARGET_NS',      defaultValue: 'php-apps',              description: 'Kubernetes namespace')
+    string(name: 'HARBOR_HOST',    defaultValue: 'harbor.192.168.40.216.nip.io', description: 'Harbor host')
+    string(name: 'HARBOR_PROJECT', defaultValue: 'php-apps',              description: 'Harbor project')
+    string(name: 'APP_HOST',       defaultValue: 'php-sample.192.168.40.216.nip.io', description: 'Ingress host')
+    string(name: 'PULL_SECRET',    defaultValue: 'harbor-regcred',        description: 'imagePullSecret in TARGET_NS')
+    string(name: 'APP_DIR',        defaultValue: '.',                     description: 'Directory containing composer.json and Dockerfile')
+  }
+
+  environment {
+    IMAGE = "${params.HARBOR_HOST}/${params.HARBOR_PROJECT}/${params.APP_NAME}:${env.BUILD_NUMBER}"
+    STORAGE_DRIVER = 'vfs'
+    BUILDAH_ISOLATION = 'chroot'
+  }
+
+  stages {
+    stage('Composer install') {
+      steps {
+        dir(params.APP_DIR) {
+          sh 'php -v && composer --version'
+          sh 'composer install --no-interaction --no-progress --prefer-dist'
+        }
+      }
+    }
+
+    stage('Lint & Test') {
+      steps {
+        dir(params.APP_DIR) {
+          sh '''
+            find . -path ./vendor -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l
+            if [ -x vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo "phpunit not installed - skipping tests"; fi
+          '''
+        }
+      }
+    }
+
+    stage('Build image') {
+      steps {
+        dir(params.APP_DIR) {
+          sh 'buildah bud --layers --format docker -t "$IMAGE" .'
+        }
+      }
+    }
+
+    stage('Push to Harbor') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'harbor-credentials',
+                                          usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASS')]) {
+          // Harbor uses the portal's self-signed CA; trust it via /etc/containers/certs.d
+          // or keep --tls-verify=false for an internal registry.
+          sh '''
+            printf '%s' "$HARBOR_PASS" | buildah login --tls-verify=false -u "$HARBOR_USER" --password-stdin "$HARBOR_HOST"
+            buildah push --tls-verify=false "$IMAGE" "docker://$IMAGE"
+            buildah rmi "$IMAGE" || true
+          '''
+        }
+      }
+    }
+
+    stage('Deploy') {
+      steps {
+        withCredentials([file(credentialsId: 'php-deployer-kubeconfig', variable: 'KUBECONFIG')]) {
+          dir(params.APP_DIR) {
+            sh '''
+              sed -e "s|__APP__|$APP_NAME|g" -e "s|__NAMESPACE__|$TARGET_NS|g" \
+                  -e "s|__IMAGE__|$IMAGE|g" -e "s|__HOST__|$APP_HOST|g" \
+                  -e "s|__PULL_SECRET__|$PULL_SECRET|g" k8s/app.yaml > /tmp/app-$BUILD_NUMBER.yaml
+              kubectl apply -f /tmp/app-$BUILD_NUMBER.yaml
+              kubectl -n "$TARGET_NS" rollout status deployment/"$APP_NAME" --timeout=300s
+              rm -f /tmp/app-$BUILD_NUMBER.yaml
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success { echo "Deployed ${env.IMAGE} -> https://${params.APP_HOST}" }
+  }
+}

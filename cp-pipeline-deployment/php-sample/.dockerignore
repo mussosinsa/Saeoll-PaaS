@@ -1,0 +1,4 @@
+.git
+vendor
+k8s
+Jenkinsfile
