@@ -23,6 +23,7 @@ pipeline {
     string(name: 'BASE_DOMAIN', defaultValue: '192.168.40.216.nip.io', description: 'Cluster HOST_DOMAIN')
     string(name: 'RELEASE_TAG', defaultValue: '',                      description: 'prod only: release tag, e.g. v1.2.0')
     string(name: 'APPROVERS',   defaultValue: 'admin',                 description: 'prod only: Jenkins users/groups allowed to approve')
+    string(name: 'BASE_PROJECT', defaultValue: 'base-images',          description: 'Harbor project with mirrored base images (empty: Docker Hub)')
   }
 
   environment {
@@ -93,7 +94,13 @@ pipeline {
 
     stage('Build image') {
       steps {
-        sh 'buildah bud --layers --format docker -t "$IMAGE" .'
+        sh '''
+          BUILD_ARGS=""
+          if [ -n "$BASE_PROJECT" ]; then
+            BUILD_ARGS="--build-arg BASE_REGISTRY=$HARBOR_HOST/$BASE_PROJECT"
+          fi
+          buildah bud --tls-verify=false --layers --format docker $BUILD_ARGS -t "$IMAGE" .
+        '''
       }
     }
 

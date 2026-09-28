@@ -68,6 +68,9 @@ kubectl -n cp-pipeline exec deploy/cp-pipeline-jenkins-deployment -- sh -c 'php 
 
 ### 3-2. 업체별 관리·배포
 
+신규 서비스의 사전작업(포털 계정, namespace·권한, SCM 계정, 베이스 이미지 Harbor 등록, 파이프라인 등록)은
+[신규 서비스 배포 사전작업 및 파이프라인 사용 가이드](docs/new-service-prework-guide.md)를 따른다.
+
 업체 온보딩(`script/onboard-php-vendor.sh`), SCM 계정·저장소 권한, 개발(`develop`) 자동 배포,
 운영(릴리스 태그 + 승인) 배포 절차는
 [PHP 유지보수 업체별 소스 관리·배포 가이드](docs/php-vendor-deploy-guide.md)를 따른다.
@@ -83,6 +86,6 @@ kubectl -n cp-pipeline exec deploy/cp-pipeline-jenkins-deployment -- sh -c 'php 
 | `k8s/app.yaml` | Deployment/Service/Ingress(TLS) 템플릿 |
 | `public/` | 웹 루트 (`index.php`, `healthz.php`) |
 
-클러스터에서 Docker Hub 접근이 막혀 있으면 `php:8.3-apache`, `composer:2`를 Harbor에
-복사하고 Dockerfile의 `PHP_BASE`, `COMPOSER_IMAGE` build-arg를 Harbor 경로로 바꾼다.
+베이스 이미지(`php:8.3-apache`, `composer:2`)는 `script/mirror-base-images.sh`로 Harbor
+`base-images` 프로젝트에 등록하고, 파이프라인이 `BASE_REGISTRY` build-arg로 Harbor 경로를 지정한다.
 Laravel 등은 `public/`를 DocumentRoot로 쓰므로 그대로 사용할 수 있다.
