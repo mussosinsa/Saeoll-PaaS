@@ -51,8 +51,9 @@ feature/<작업명> ──merge──▶ develop ──(자동)──▶ Jenkins
 1. CP-Portal, CP-Pipeline 배포 완료
 2. PHP 지원 Jenkins 이미지 적용: `cp-pipeline-deployment/script/build-jenkins-php-image.sh`
    (README "PHP 지원 Jenkins 이미지 빌드" 참고)
-3. SCM 준비: K-PaaS 소스컨트롤(`https://scm.<HOST_DOMAIN>`) 또는 사내 Git 서버.
-   **본 저장소에는 SCM 배포 스크립트가 포함되어 있지 않으므로** 별도로 설치되어 있어야 한다.
+3. SCM 준비: K-PaaS 소스컨트롤(`https://scm.<HOST_DOMAIN>`)은
+   [`cp-source-control-deployment`](../../cp-source-control-deployment/README.md)로 설치한다(사내 Git 서버도 가능).
+   클론 URL 형식은 `https://scm-manager.<HOST_DOMAIN>/scm/git/<저장소명>`이다.
 4. Jenkins 접속: Ingress가 없으므로 운영 관리자 PC에서 port-forward로 접속한다.
    ```bash
    kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080
@@ -106,7 +107,7 @@ K-PaaS 소스컨트롤 기준:
 2. 저장소 상세 → 기여자 관리
    - 업체 개발자·PM 계정: **쓰기 권한**
    - `jenkins-vendor-a`: **보기 권한**
-3. "레파지토리 클론"에서 클론 URL을 복사해 업체에 전달한다.
+3. "레파지토리 클론"에서 클론 URL(`https://scm-manager.<HOST_DOMAIN>/scm/git/<저장소명>`)을 복사해 업체에 전달한다.
 
 사내 Git(GitLab 등)을 쓰는 경우 업체별 그룹을 만들고 동일한 권한 구조를 적용한다.
 가능하면 `main` 브랜치는 보호(직접 push 금지, merge만 허용)한다.

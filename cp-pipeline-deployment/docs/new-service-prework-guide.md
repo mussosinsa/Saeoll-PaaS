@@ -33,6 +33,7 @@
 | Keycloak 관리 콘솔 | `https://keycloak.192.168.40.216.nip.io/admin` | 운영 관리자 전용 |
 | Harbor | `https://harbor.192.168.40.216.nip.io` | 운영 관리자 전용 |
 | 소스컨트롤(SCM) | `https://scm.192.168.40.216.nip.io` | `cp-source-control-deployment`로 설치 |
+| SCM git 클론 URL | `https://scm-manager.192.168.40.216.nip.io/scm/git/<저장소명>` | 업체·Jenkins가 clone/push에 사용 |
 | Pipeline | `https://pipeline.192.168.40.216.nip.io` | 포털 계정 |
 | Jenkins | `kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080` | 운영 관리자 전용 |
 
@@ -171,14 +172,23 @@ kubectl -n vendor-a-dev get resourcequota,secret,sa
    | 운영 관리자 | 관리 |
 
 3. **레파지토리 클론**에서 URL을 복사하여 업체에 전달한다.
+   형식: `https://scm-manager.<도메인>/scm/git/<저장소명>` (예: `https://scm-manager.192.168.40.216.nip.io/scm/git/vendor-a-homepage`)
 4. 사내 Git을 사용하는 경우 `main` 브랜치를 보호(직접 push 금지, merge만 허용)한다.
 
 ### 3-3. 확인
 
 ```bash
 # 업체 개발자 PC
-git clone <클론 URL>          # 개인 계정으로 성공해야 함
+git clone https://scm-manager.<도메인>/scm/git/vendor-a-homepage   # 개인 계정으로 성공해야 함
 # Jenkins 계정으로 clone은 되고 push는 거부되어야 함
+# (사설 인증서면 git -c http.sslVerify=false ... 또는 CA 등록)
+```
+
+운영 관리자는 SCM 자체 점검을 먼저 수행한다.
+
+```bash
+cd ~/Saeoll-PaaS/cp-source-control-deployment/script
+SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_TEST_REPO=vendor-a-homepage ./check-cp-source-control.sh
 ```
 
 ---
@@ -253,7 +263,7 @@ Jenkins → New Item → **Folder** `vendor-a` → 폴더의 Credentials에 등�
 | --- | --- | --- |
 | 종류 | Pipeline | Pipeline |
 | 빌드 유발 | Poll SCM `H/5 * * * *` | 없음(수동) |
-| SCM | Git, 클론 URL, `vendor-a-scm` | 동일 |
+| SCM | Git, 클론 URL(`https://scm-manager.<도메인>/scm/git/<저장소명>`), `vendor-a-scm` | 동일 |
 | Branch Specifier | `*/develop` | `refs/tags/${RELEASE_TAG}` (Lightweight checkout 해제) |
 | Script Path | `Jenkinsfile` | `Jenkinsfile` |
 | 주요 파라미터 | `DEPLOY_ENV=dev`, `VENDOR=vendor-a`, `APP_NAME=homepage` | `DEPLOY_ENV=prod`, `RELEASE_TAG`, `APPROVERS` |

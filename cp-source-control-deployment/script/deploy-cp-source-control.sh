@@ -102,5 +102,7 @@ echo ""
 echo "[INFO] Waiting for source control pods to become Ready (up to 10 minutes)..."
 kubectl -n "$NAMESPACE" wait --for=condition=Ready pod --all --timeout=600s || \
   echo "[WARN] Some pods are not Ready yet. Check: kubectl -n $NAMESPACE get pods" >&2
-echo "[INFO] Source control URL: https://scm.${P_HOST_DOMAIN}"
 kubectl get all -n "$NAMESPACE"
+
+# Post-deploy checks (pods, ingress, UI, SCM-Manager 1.x REST API)
+HOST_DOMAIN=$P_HOST_DOMAIN "$SCRIPT_DIR/check-cp-source-control.sh"
