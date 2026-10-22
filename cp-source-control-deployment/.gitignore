@@ -1,0 +1,3 @@
+upstream/
+*.tar.gz
+*.log

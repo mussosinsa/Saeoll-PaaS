@@ -32,7 +32,7 @@
 | CP-Portal | `https://portal.192.168.40.216.nip.io` | 포털 계정 |
 | Keycloak 관리 콘솔 | `https://keycloak.192.168.40.216.nip.io/admin` | 운영 관리자 전용 |
 | Harbor | `https://harbor.192.168.40.216.nip.io` | 운영 관리자 전용 |
-| 소스컨트롤(SCM) | `https://scm.192.168.40.216.nip.io` | 별도 설치 필요(본 저장소 미포함) |
+| 소스컨트롤(SCM) | `https://scm.192.168.40.216.nip.io` | `cp-source-control-deployment`로 설치 |
 | Pipeline | `https://pipeline.192.168.40.216.nip.io` | 포털 계정 |
 | Jenkins | `kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080` | 운영 관리자 전용 |
 
@@ -149,8 +149,8 @@ kubectl -n vendor-a-dev get resourcequota,secret,sa
 
 ## 3. SCM 계정 생성 및 권한 부여
 
-> 본 저장소에는 SCM 설치 스크립트가 없다. K-PaaS 소스컨트롤(`https://scm.<도메인>`) 또는
-> 사내 Git 서버(GitLab 등)가 준비되어 있어야 한다. 아래 메뉴는 K-PaaS 소스컨트롤 기준이다.
+> K-PaaS 소스컨트롤(`https://scm.<도메인>`)은 [`cp-source-control-deployment`](../../cp-source-control-deployment/README.md)로
+> 설치한다(사내 Git 서버(GitLab 등)를 써도 된다). 아래 메뉴는 K-PaaS 소스컨트롤 기준이다.
 
 ### 3-1. 계정 생성
 
