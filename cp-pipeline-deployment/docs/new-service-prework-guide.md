@@ -155,10 +155,29 @@ kubectl -n vendor-a-dev get resourcequota,secret,sa
 
 ### 3-1. 계정 생성
 
-| 계정 | 생성 | 비고 |
+소스 컨트롤은 포털과 같은 Keycloak `cp-realm` 계정으로 로그인한다. 다만 **포털 사용자를 만들어도
+소스 컨트롤 계정·저장소·권한은 자동으로 생기지 않는다.**
+
+| 항목 | 포털 사용자 생성 시 | 생성 시점·방법 |
 | --- | --- | --- |
-| 업체 개발자·PM 개인 계정 | 사용자 가입 또는 운영 관리자 생성 → 관리자 메뉴 **사용자 관리**에서 확인 | 개인별 발급 |
-| Jenkins용 계정 `jenkins-vendor-a` | 운영 관리자 생성 | 업체 저장소 읽기 전용 |
+| 로그인 계정(ID/PW) | 공용 (Keycloak `cp-realm`) | 포털 가입 또는 Keycloak에서 생성 |
+| 소스 컨트롤 사용자 | 자동 아님 | 해당 계정으로 `https://scm.<도메인>`에 **최초 1회 로그인** 시 등록 |
+| git 비밀번호(clone/push) | 자동 아님 | 최초 로그인 후 **내정보 관리**에서 반드시 변경. Keycloak 비밀번호와 별개 |
+| 저장소 | 자동 아님 | 3-2에서 생성 |
+| 저장소 권한 | 자동 아님 | 3-2에서 참여자(기여자) 추가 |
+| 포털 namespace/role | 소스 컨트롤과 무관 | 저장소 권한에 반영되지 않음 |
+
+| 계정 | 준비 절차 | 비고 |
+| --- | --- | --- |
+| 업체 개발자·PM 개인 계정 | ① 포털 가입(1장) → ② 본인이 `scm.` 최초 로그인 → ③ 내정보 관리에서 git 비밀번호 변경 → ④ 운영 관리자가 **사용자 관리**에서 확인 | 개인별 발급 |
+| Jenkins용 계정 `jenkins-vendor-a` | ① 운영 관리자가 Keycloak `cp-realm` → Users → Add user로 생성, Credentials에서 비밀번호 설정(Temporary 해제) → ② 그 계정으로 `scm.` 최초 로그인 → ③ 내정보 관리에서 git 비밀번호 변경 | 업체 저장소 읽기 전용. 포털 권한은 부여하지 않음. Jenkins credential(`vendor-a-scm`)에는 ③의 git 비밀번호 등록 |
+
+등록 여부는 운영 관리자가 다음으로 확인한다(포털 DB, 소스 컨트롤 DB, SCM-Manager 계정, 저장소 권한).
+
+```bash
+cd ~/Saeoll-PaaS/cp-source-control-deployment/script
+SCM_ADMIN_PASSWORD='<관리자 git 비밀번호>' SCM_CHECK_USER=vendor-a-hong,jenkins-vendor-a ./check-cp-source-control.sh
+```
 
 ### 3-2. 저장소 생성 및 권한 부여
 
@@ -179,7 +198,7 @@ kubectl -n vendor-a-dev get resourcequota,secret,sa
 
 ```bash
 # 업체 개발자 PC
-git clone https://scm-manager.<도메인>/scm/git/vendor-a-homepage   # 개인 계정으로 성공해야 함
+git clone https://scm-manager.<도메인>/scm/git/vendor-a-homepage   # 개인 계정 + 내정보 관리에서 바꾼 git 비밀번호로 성공해야 함
 # Jenkins 계정으로 clone은 되고 push는 거부되어야 함
 # (사설 인증서면 git -c http.sslVerify=false ... 또는 CA 등록)
 ```
@@ -188,7 +207,8 @@ git clone https://scm-manager.<도메인>/scm/git/vendor-a-homepage   # 개인 �
 
 ```bash
 cd ~/Saeoll-PaaS/cp-source-control-deployment/script
-SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_TEST_REPO=vendor-a-homepage ./check-cp-source-control.sh
+SCM_ADMIN_PASSWORD='<관리자 git 비밀번호>' SCM_TEST_REPO=vendor-a-homepage \
+  SCM_CHECK_USER=vendor-a-hong,jenkins-vendor-a ./check-cp-source-control.sh
 ```
 
 ---
@@ -359,8 +379,8 @@ git checkout develop && git merge --no-ff feature/<작업명> && git push origin
 | 3 | `<업체>-dev`, `<업체>-prod` namespace 생성 | `kubectl get ns -l cp.k-paas.org/vendor=<업체>` | ☐ |
 | 4 | ResourceQuota, pull secret, TLS secret, deployer SA | `kubectl -n <ns> get resourcequota,secret,sa` | ☐ |
 | 5 | 포털 사용자 namespace 권한(dev 관리, prod 조회/없음) | 업체 계정 로그인 확인 | ☐ |
-| 6 | SCM 개인 계정 및 저장소 쓰기 권한 | clone/push 테스트 | ☐ |
-| 7 | Jenkins용 SCM 계정 보기 권한 | clone 성공, push 거부 | ☐ |
+| 6 | SCM 개인 계정(최초 로그인·git 비밀번호 변경) 및 저장소 쓰기 권한 | `SCM_CHECK_USER=<계정> ./check-cp-source-control.sh`, clone/push 테스트 | ☐ |
+| 7 | Jenkins용 SCM 계정(Keycloak 생성·최초 로그인) 보기 권한 | clone 성공, push 거부 | ☐ |
 | 8 | Harbor 업체 프로젝트, robot 계정 | Harbor Projects → `<업체>` → Robot Accounts | ☐ |
 | 9 | 베이스 이미지 등록 및 취약점 확인 | Harbor `base-images` | ☐ |
 | 10 | Jenkins 폴더 credential 4종(폴더 범위) | Jenkins 폴더 Credentials | ☐ |

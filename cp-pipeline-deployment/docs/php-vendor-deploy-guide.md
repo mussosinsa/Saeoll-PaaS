@@ -87,12 +87,19 @@ cd ~/Saeoll-PaaS/cp-pipeline-deployment/script
 
 ### 1-2. SCM 사용자 계정
 
+포털 사용자를 만들어도 소스 컨트롤 계정·저장소·권한은 자동으로 생기지 않는다. 계정은 포털과 같은
+Keycloak `cp-realm` 계정이며, `https://scm.<HOST_DOMAIN>`에 **최초 1회 로그인**할 때 소스 컨트롤에 등록된다.
+clone/push에는 최초 로그인 후 **내정보 관리**에서 변경한 git 비밀번호를 쓴다(Keycloak 비밀번호와 별개).
+
 | 계정 | 생성·관리 | 권한 |
 | --- | --- | --- |
-| 업체 개발자 개인 계정 | 개발자가 SCM에 가입(또는 운영 관리자가 생성) → 운영 관리자가 "사용자 관리"에서 확인 | 업체 저장소 **쓰기 권한** |
+| 업체 개발자 개인 계정 | 포털 가입 → 본인이 `scm.` 최초 로그인·git 비밀번호 변경 → 운영 관리자가 "사용자 관리"에서 확인 | 업체 저장소 **쓰기 권한** |
 | 업체 PM 계정 | 동일 | 업체 저장소 **쓰기 권한** (릴리스 태그 생성) |
-| Jenkins용 계정 `jenkins-<vendor>` | 운영 관리자 생성 | 업체 저장소 **보기 권한** (읽기 전용) |
+| Jenkins용 계정 `jenkins-<vendor>` | 운영 관리자가 Keycloak `cp-realm`에서 생성 → 그 계정으로 `scm.` 최초 로그인·git 비밀번호 변경 | 업체 저장소 **보기 권한** (읽기 전용) |
 | 운영 관리자 | 기존 관리자 계정 | 전체 |
+
+등록 확인: `SCM_CHECK_USER=<계정,...> ~/Saeoll-PaaS/cp-source-control-deployment/script/check-cp-source-control.sh`
+(상세는 [신규 서비스 사전작업 가이드](new-service-prework-guide.md) 3장)
 
 운영 원칙:
 - 계정은 개인별로 발급하고 공용 계정은 사용하지 않는다(Jenkins 계정 제외).

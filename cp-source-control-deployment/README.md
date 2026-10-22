@@ -63,6 +63,21 @@ kubectl -n cp-source-control get pods
 
 - 관리자: 포털 관리자 계정(`admin` / 초기화한 패스워드)
 - 사용자: 로그인 화면 하단 **Register**로 가입 후 로그인
+
+### 포털 사용자와의 관계
+
+로그인 계정은 포털과 같은 Keycloak `cp-realm` 계정이지만, **포털 사용자 생성만으로 소스 컨트롤 계정·저장소·권한이
+만들어지지는 않는다.**
+
+| 항목 | 생성 시점 |
+| --- | --- |
+| 소스 컨트롤 사용자(`cp_scm.SC_INSTANCE_USER`, SCM-Manager 계정) | 해당 계정으로 `scm.`에 **최초 1회 로그인** |
+| git 비밀번호(clone/push) | 최초 로그인 후 **내정보 관리**에서 변경해야 사용 가능. Keycloak 비밀번호와 별개 |
+| 저장소(`cp_scm.SC_REPOSITORY`) | 레파지토리 → 신규생성 (수동) |
+| 저장소 권한(`cp_scm.REPO_PERMITION`) | 저장소 상세 → 참여자 추가, 쓰기/보기 (수동) |
+
+포털의 namespace/role 할당은 저장소 권한과 무관하다. 운영 절차는
+[신규 서비스 사전작업 가이드](../cp-pipeline-deployment/docs/new-service-prework-guide.md) 3장을 따른다.
 - SCM-Manager 2.x의 `/api/v2`는 없다. 1.x에서 404가 나오는 것이 정상이다.
 - 브라우저에서 `scm-manager.` 주소가 `ERR_TOO_MANY_REDIRECTS`이면, 같은 브라우저에서
   `scm.`·Keycloak 로그인으로 생긴 쿠키 때문이다(서버는 `curl`로 200 응답). 시크릿 창을 쓰거나
@@ -80,6 +95,9 @@ SCM_ADMIN_PASSWORD='<관리자 비밀번호>' ./check-cp-source-control.sh
 
 # git 접근까지 확인 (scm. 화면에서 만든 저장소 이름)
 SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_TEST_REPO=test ./check-cp-source-control.sh
+
+# 사용자 등록 확인 (포털 DB, 소스 컨트롤 DB, SCM-Manager 계정, 저장소 권한)
+SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-vendor-a ./check-cp-source-control.sh
 ```
 
 | 단계 | 정상 기준 |
@@ -90,6 +108,7 @@ SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_TEST_REPO=test ./check-cp-sour
 | SCM-Manager | `/scm/` → 200, `/scm/api/rest/repositories.json` 인증 없이 → **401** |
 | 관리자 로그인(선택) | 같은 API 관리자 인증 → 200 |
 | git(선택) | `git ls-remote https://scm-manager.<도메인>/scm/git/<저장소>` 성공 |
+| 사용자(선택) | `cp_scm.SC_INSTANCE_USER`에 등록됨, SCM-Manager 계정 있음(관리자 비밀번호 지정 시). 없으면 `scm.` 최초 로그인 필요 |
 
 읽기 전용이며 실패 항목이 있으면 `[RESULT] FAIL`, 종료 코드 1을 반환한다. 비밀번호는 환경변수로만 받고
 명령행 인자로 넘기지 않는다. 수동 확인은 다음과 같다.

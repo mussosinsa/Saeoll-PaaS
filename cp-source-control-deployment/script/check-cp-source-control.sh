@@ -3,6 +3,7 @@
 #   ./check-cp-source-control.sh
 #   SCM_ADMIN_PASSWORD='...' ./check-cp-source-control.sh            # + admin API login
 #   SCM_ADMIN_PASSWORD='...' SCM_TEST_REPO=test ./check-cp-source-control.sh  # + git ls-remote
+#   SCM_CHECK_USER=saeoll,jenkins-vendor-a ./check-cp-source-control.sh     # + user registration
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
 SC_VARS="$SCRIPT_DIR/../upstream/script/cp-source-control-vars.sh"
@@ -101,6 +102,55 @@ else
       fail "git ls-remote $MANAGER_URL/git/$SCM_TEST_REPO failed (does the repository exist?)"
     fi
   fi
+fi
+
+# 5. User registration (optional) -----------------------------------------------
+# Portal users (cp.cp_users) are registered in source control only after their
+# first login to https://scm.<domain> (cp_scm.SC_INSTANCE_USER + SCM-Manager user).
+if [[ -n "${SCM_CHECK_USER:-}" ]]; then
+  section "5. User registration ($SCM_CHECK_USER)"
+  DB_PASSWORD=$(read_var "$PORTAL_VARS" DATABASE_USER_PASSWORD)
+  db_pod=$(kubectl -n mariadb get pods -l app.kubernetes.io/name=mariadb -o name 2>/dev/null | head -n 1)
+  sql() {
+    kubectl -n mariadb exec "${db_pod:-mariadb-0}" -c mariadb -- env MYSQL_PWD="$DB_PASSWORD" \
+      sh -c 'c=$(command -v mariadb || command -v mysql); "$c" -uroot -N -e "$0"' "$1" 2>/dev/null
+  }
+  scm_users=""
+  if [[ -n "${SCM_ADMIN_PASSWORD:-}" ]]; then
+    cred=$(printf '%s:%s' "$SCM_ADMIN_ID" "$SCM_ADMIN_PASSWORD" | sed -e 's/[\\"]/\\&/g')
+    scm_users=$(printf 'user = "%s"\n' "$cred" | \
+      curl -sk --max-time 15 -K - "$MANAGER_URL/api/rest/users.json" | \
+      python3 -c 'import json,sys; print("\n".join(u["name"] for u in json.load(sys.stdin)))' 2>/dev/null)
+  fi
+  IFS=',' read -ra users <<<"$SCM_CHECK_USER"
+  for user in "${users[@]}"; do
+    user=$(echo "$user" | tr -d '[:space:]')
+    [[ "$user" =~ ^[A-Za-z0-9._@-]+$ ]] || { fail "invalid user id: $user"; continue; }
+    portal=$(sql "SELECT COUNT(*) FROM cp.cp_users WHERE user_id='$user'")
+    scm_db=$(sql "SELECT COUNT(*) FROM cp_scm.SC_INSTANCE_USER WHERE USER_ID='$user'")
+    repos=$(sql "SELECT GROUP_CONCAT(CONCAT(r.REPO_NAME,':',p.PERMISSION)) FROM cp_scm.REPO_PERMITION p JOIN cp_scm.SC_REPOSITORY r ON r.REPO_NO=p.REPO_NO WHERE p.USER_ID='$user'")
+    if [[ -z "$portal" || -z "$scm_db" ]]; then
+      fail "$user: cannot query MariaDB (check DATABASE_USER_PASSWORD in $PORTAL_VARS)"
+      continue
+    fi
+    ((portal > 0)) && ok "$user: portal user (cp.cp_users)" || \
+      warn "$user: not in cp.cp_users (never logged in to the portal)"
+    if ((scm_db > 0)); then
+      ok "$user: source control user (cp_scm.SC_INSTANCE_USER)"
+    else
+      fail "$user: not registered in source control - log in once at $SCM_URL"
+    fi
+    if [[ -n "$scm_users" ]]; then
+      grep -qx "$user" <<<"$scm_users" && ok "$user: SCM-Manager account exists" || \
+        fail "$user: no SCM-Manager account - log in once at $SCM_URL"
+    fi
+    if [[ -n "$repos" && "$repos" != NULL ]]; then
+      ok "$user: repository permissions: $repos"
+    else
+      warn "$user: no repository permissions (add as contributor in the repository)"
+    fi
+  done
+  warn "git push/pull needs the password set in $SCM_URL > 내정보 관리 (not the Keycloak password)"
 fi
 
 section "Summary"
