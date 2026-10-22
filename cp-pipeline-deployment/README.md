@@ -70,6 +70,7 @@ kubectl -n cp-pipeline exec deploy/cp-pipeline-jenkins-deployment -- sh -c 'php 
 
 신규 서비스의 사전작업(포털 계정, namespace·권한, SCM 계정, 베이스 이미지 Harbor 등록, 파이프라인 등록)은
 [신규 서비스 배포 사전작업 및 파이프라인 사용 가이드](docs/new-service-prework-guide.md)를 따른다.
+처음 한 번 전체 흐름을 확인하려면 [PHP 첫 배포 실습(saeoll/homepage)](docs/php-quickstart-saeoll.md)을 따라 한다.
 
 업체 온보딩(`script/onboard-php-vendor.sh`), SCM 계정·저장소 권한, 개발(`develop`) 자동 배포,
 운영(릴리스 태그 + 승인) 배포 절차는
