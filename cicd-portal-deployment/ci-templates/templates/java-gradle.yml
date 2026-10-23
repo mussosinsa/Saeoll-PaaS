@@ -1,0 +1,36 @@
+# Java / Gradle (Spring Boot etc.). Uses ./gradlew when present.
+#   JAVA_BUILD_IMAGE (default $CICD_DOCKERHUB/gradle:8.10-jdk17)
+include:
+  - local: /templates/common.yml
+
+variables:
+  JAVA_BUILD_IMAGE: $CICD_DOCKERHUB/gradle:8.10-jdk17
+  GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+.gradle:
+  image: $JAVA_BUILD_IMAGE
+  before_script:
+    - if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
+  cache:
+    key: gradle-$CI_PROJECT_ID
+    paths: [.gradle/caches, .gradle/wrapper]
+
+build:
+  extends: .gradle
+  stage: build
+  script:
+    - $GRADLE --no-daemon assemble
+  artifacts:
+    paths: [build/libs/]
+    expire_in: 1 day
+
+test:
+  extends: .gradle
+  stage: test
+  script:
+    - $GRADLE --no-daemon check
+  artifacts:
+    when: always
+    reports:
+      junit: build/test-results/test/**/TEST-*.xml

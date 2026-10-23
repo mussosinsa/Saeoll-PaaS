@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {APP}
+  labels:
+    app: {APP}
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - HOST                  # replaced by the overlay
+      secretName: {TLS_SECRET}
+  rules:
+    - host: HOST                # replaced by the overlay
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {APP}
+                port:
+                  name: http

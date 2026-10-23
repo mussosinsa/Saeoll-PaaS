@@ -1,0 +1,24 @@
+# {VENDOR}/{APP} prod. CI updates images[0].newTag; Argo CD application {VENDOR}-{APP}-prod.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: {VENDOR}-prod
+resources:
+  - ../../base
+images:
+  - name: app
+    newName: {IMAGE_REPO}
+    newTag: none-yet
+replicas:
+  - name: {APP}
+    count: 2
+patches:
+  - target:
+      kind: Ingress
+      name: {APP}
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: {APP}-{VENDOR}.{HOST_DOMAIN}
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: {APP}-{VENDOR}.{HOST_DOMAIN}

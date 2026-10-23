@@ -1,0 +1,32 @@
+# Vue (Vite). Builds dist/ and serves it with nginx (see the starter Dockerfile).
+#   NODE_BUILD_IMAGE (default $CICD_DOCKERHUB/node:20-alpine)
+include:
+  - local: /templates/common.yml
+
+variables:
+  NODE_BUILD_IMAGE: $CICD_DOCKERHUB/node:20-alpine
+  npm_config_cache: $CI_PROJECT_DIR/.npm
+
+.node:
+  image: $NODE_BUILD_IMAGE
+  before_script:
+    - if [ -f package-lock.json ]; then npm ci; else npm install; fi
+  cache:
+    key: npm-$CI_PROJECT_ID
+    paths: [.npm]
+
+build:
+  extends: .node
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 day
+
+test:
+  extends: .node
+  stage: test
+  script:
+    - npm run lint --if-present
+    - npm run test:unit --if-present

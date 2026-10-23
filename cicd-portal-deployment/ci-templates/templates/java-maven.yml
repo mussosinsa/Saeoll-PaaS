@@ -1,0 +1,35 @@
+# Java / Maven (Spring Boot etc.). Uses ./mvnw when present.
+#   JAVA_BUILD_IMAGE (default $CICD_DOCKERHUB/maven:3.9-eclipse-temurin-17)
+include:
+  - local: /templates/common.yml
+
+variables:
+  JAVA_BUILD_IMAGE: $CICD_DOCKERHUB/maven:3.9-eclipse-temurin-17
+  MAVEN_OPTS: -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository
+
+.maven:
+  image: $JAVA_BUILD_IMAGE
+  before_script:
+    - if [ -x ./mvnw ]; then MVN=./mvnw; else MVN=mvn; fi
+  cache:
+    key: maven-$CI_PROJECT_ID
+    paths: [.m2/repository]
+
+build:
+  extends: .maven
+  stage: build
+  script:
+    - $MVN -B -DskipTests package
+  artifacts:
+    paths: [target/*.jar]
+    expire_in: 1 day
+
+test:
+  extends: .maven
+  stage: test
+  script:
+    - $MVN -B verify
+  artifacts:
+    when: always
+    reports:
+      junit: target/surefire-reports/TEST-*.xml

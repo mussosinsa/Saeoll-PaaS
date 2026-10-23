@@ -1,0 +1,6 @@
+# CI/CD portal pipeline: build/test on every branch, deploy develop -> dev, tag vX.Y.Z -> prod.
+# Template source: GitLab project cicd/ci-templates (templates/php.yml)
+include:
+  - project: cicd/ci-templates
+    ref: main
+    file: /templates/php.yml

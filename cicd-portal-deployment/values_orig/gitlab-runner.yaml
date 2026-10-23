@@ -1,0 +1,29 @@
+# gitlab/gitlab-runner chart values. Rendered by deploy-cicd-portal.sh.
+# The runner talks to GitLab over the in-cluster service (no TLS/ingress hop).
+gitlabUrl: {GITLAB_INTERNAL_URL}
+concurrent: {RUNNER_CONCURRENT}
+checkInterval: 5
+rbac:
+  create: true
+runners:
+  secret: gitlab-runner-token
+  config: |
+    [[runners]]
+      name = "cicd-k8s"
+      clone_url = "{GITLAB_INTERNAL_URL}"
+      [runners.kubernetes]
+        namespace = "{RUNNER_NAMESPACE}"
+        image = "{CICD_DOCKERHUB}/alpine:3.20"
+        privileged = false
+        cpu_request = "250m"
+        memory_request = "512Mi"
+        memory_limit = "{RUNNER_BUILD_MEMORY_LIMIT}"
+        helper_memory_limit = "512Mi"
+        service_memory_limit = "1Gi"
+        poll_timeout = 600
+        [runners.kubernetes.pod_labels]
+          "app.kubernetes.io/part-of" = "cicd-portal"
+        [[runners.kubernetes.volumes.secret]]
+          name = "{CA_SECRET_NAME}"
+          mount_path = "/etc/cicd-ca"
+          read_only = true

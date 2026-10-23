@@ -1,0 +1,12 @@
+{
+    "name": "kpaas/php-sample",
+    "description": "Sample PHP application deployed by the CP pipeline Jenkins",
+    "type": "project",
+    "require": {
+        "php": ">=8.1"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

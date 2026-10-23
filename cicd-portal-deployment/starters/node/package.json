@@ -1,0 +1,14 @@
+{
+  "name": "{APP}",
+  "version": "1.0.0",
+  "private": true,
+  "description": "{VENDOR}/{APP} Node.js service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

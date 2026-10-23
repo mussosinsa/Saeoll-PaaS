@@ -86,6 +86,11 @@ CP-Portal 배포 후 아래 순서로 설치한다.
 1. [소스 컨트롤(SCM) 배포 가이드](cp-source-control-deployment/README.md) — `https://scm.<HOST_DOMAIN>`
 2. [파이프라인 배포 가이드](cp-pipeline-deployment/README.md) — `https://pipeline.<HOST_DOMAIN>`
 
+### CI/CD 포털 (GitLab CE + Argo CD)
+
+K-PaaS 파이프라인을 변경하지 않고 Java(Gradle/Maven)·PHP·Node.js·Vue 서비스용 CI/CD 포털을 별도로 구축한다.
+[CI/CD 포털 배포 가이드](cicd-portal-deployment/README.md) — `https://gitlab.<HOST_DOMAIN>`, `https://argocd.<HOST_DOMAIN>`
+
 ### 기존 Kubernetes에 CP-Portal 설치
 
 `standalone/install-existing-k8s.sh`는 CP-Portal을 포함하여 설치하지만, CP-Portal

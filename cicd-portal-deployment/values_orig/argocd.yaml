@@ -1,0 +1,36 @@
+# argo/argo-cd chart values. Rendered by deploy-cicd-portal.sh.
+global:
+  domain: {ARGOCD_HOST}
+dex:
+  enabled: false
+notifications:
+  enabled: false
+configs:
+  params:
+    server.insecure: true            # TLS ends at ingress-nginx
+  cm:
+    url: https://{ARGOCD_HOST}
+    admin.enabled: true              # local admin kept for break-glass access
+    users.anonymous.enabled: false
+    oidc.config: |
+      name: K-PaaS SSO
+      issuer: {KEYCLOAK_ISSUER}
+      clientID: {OIDC_CLIENT_ID}
+      clientSecret: $oidc.keycloak.clientSecret
+      requestedScopes: ["openid", "profile", "email"]
+      rootCA: |
+{CA_PEM}
+  rbac:
+    policy.default: ""
+    scopes: "[groups]"
+    policy.csv: |
+      g, {ADMIN_GROUP}, role:admin
+server:
+  ingress:
+    enabled: true
+    ingressClassName: {INGRESS_CLASS_NAME}
+    hostname: {ARGOCD_HOST}
+    extraTls:
+      - hosts:
+          - {ARGOCD_HOST}
+        secretName: {TLS_SECRET}

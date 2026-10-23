@@ -1,0 +1,246 @@
+# GitLab CE (Omnibus) for the CI/CD portal. Rendered by deploy-cicd-portal.sh.
+# Placeholders: {NAMESPACE} {GITLAB_HOST} {GITLAB_IMAGE} {STORAGECLASS} {DATA_SIZE}
+#   {CONFIG_SIZE} {LOGS_SIZE} {CPU_REQUEST} {MEMORY_REQUEST} {MEMORY_LIMIT}
+#   {TLS_SECRET} {INGRESS_CLASS_NAME} {SECRET_NAME} {CA_SECRET_NAME} {KEYCLOAK_ISSUER} {OIDC_CLIENT_ID}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-omnibus-config
+  namespace: {NAMESPACE}
+type: Opaque
+stringData:
+  gitlab.rb: |
+    external_url 'https://{GITLAB_HOST}'
+
+    # TLS ends at ingress-nginx; GitLab listens on plain HTTP inside the cluster
+    nginx['listen_port'] = 80
+    nginx['listen_https'] = false
+    nginx['real_ip_trusted_addresses'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+    nginx['real_ip_header'] = 'X-Forwarded-For'
+    nginx['real_ip_recursive'] = 'on'
+    nginx['proxy_set_headers'] = { 'X-Forwarded-Proto' => 'https', 'X-Forwarded-Ssl' => 'on' }
+    gitlab_rails['trusted_proxies'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+    gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+    letsencrypt['enable'] = false
+
+    # Features served elsewhere (Harbor registry, Argo CD) or not used
+    registry['enable'] = false
+    gitlab_rails['registry_enabled'] = false
+    gitlab_pages['enable'] = false
+    gitlab_kas['enable'] = false
+    mattermost['enable'] = false
+    prometheus_monitoring['enable'] = false
+    gitlab_rails['usage_ping_enabled'] = false
+
+    # Small single-pod footprint
+    puma['worker_processes'] = 2
+    sidekiq['concurrency'] = 10
+    postgresql['shared_buffers'] = '256MB'
+
+    # K-PaaS SSO (Keycloak cp-realm)
+    gitlab_rails['omniauth_enabled'] = true
+    gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+    gitlab_rails['omniauth_block_auto_created_users'] = false
+    gitlab_rails['omniauth_auto_link_user'] = ['openid_connect']
+    gitlab_rails['omniauth_providers'] = [
+      {
+        name: 'openid_connect',
+        label: 'K-PaaS SSO',
+        args: {
+          name: 'openid_connect',
+          scope: ['openid', 'profile', 'email'],
+          response_type: 'code',
+          issuer: '{KEYCLOAK_ISSUER}',
+          discovery: true,
+          client_auth_method: 'basic',
+          uid_field: 'preferred_username',
+          pkce: true,
+          client_options: {
+            identifier: '{OIDC_CLIENT_ID}',
+            secret: ENV['GITLAB_OIDC_CLIENT_SECRET'],
+            redirect_uri: 'https://{GITLAB_HOST}/users/auth/openid_connect/callback'
+          }
+        }
+      }
+    ]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-config
+  namespace: {NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {STORAGECLASS}
+  resources:
+    requests:
+      storage: {CONFIG_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-logs
+  namespace: {NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {STORAGECLASS}
+  resources:
+    requests:
+      storage: {LOGS_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-data
+  namespace: {NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {STORAGECLASS}
+  resources:
+    requests:
+      storage: {DATA_SIZE}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab
+  namespace: {NAMESPACE}
+  labels:
+    app: gitlab
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+        # Reachable from other namespaces (runner jobs, Argo CD) under the
+        # K-PaaS Kyverno default NetworkPolicy (cp-default-pod-shared-policy)
+        cp-role: shared
+    spec:
+      containers:
+        - name: gitlab
+          image: {GITLAB_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: "from_file '/etc/gitlab-omnibus/gitlab.rb'"
+            - name: GITLAB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {SECRET_NAME}
+                  key: root-password
+            - name: GITLAB_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {SECRET_NAME}
+                  key: gitlab-oidc-secret
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: "{CPU_REQUEST}"
+              memory: {MEMORY_REQUEST}
+            limits:
+              memory: {MEMORY_LIMIT}
+          startupProbe:
+            httpGet:
+              path: /-/liveness
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 90
+          livenessProbe:
+            httpGet:
+              path: /-/liveness
+              port: 80
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /-/readiness
+              port: 80
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gitlab
+            - name: logs
+              mountPath: /var/log/gitlab
+            - name: data
+              mountPath: /var/opt/gitlab
+            - name: omnibus-config
+              mountPath: /etc/gitlab-omnibus
+              readOnly: true
+            - name: ca
+              mountPath: /etc/gitlab/trusted-certs/kpaas-ca.crt
+              subPath: ca.crt
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: gitlab-config
+        - name: logs
+          persistentVolumeClaim:
+            claimName: gitlab-logs
+        - name: data
+          persistentVolumeClaim:
+            claimName: gitlab-data
+        - name: omnibus-config
+          secret:
+            secretName: gitlab-omnibus-config
+        - name: ca
+          secret:
+            secretName: {CA_SECRET_NAME}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: {NAMESPACE}
+spec:
+  selector:
+    app: gitlab
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitlab
+  namespace: {NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: {INGRESS_CLASS_NAME}
+  tls:
+    - hosts:
+        - {GITLAB_HOST}
+      secretName: {TLS_SECRET}
+  rules:
+    - host: {GITLAB_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitlab
+                port:
+                  number: 80
