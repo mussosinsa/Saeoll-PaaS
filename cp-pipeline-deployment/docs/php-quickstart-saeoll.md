@@ -97,6 +97,26 @@ git -c http.sslVerify=false push origin HEAD:develop
 
 ## 6. Jenkins 설정 (운영 관리자)
 
+### 6-0. 스크립트로 한 번에 등록 (권장)
+
+폴더 `saeoll`, credential 4개, job `homepage-dev`·`homepage-prod`를 Jenkins REST API로 등록한다.
+port-forward는 스크립트가 직접 열고 닫는다. 다시 실행하면 credential과 job을 갱신한다.
+
+```bash
+cd ~/Saeoll-PaaS/cp-pipeline-deployment/script
+DRY_RUN=1 SCM_PASSWORD=x ./register-php-jenkins-job.sh saeoll homepage      # 생성될 XML 미리보기
+JENKINS_USER=<Jenkins 관리자> JENKINS_PASSWORD='<비밀번호 또는 API 토큰>' \
+  SCM_PASSWORD='<jenkins-saeoll git 비밀번호>' ./register-php-jenkins-job.sh saeoll homepage
+```
+
+- 저장소 이름이 `<업체>-<앱>`과 다르면 세 번째 인자로 지정한다(`... saeoll homepage my-repo`).
+- Jenkins가 로그인 없이 관리 가능한 상태면 `JENKINS_USER`/`JENKINS_PASSWORD`는 생략한다.
+- 필수 플러그인(cloudbees-folder, workflow-job, workflow-cps, git, credentials, plain-credentials,
+  pipeline-input-step)이 없으면 등록 전에 중단한다.
+- 운영 job 실행 권한 제한은 Jenkins 보안 설정에서 별도로 한다.
+
+스크립트를 쓰지 않을 때는 아래 6-1, 6-2를 화면에서 진행한다.
+
 ```bash
 kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080
 # 다른 PC에서 접속할 때: ... port-forward --address 0.0.0.0 svc/cp-pipeline-jenkins-service 8080:8080
@@ -134,7 +154,7 @@ Jenkins는 클러스터 안에서 동작하므로 **서비스 주소(http)**로 
 
 ## 7. 첫 빌드
 
-`homepage-dev` → **Build Now**. 첫 실행에서 Jenkinsfile 파라미터가 job에 등록되고, 이후에는
+`saeoll/homepage-dev` → **Build Now**. 첫 실행에서 Jenkinsfile 파라미터가 job에 등록되고, 이후에는
 **Build with Parameters**와 Poll SCM(develop push 후 5분 이내)으로 실행된다.
 
 단계: Prepare → Composer install → Lint & Test → Build image → Push to Harbor → Deploy → Smoke test

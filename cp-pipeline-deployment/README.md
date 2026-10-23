@@ -72,6 +72,9 @@ kubectl -n cp-pipeline exec deploy/cp-pipeline-jenkins-deployment -- sh -c 'php 
 [신규 서비스 배포 사전작업 및 파이프라인 사용 가이드](docs/new-service-prework-guide.md)를 따른다.
 처음 한 번 전체 흐름을 확인하려면 [PHP 첫 배포 실습(saeoll/homepage)](docs/php-quickstart-saeoll.md)을 따라 한다.
 
+Jenkins 폴더·credential·dev/prod job은 `script/register-php-jenkins-job.sh <업체> <앱>`으로 한 번에 등록할 수 있다
+(`onboard-php-vendor.sh` 실행 후, `SCM_PASSWORD`와 Jenkins 계정 환경변수 필요).
+
 업체 온보딩(`script/onboard-php-vendor.sh`), SCM 계정·저장소 권한, 개발(`develop`) 자동 배포,
 운영(릴리스 태그 + 승인) 배포 절차는
 [PHP 유지보수 업체별 소스 관리·배포 가이드](docs/php-vendor-deploy-guide.md)를 따른다.

@@ -263,6 +263,10 @@ PHP 버전을 바꾸려면 먼저 운영 관리자에게 해당 베이스 이미
 
 사전 조건: PHP 지원 Jenkins 이미지 적용(`script/build-jenkins-php-image.sh`, README 참고).
 
+> 5-1, 5-2는 스크립트로 한 번에 등록할 수 있다:
+> `JENKINS_USER=.. JENKINS_PASSWORD=.. SCM_PASSWORD=.. ./register-php-jenkins-job.sh vendor-a homepage`
+> (상세: [PHP 첫 배포 실습](php-quickstart-saeoll.md) 6-0)
+
 ### 5-1. Jenkins 폴더와 credential
 
 Jenkins → New Item → **Folder** `vendor-a` → 폴더의 Credentials에 등록한다
