@@ -45,7 +45,7 @@ Argo CD, Harbor, namespace, 배포 구조는 두 소스가 같다. 이 문서의
 
 ## 2. 설치와 점검
 
-설치는 [배포 가이드](../README.md) 11장. 요약:
+설치는 [설치·설정·운영 전체 가이드](install-guide.md)(처음 설치하는 경우) 또는 [배포 가이드](../README.md) 11장. 요약:
 
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
