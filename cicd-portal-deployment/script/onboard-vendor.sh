@@ -4,7 +4,8 @@
 # Usage: ./onboard-vendor.sh <vendor> [user1,user2,...]
 #   vendor : lowercase id, e.g. saeoll -> Harbor project, namespaces <vendor>-dev/prod, Argo CD project
 #   users  : Keycloak usernames of the vendor developers (Keycloak group cicd-<vendor>;
-#            with CICD_SOURCE=gitlab also GitLab group members after their first GitLab sign-in)
+#            with CICD_SOURCE=gitlab also GitLab group members (Developer) after their first GitLab sign-in)
+#   env PM_USERS=pm1,pm2 : vendor PMs, GitLab Maintainer (merge to main, create release tags v*)
 #
 # CICD_SOURCE=scm (K-PaaS SCM + Jenkins), env:
 #   SCM_ADMIN_PASSWORD  git password of the SCM admin (scm.<domain> > 내정보 관리)
@@ -48,7 +49,8 @@ else
 fi
 
 # 1. Keycloak group (Argo CD / Jenkins access) -------------------------------------
-$API kc-group "cicd-$VENDOR" --members "$USERS"
+ALL_USERS=$(printf '%s,%s' "$USERS" "${PM_USERS:-}" | sed 's/^,*//; s/,*$//')
+$API kc-group "cicd-$VENDOR" --members "$ALL_USERS"
 
 # 2. Harbor project and robot account ------------------------------------------------
 $API harbor-project "$VENDOR"
@@ -146,6 +148,7 @@ else
   $API gl-group "$VENDOR" --visibility private >/dev/null
   $API gl-project "$VENDOR" gitops --visibility private >/dev/null
   [[ -n "$USERS" ]] && $API gl-members "$VENDOR" "$USERS" --level 30
+  [[ -n "${PM_USERS:-}" ]] && $API gl-members "$VENDOR" "$PM_USERS" --level 40
   # CI writes image tags to the gitops repo; Argo CD reads it
   gitops_ci_token=$($API gl-project-token "$VENDOR/gitops" gitops-ci --scopes write_repository,read_repository --level 40)
   gitops_cd_token=$($API gl-project-token "$VENDOR/gitops" gitops-argocd --scopes read_repository --level 20)

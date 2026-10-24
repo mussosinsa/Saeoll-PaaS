@@ -6,7 +6,13 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 | 모드 (`CICD_SOURCE`) | 소스 저장소 | CI | CD | 비고 |
 | --- | --- | --- | --- | --- |
 | **`scm` (기본)** | K-PaaS 소스 컨트롤 (`scm.<도메인>`, SCM-Manager 1.x) | 신규 Jenkins (`jenkins.<도메인>`) | Argo CD | 기존 SCM·계정 재사용, 자원 적음 |
-| `gitlab` | GitLab CE (`gitlab.<도메인>`) | GitLab Runner | Argo CD | 코드 리뷰(MR)·통합 화면, 자원 많음 → [11장](#11-gitlab-모드) |
+| `gitlab` | GitLab CE (`gitlab.<도메인>`) | GitLab Runner | Argo CD | 업체 간 소스 분리, 코드 리뷰(MR), 자원 많음 → [11장](#11-gitlab-모드) |
+
+> **여러 업체가 함께 쓰면 `gitlab` 모드를 사용한다.** K-PaaS 소스 컨트롤 웹 화면은 참여자가 아닌 사용자에게도 모든
+> 저장소 목록과 파일 내용을 보여 준다(git clone/push만 참여자 권한으로 막힘, 실측 확인). `scm` 모드는 모든 사용자를
+> 신뢰하는 내부 환경에서만 쓴다.
+>
+> 운영 가이드: [운영 관리자 가이드](docs/admin-guide.md) · [업체 개발자 가이드](docs/vendor-guide.md) (GitLab 모드 기준)
 
 ```text
 scm.<도메인>       K-PaaS SCM (기존) ── 업체 저장소 <업체>-<앱>, <업체>-gitops
@@ -173,7 +179,8 @@ SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh   # Pod, SCM·Jenkins·Argo CD·
 - **격리**: 업체 credential은 Jenkins 폴더 범위라 다른 업체 job에서 쓸 수 없다. 단, 빌드 Pod는 공통 namespace(`cicd-jenkins`)에서
   실행되며 Jenkinsfile은 업체가 수정할 수 있으므로, 업체 수가 늘면 업체별 에이전트 namespace 분리를 검토한다.
 - **SCM 제약**: 코드 리뷰(MR)·브랜치 보호·webhook이 없다. 운영 반영은 Argo CD 수동 Sync(`cicd-admins`)로 통제하고,
-  빌드는 5분 폴링으로 시작한다.
+  빌드는 5분 폴링으로 시작한다. **웹 화면에서는 참여자가 아니어도 모든 저장소의 파일이 보이므로** 업체 간 소스 분리가
+  필요하면 GitLab 모드를 쓴다. 웹의 "사용자 정보수정" 비밀번호는 SCM-Manager(git) 비밀번호만 바꾸고 Keycloak은 바꾸지 않는다.
 - **백업**: Jenkins PVC(`cicd-jenkins`), SCM(K-PaaS 소스 컨트롤 PVC), gitops 저장소. Argo CD는 이 저장소와 gitops로 재현된다.
 
 ## 10. SCM-Manager 업그레이드 검토
@@ -206,7 +213,7 @@ GitLab CE([11장](#11-gitlab-모드))가 SCM-Manager 3.x 별도 설치보다 적
 ```bash
 export CICD_SOURCE=gitlab
 ./deploy-cicd-portal.sh            # preflight keycloak gitlab bootstrap templates runner argocd
-./onboard-vendor.sh saeoll saeoll
+PM_USERS=saeoll-pm ./onboard-vendor.sh saeoll saeoll-hong,saeoll-kim   # PM=Maintainer, 나머지=Developer
 ./add-app.sh saeoll homepage php
 ```
 
@@ -218,3 +225,7 @@ export CICD_SOURCE=gitlab
 | 흐름 | `develop` → dev 자동, 보호 태그 `vX.Y.Z`(Maintainer) → prod 태그 갱신 → Argo CD 수동 Sync |
 | 백업 | `kubectl -n cicd-gitlab exec deploy/gitlab -- gitlab-backup create` + `/etc/gitlab` |
 | 한계 | 단일 Pod(HA 아님). OIDC 그룹이 GitLab 그룹으로 동기화되지 않아 멤버십은 `onboard-vendor.sh`로 관리 |
+| 운영 절차 | [운영 관리자 가이드](docs/admin-guide.md), [업체 개발자 가이드](docs/vendor-guide.md) |
+
+SCM 모드에서 이미 설치한 Jenkins는 GitLab 모드와 겹치지 않는다. 내부 서비스용으로 유지하거나, 쓰지 않으면
+`helm uninstall jenkins -n cicd-jenkins && kubectl delete ns cicd-jenkins`로 삭제한다(Argo CD는 그대로 공용).
