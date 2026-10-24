@@ -23,8 +23,10 @@ controller:
         postLogoutRedirectUrl: "https://{JENKINS_HOST}/"
         # PKCE is optional for this confidential client; recent oic-auth versions no longer
         # accept a top-level pkceEnabled attribute (JCasC UnknownAttributesException).
+    # projectMatrix (not globalMatrix): only the project-based strategy honours the folder
+    # permissions that onboard-vendor.sh grants to cicd-<vendor>
     authorizationStrategy: |-
-      globalMatrix:
+      projectMatrix:
         entries:
           - group:
               name: "{ADMIN_GROUP}"
