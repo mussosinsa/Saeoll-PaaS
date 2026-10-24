@@ -348,6 +348,167 @@ class Harbor:
         return r["name"], r["secret"]
 
 
+# ------------------------------------------------- SCM-Manager 1.x (K-PaaS) ---
+class SCM:
+    """Read-only use of the SCM-Manager 1.x REST API. Repositories and permissions are
+    managed in scm.<domain> so that the K-PaaS source control DB stays consistent."""
+    LEVELS = {"READ": 1, "WRITE": 2, "OWNER": 3}
+
+    def __init__(self):
+        self.base = ENV["SCM_URL"].rstrip("/") + "/api/rest"
+        cred = base64.b64encode(f"{ENV['SCM_ADMIN_USER']}:{ENV['SCM_ADMIN_PASSWORD']}".encode()).decode()
+        self.headers = {"Authorization": "Basic " + cred}
+
+    def repositories(self):
+        return request("GET", self.base + "/repositories.json", self.headers)[1] or []
+
+    def check(self, repo, user, level):
+        found = [r for r in self.repositories() if r.get("name") == repo]
+        if not found:
+            return f"repository '{repo}' not found - create it in scm.<domain> (레파지토리 신규생성, type Git)"
+        if found[0].get("type", "git") != "git":
+            return f"repository '{repo}' is {found[0].get('type')}, not git"
+        if user:
+            perms = [p for p in found[0].get("permissions") or []
+                     if p.get("name") == user and not p.get("groupPermission")]
+            have = max((self.LEVELS.get(p.get("type", ""), 0) for p in perms), default=0)
+            if have < self.LEVELS[level]:
+                return (f"user '{user}' needs {level} on '{repo}' - add as 참여자 "
+                        f"({'쓰기' if level != 'READ' else '보기'} 권한) in scm.<domain>")
+        return ""
+
+
+# ------------------------------------------------------------------ Jenkins ---
+class Jenkins:
+    # Folder permissions for the vendor group (matrix-auth): view, build, cancel, read logs
+    VENDOR_PERMISSIONS = ["hudson.model.Item.Read", "hudson.model.Item.Discover", "hudson.model.Item.Build",
+                          "hudson.model.Item.Cancel", "hudson.model.Item.Workspace", "hudson.model.Run.Replay"]
+
+    def __init__(self):
+        self.base = ENV["JENKINS_URL"].rstrip("/")
+        cred = base64.b64encode(f"{ENV['JENKINS_USER']}:{ENV['JENKINS_API_TOKEN']}".encode()).decode()
+        self.headers = {"Authorization": "Basic " + cred}
+
+    def exists(self, path):
+        try:
+            request("GET", f"{self.base}{path}/api/json", self.headers)
+            return True
+        except HTTPError as e:
+            if e.code == 404:
+                return False
+            raise
+
+    def post_xml(self, path, xml):
+        request("POST", self.base + path, self.headers, xml=xml)
+
+    def ensure_folder(self, name, group):
+        if self.exists(f"/job/{q(name)}"):
+            log(f"[INFO] Jenkins folder exists: {name}")
+            return
+        perms = "\n".join(f"      <permission>GROUP:{p}:{xml_escape(group)}</permission>"
+                          for p in self.VENDOR_PERMISSIONS)
+        self.post_xml(f"/createItem?name={q(name)}", f"""<?xml version='1.1' encoding='UTF-8'?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>{xml_escape(name)} services (CI/CD portal). Access: Keycloak group {xml_escape(group)}</description>
+  <properties>
+    <com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+{perms}
+    </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>""")
+        log(f"[OK]   Jenkins folder {name} (group {group}: read/build)")
+
+    def put_credential(self, folder, cid, username, password, description):
+        store = f"/job/{q(folder)}/credentials/store/folder/domain/_"
+        xml = f"""<com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl>
+  <scope>GLOBAL</scope>
+  <id>{xml_escape(cid)}</id>
+  <description>{xml_escape(description)}</description>
+  <username>{xml_escape(username)}</username>
+  <password>{xml_escape(password)}</password>
+</com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl>"""
+        if self.exists(f"{store}/credential/{q(cid)}"):
+            self.post_xml(f"{store}/credential/{q(cid)}/config.xml", xml)
+            log(f"[OK]   Jenkins credential updated: {folder}/{cid}")
+        else:
+            self.post_xml(f"{store}/createCredentials", xml)
+            log(f"[OK]   Jenkins credential created: {folder}/{cid}")
+
+    @staticmethod
+    def job_xml(description, repo_url, credentials_id, release):
+        if release:
+            branch, lightweight, extra = "refs/tags/${RELEASE_TAG}", "false", """
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>RELEASE_TAG</name>
+          <description>Release tag to build and deploy to prod, e.g. v1.2.0</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>"""
+        else:
+            branch, lightweight, extra = "*/develop", "true", """
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.SCMTrigger>
+          <spec>H/5 * * * *</spec>
+          <ignorePostCommitHooks>false</ignorePostCommitHooks>
+        </hudson.triggers.SCMTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>"""
+        return f"""<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition>
+  <description>{xml_escape(description)}</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <org.jenkinsci.plugins.workflow.job.properties.DisableConcurrentBuildsJobProperty/>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>30</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>{extra}
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+    <scm class="hudson.plugins.git.GitSCM">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>{xml_escape(repo_url)}</url>
+          <credentialsId>{xml_escape(credentials_id)}</credentialsId>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>{branch}</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile</scriptPath>
+    <lightweight>{lightweight}</lightweight>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>"""
+
+    def put_job(self, folder, name, xml):
+        path = f"/job/{q(folder)}/job/{q(name)}"
+        if self.exists(path):
+            self.post_xml(f"{path}/config.xml", xml)
+            log(f"[OK]   Jenkins job updated: {folder}/{name}")
+        else:
+            self.post_xml(f"/job/{q(folder)}/createItem?name={q(name)}", xml)
+            log(f"[OK]   Jenkins job created: {folder}/{name}")
+
+
 # --------------------------------------------------------------------- CLI ---
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
