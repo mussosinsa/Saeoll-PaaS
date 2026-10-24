@@ -17,7 +17,8 @@ controller:
         groupsFieldName: "groups"
         logoutFromOpenidProvider: true
         postLogoutRedirectUrl: "https://{JENKINS_HOST}/"
-        pkceEnabled: true
+        # PKCE is optional for this confidential client; recent oic-auth versions no longer
+        # accept a top-level pkceEnabled attribute (JCasC UnknownAttributesException).
     authorizationStrategy: |-
       globalMatrix:
         entries:
