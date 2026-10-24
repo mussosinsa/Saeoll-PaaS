@@ -126,6 +126,16 @@ PM_USERS=saeoll-pm ./onboard-vendor.sh --source gitlab saeoll saeoll-hong,saeoll
 4. `SCM_CI_PASSWORD='<그 git 비밀번호>' ./onboard-vendor.sh <팀> <사용자들>` → Jenkins 폴더·credential 생성
 5. 앱 추가 전 `scm.`에서 `<팀>-<앱>` 저장소 생성, 참여자: `jenkins-<팀>` 보기, 개발자 쓰기 → `./add-app.sh <팀> <앱> <유형>`
 
+**기존 계정을 CI 계정으로 사용**: Keycloak·SCM에 이미 있고 git 비밀번호를 설정한 계정(예: `saeoll`)을 쓰려면
+`SCM_CI_USER=<계정>`을 지정한다. 새 Keycloak 계정을 만들지 않으며, 업체 정보에 저장되어 `add-app.sh`도 같은 계정을 쓴다.
+그 계정의 git 비밀번호가 Jenkins credential·Argo CD에 저장되므로, 비밀번호를 바꾸면 `onboard-vendor.sh`를 다시 실행한다.
+여러 사람이 쓰는 업체라면 전용 계정(`jenkins-<팀>`, 기본값)을 권장한다.
+
+```bash
+SCM_ADMIN_PASSWORD='...' SCM_CI_USER=saeoll SCM_CI_PASSWORD='<saeoll git 비밀번호>' \
+  ./onboard-vendor.sh --source scm saeoll saeoll
+```
+
 **기존 SCM 저장소 사용**: 이름이 `<팀>-<앱>` 형식이 아닌 저장소(예: `saeoll`)는 `SCM_REPO`로 지정한다. 예전 K-PaaS
 파이프라인용 `Jenkinsfile`이 있으면 `REPLACE_CI=1`로 포털용으로 바꾼다. `main`이 없고 `master`만 있으면 그 이력에서
 `main`·`develop`을 만든다(기존 `master`는 그대로 둔다).

@@ -128,6 +128,15 @@ set_secret() { # key value - values go through stdin, not the command line
   fi
 }
 
+# SCM account Jenkins/Argo CD use for a vendor: recorded on the Argo CD project at onboarding
+# (default jenkins-<vendor>; an existing user can be chosen with SCM_CI_USER).
+vendor_ci_user() { # vendor
+  local user
+  user=$(kubectl -n "$ARGOCD_NAMESPACE" get appproject "$1" \
+    -o jsonpath='{.metadata.annotations.cicd\.k-paas\.org/scm-ci-user}' 2>/dev/null || true)
+  echo "${user:-jenkins-$1}"
+}
+
 # Source (scm|gitlab) recorded on the vendor's Argo CD project; empty if not onboarded.
 # Projects created before the label existed are recognised by their gitops repository URL.
 vendor_source() { # vendor

@@ -40,7 +40,7 @@ SOURCE=$(vendor_source "$VENDOR")
 [[ -n "$SOURCE" ]] || die "Vendor $VENDOR is not onboarded. Run ./onboard-vendor.sh --source <scm|gitlab> $VENDOR first."
 has_source "$SOURCE" || die "Vendor $VENDOR uses '$SOURCE', which is not in CICD_SOURCES ($CICD_SOURCES)."
 info "Vendor $VENDOR uses $SOURCE"
-CI_USER="jenkins-$VENDOR"
+CI_USER=$(vendor_ci_user "$VENDOR")
 IMAGE_REPO="$HARBOR_HOST/$VENDOR/$APP"
 
 if [[ "$SOURCE" == scm ]]; then

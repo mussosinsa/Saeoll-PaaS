@@ -13,7 +13,9 @@
 #
 # --source scm (K-PaaS SCM + Jenkins), env:
 #   SCM_ADMIN_PASSWORD  git password of the SCM admin (scm.<domain> > 내정보 관리)
-#   SCM_CI_PASSWORD     git password of the CI account jenkins-<vendor> (after its first scm login)
+#   SCM_CI_PASSWORD     git password of the CI account (after its first scm login)
+#   SCM_CI_USER         CI account (default jenkins-<vendor>, created in Keycloak if missing). An existing
+#                       user with a git password can be used instead, e.g. SCM_CI_USER=saeoll (remembered).
 #   Prepared in scm.<domain>: repository <vendor>-gitops with jenkins-<vendor> as 참여자 (쓰기 권한).
 #   The script creates the Keycloak account jenkins-<vendor> if it does not exist and stops
 #   with a checklist while SCM items are missing; re-run after completing them.
@@ -62,7 +64,8 @@ has_source "$SOURCE" || die "Source '$SOURCE' is not installed (CICD_SOURCES=$CI
 info "Vendor $VENDOR -> source $SOURCE"
 ENVS=(dev prod)
 PULL_SECRET=harbor-cicd
-CI_USER="jenkins-$VENDOR"
+CI_USER=${SCM_CI_USER:-}
+[[ -n "$CI_USER" ]] || CI_USER=$(vendor_ci_user "$VENDOR")
 TODO=()
 
 if [[ "$SOURCE" == scm ]]; then
@@ -127,15 +130,20 @@ done
 # 4. Source repositories and CI -------------------------------------------------------------
 if [[ "$SOURCE" == scm ]]; then
   # CI account in Keycloak (SCM/Jenkins/Argo CD use it for git access to the vendor repos)
-  ci_kc_password=$(get_secret "kc-$CI_USER-password")
-  [[ -n "$ci_kc_password" ]] || ci_kc_password=$(random_string 20)
-  state=$(printf '%s' "$ci_kc_password" | $API kc-user "$CI_USER" --email "$CI_USER@cicd.$HOST_DOMAIN")
-  if [[ "$state" == created ]]; then
-    set_secret "kc-$CI_USER-password" "$ci_kc_password"
+  if [[ "$CI_USER" == "jenkins-$VENDOR" ]]; then   # dedicated CI account: create it if missing
+    ci_kc_password=$(get_secret "kc-$CI_USER-password")
+    [[ -n "$ci_kc_password" ]] || ci_kc_password=$(random_string 20)
+    state=$(printf '%s' "$ci_kc_password" | $API kc-user "$CI_USER" --email "$CI_USER@cicd.$HOST_DOMAIN")
+    if [[ "$state" == created ]]; then
+      set_secret "kc-$CI_USER-password" "$ci_kc_password"
+    fi
+    login_hint="(Keycloak password of $CI_USER: kubectl -n $JENKINS_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.kc-$CI_USER-password}' | base64 -d)"
+  else
+    login_hint="(existing user $CI_USER: use its own Keycloak password)"
   fi
   if [[ -z "${SCM_CI_PASSWORD:-}" ]]; then
-    TODO+=("Sign in to https://scm.$HOST_DOMAIN as $CI_USER, set its git password in 내정보 관리, re-run with SCM_CI_PASSWORD='<that git password>'
-      (Keycloak password of $CI_USER: kubectl -n $JENKINS_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.kc-$CI_USER-password}' | base64 -d)")
+    TODO+=("Sign in to https://scm.$HOST_DOMAIN as $CI_USER, set its git password in 내정보 관리 if not done, re-run with SCM_CI_PASSWORD='<that git password>'
+      $login_hint")
   fi
   if ! $API scm-check "$GITOPS_REPO" --user "$CI_USER" --level WRITE; then
     TODO+=("In https://scm.$HOST_DOMAIN create Git repository '$GITOPS_REPO' and add $CI_USER as 참여자 (쓰기 권한)")
@@ -212,6 +220,8 @@ metadata:
   namespace: $ARGOCD_NAMESPACE
   labels:
     cicd.k-paas.org/source: $SOURCE
+  annotations:
+    cicd.k-paas.org/scm-ci-user: "$([[ "$SOURCE" == scm ]] && echo "$CI_USER")"
 spec:
   description: Applications of $VENDOR (CI/CD portal)
   sourceRepos:
