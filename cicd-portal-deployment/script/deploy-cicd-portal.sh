@@ -268,7 +268,11 @@ step_argocd() {
   helm upgrade --install argocd argo/argo-cd --version "$ARGOCD_CHART_VERSION" \
     -n "$ARGOCD_NAMESPACE" -f "$VALUES_DIR/argocd.yaml" -f "$secret_values" || { rm -f "$secret_values"; exit 1; }
   rm -f "$secret_values"
-  kubectl -n "$ARGOCD_NAMESPACE" rollout status deployment/argocd-server --timeout=600s
+  # Wait for every component (server, repo-server, controller, redis), not only the UI
+  local res
+  for res in $(kubectl -n "$ARGOCD_NAMESPACE" get deployment,statefulset -o name); do
+    kubectl -n "$ARGOCD_NAMESPACE" rollout status "$res" --timeout=600s
+  done
   ok "Argo CD: https://$ARGOCD_HOST"
 }
 
