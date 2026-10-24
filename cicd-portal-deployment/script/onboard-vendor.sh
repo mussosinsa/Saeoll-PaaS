@@ -1,13 +1,17 @@
 #!/bin/bash
 # Onboard a vendor (team) to the CI/CD portal.
 #
-# Usage: ./onboard-vendor.sh <vendor> [user1,user2,...]
-#   vendor : lowercase id, e.g. saeoll -> Harbor project, namespaces <vendor>-dev/prod, Argo CD project
-#   users  : Keycloak usernames of the vendor developers (Keycloak group cicd-<vendor>;
-#            with CICD_SOURCE=gitlab also GitLab group members (Developer) after their first GitLab sign-in)
+# Usage: ./onboard-vendor.sh [--source scm|gitlab] <vendor> [user1,user2,...]
+#   --source : where the vendor's repositories and CI live. Required when both sources are
+#              installed; fixed after the first onboarding (recorded on the Argo CD project).
+#              Use migrate-vendor.sh to move a vendor from scm to gitlab.
+#              scm = trusted/internal teams only (the SCM web UI shows all repositories to everyone)
+#   vendor   : lowercase id, e.g. saeoll -> Harbor project, namespaces <vendor>-dev/prod, Argo CD project
+#   users    : Keycloak usernames of the vendor developers (Keycloak group cicd-<vendor>;
+#              gitlab: also GitLab group members (Developer) after their first GitLab sign-in)
 #   env PM_USERS=pm1,pm2 : vendor PMs, GitLab Maintainer (merge to main, create release tags v*)
 #
-# CICD_SOURCE=scm (K-PaaS SCM + Jenkins), env:
+# --source scm (K-PaaS SCM + Jenkins), env:
 #   SCM_ADMIN_PASSWORD  git password of the SCM admin (scm.<domain> > 내정보 관리)
 #   SCM_CI_PASSWORD     git password of the CI account jenkins-<vendor> (after its first scm login)
 #   Prepared in scm.<domain>: repository <vendor>-gitops with jenkins-<vendor> as 참여자 (쓰기 권한).
@@ -25,19 +29,43 @@ cd "$SCRIPT_DIR"
 # shellcheck source=lib.sh
 source ./lib.sh
 
-VENDOR=${1:-}
-USERS=${2:-}
+SOURCE=""
+ARGS=()
+while (($#)); do
+  case "$1" in
+    --source) SOURCE=${2:-}; shift 2 ;;
+    --source=*) SOURCE=${1#--source=}; shift ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+VENDOR=${ARGS[0]:-}
+USERS=${ARGS[1]:-}
 [[ "$VENDOR" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]] || {
-  echo "Usage: $0 <vendor: lowercase letters, digits, '-'> [user1,user2,...]" >&2; exit 2; }
+  echo "Usage: $0 [--source scm|gitlab] <vendor: lowercase letters, digits, '-'> [user1,user2,...]" >&2; exit 2; }
 [[ "$VENDOR" != "$TEMPLATES_GROUP" ]] || die "'$TEMPLATES_GROUP' is reserved for the CI templates."
 load_portal_vars
 require_cmds kubectl python3
+
+# Source of this vendor: fixed once onboarded (migrate-vendor.sh changes it scm -> gitlab)
+CURRENT=$(vendor_source "$VENDOR")
+if [[ -n "$CURRENT" && -n "$SOURCE" && "$SOURCE" != "$CURRENT" && "${ALLOW_SOURCE_CHANGE:-0}" != 1 ]]; then
+  die "Vendor $VENDOR already uses '$CURRENT'. To move it to gitlab use ./migrate-vendor.sh $VENDOR"
+fi
+SOURCE=${SOURCE:-$CURRENT}
+if [[ -z "$SOURCE" ]]; then
+  read -ra installed <<<"$CICD_SOURCES"
+  ((${#installed[@]} == 1)) || die "Choose the vendor's source: $0 --source <$(echo $CICD_SOURCES | tr ' ' '|')> $VENDOR ..."
+  SOURCE=${installed[0]}
+fi
+[[ "$SOURCE" == scm || "$SOURCE" == gitlab ]] || die "--source must be scm or gitlab (got '$SOURCE')."
+has_source "$SOURCE" || die "Source '$SOURCE' is not installed (CICD_SOURCES=$CICD_SOURCES)."
+info "Vendor $VENDOR -> source $SOURCE"
 ENVS=(dev prod)
 PULL_SECRET=harbor-cicd
 CI_USER="jenkins-$VENDOR"
 TODO=()
 
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   require_cmds git
   require_scm_admin
   load_jenkins_token
@@ -97,7 +125,7 @@ EOF
 done
 
 # 4. Source repositories and CI -------------------------------------------------------------
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   # CI account in Keycloak (SCM/Jenkins/Argo CD use it for git access to the vendor repos)
   ci_kc_password=$(get_secret "kc-$CI_USER-password")
   [[ -n "$ci_kc_password" ]] || ci_kc_password=$(random_string 20)
@@ -107,7 +135,7 @@ if [[ "$CICD_SOURCE" == scm ]]; then
   fi
   if [[ -z "${SCM_CI_PASSWORD:-}" ]]; then
     TODO+=("Sign in to https://scm.$HOST_DOMAIN as $CI_USER, set its git password in 내정보 관리, re-run with SCM_CI_PASSWORD='<that git password>'
-      (Keycloak password of $CI_USER: kubectl -n $SECRETS_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.kc-$CI_USER-password}' | base64 -d)")
+      (Keycloak password of $CI_USER: kubectl -n $JENKINS_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.kc-$CI_USER-password}' | base64 -d)")
   fi
   if ! $API scm-check "$GITOPS_REPO" --user "$CI_USER" --level WRITE; then
     TODO+=("In https://scm.$HOST_DOMAIN create Git repository '$GITOPS_REPO' and add $CI_USER as 참여자 (쓰기 권한)")
@@ -182,6 +210,8 @@ kind: AppProject
 metadata:
   name: $VENDOR
   namespace: $ARGOCD_NAMESPACE
+  labels:
+    cicd.k-paas.org/source: $SOURCE
 spec:
   description: Applications of $VENDOR (CI/CD portal)
   sourceRepos:
@@ -216,7 +246,7 @@ if ((${#TODO[@]})); then
   exit 3
 fi
 echo "Vendor $VENDOR onboarded."
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   echo "  SCM          : https://scm.$HOST_DOMAIN  (gitops repository $GITOPS_REPO, CI account $CI_USER)"
   echo "  Jenkins      : https://$JENKINS_HOST/job/$VENDOR/  (Keycloak group cicd-$VENDOR: read/build)"
 else

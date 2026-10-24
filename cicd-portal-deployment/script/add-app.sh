@@ -5,7 +5,8 @@
 #   type        : java-gradle | java-maven | php | node | vue
 #   health-path : readiness/liveness path (default: /healthz.php for php, /healthz otherwise)
 #
-# CICD_SOURCE=scm (env SCM_ADMIN_PASSWORD), prepared in scm.<domain>:
+# The vendor's source (scm|gitlab) comes from onboard-vendor.sh (Argo CD project label).
+# scm vendors (env SCM_ADMIN_PASSWORD), prepared in scm.<domain>:
 #   Git repository <vendor>-<app> with jenkins-<vendor> as 참여자 (보기 권한) and the developers (쓰기 권한)
 # Creates (idempotent; existing files are never overwritten):
 #   source  : starter files on main + branch develop (scm: repository <vendor>-<app>;
@@ -33,10 +34,14 @@ fi
 HEALTH_PATH=${4:-$([[ "$TYPE" == php ]] && echo /healthz.php || echo /healthz)}
 load_portal_vars
 require_cmds kubectl python3
+SOURCE=$(vendor_source "$VENDOR")
+[[ -n "$SOURCE" ]] || die "Vendor $VENDOR is not onboarded. Run ./onboard-vendor.sh --source <scm|gitlab> $VENDOR first."
+has_source "$SOURCE" || die "Vendor $VENDOR uses '$SOURCE', which is not in CICD_SOURCES ($CICD_SOURCES)."
+info "Vendor $VENDOR uses $SOURCE"
 CI_USER="jenkins-$VENDOR"
 IMAGE_REPO="$HARBOR_HOST/$VENDOR/$APP"
 
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   require_cmds git
   require_scm_admin
   load_jenkins_token
@@ -51,10 +56,8 @@ SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE
        TLS_SECRET="$TLS_SECRET" HARBOR_HOST="$HARBOR_HOST" GITOPS_REPO_URL="$GITOPS_URL"
        BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB")
 
-kubectl -n "$ARGOCD_NAMESPACE" get appproject "$VENDOR" >/dev/null 2>&1 || \
-  die "Vendor $VENDOR is not onboarded. Run ./onboard-vendor.sh $VENDOR first."
 
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   # 1. SCM source repository (created in scm.<domain>) --------------------------------------
   $API scm-check "$SOURCE_REPO" --user "$CI_USER" --level READ || \
     die "Prepare '$SOURCE_REPO' in https://scm.$HOST_DOMAIN (Git, 참여자: $CI_USER 보기 권한, developers 쓰기 권한) and re-run."
@@ -138,6 +141,7 @@ metadata:
     cicd.k-paas.org/vendor: $VENDOR
     cicd.k-paas.org/app: $APP
     cicd.k-paas.org/env: $env
+    cicd.k-paas.org/type: $TYPE
 spec:
   project: $VENDOR
   source:
@@ -153,13 +157,13 @@ EOF
 done
 
 # Pipeline jobs need one build before Poll SCM starts watching develop
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   $API jenkins-build "$VENDOR" "$APP-dev"
 fi
 
 echo
 echo "Application $VENDOR/$APP ($TYPE) ready."
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm ]]; then
   echo "  Source   : https://scm.$HOST_DOMAIN  repository $SOURCE_REPO  (clone: $SCM_GIT_URL/$SOURCE_REPO)"
   echo "  Jenkins  : https://$JENKINS_HOST/job/$VENDOR/  ($APP-dev: develop, $APP-release: RELEASE_TAG=vX.Y.Z)"
 else

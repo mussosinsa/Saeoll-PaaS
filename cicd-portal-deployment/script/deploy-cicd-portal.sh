@@ -1,12 +1,14 @@
 #!/bin/bash
 # Deploy the CI/CD portal next to K-PaaS (the K-PaaS cp-pipeline and
 # cp-source-control deployments are not changed). SSO through new clients in Keycloak cp-realm.
-#   CICD_SOURCE=scm    : K-PaaS SCM (repositories) + Jenkins (jenkins.<domain>) + Argo CD (argocd.<domain>)
-#   CICD_SOURCE=gitlab : GitLab CE (gitlab.<domain>) + GitLab Runner + Argo CD
+# Installs the sources in CICD_SOURCES (default "scm gitlab") plus the shared Argo CD:
+#   scm    : K-PaaS SCM (repositories) + Jenkins (jenkins.<domain>)
+#   gitlab : GitLab CE (gitlab.<domain>) + GitLab Runner
+# Each vendor then uses one of them: ./onboard-vendor.sh --source scm|gitlab <vendor> ...
 #
-# Usage: ./deploy-cicd-portal.sh [step ...]
-#   scm steps   : preflight keycloak jenkins argocd   (default) + jenkins-token (after the first login)
-#   gitlab steps: preflight keycloak gitlab bootstrap templates runner argocd (default)
+# Usage: [CICD_SOURCES="scm gitlab"] ./deploy-cicd-portal.sh [step ...]
+#   steps: preflight keycloak [jenkins] [gitlab bootstrap templates runner] argocd   (default: all installed)
+#          jenkins-token (scm, once after the first Jenkins login)
 # Re-runnable; each step can be run on its own.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -17,11 +19,10 @@ load_portal_vars
 VALUES_DIR="$SCRIPT_DIR/../values"
 STEPS=("$@")
 if ((${#STEPS[@]} == 0)); then
-  if [[ "$CICD_SOURCE" == scm ]]; then
-    STEPS=(preflight keycloak jenkins argocd)
-  else
-    STEPS=(preflight keycloak gitlab bootstrap templates runner argocd)
-  fi
+  STEPS=(preflight keycloak)
+  has_source scm && STEPS+=(jenkins)
+  has_source gitlab && STEPS+=(gitlab bootstrap templates runner)
+  STEPS+=(argocd)
 fi
 RUNNER_DESCRIPTION="cicd-k8s"
 
@@ -38,8 +39,9 @@ step_preflight() {
   # no "grep -q" in pipes here: with pipefail its early exit makes kubectl fail with SIGPIPE
   [[ "$(kubectl -n keycloak get pods --no-headers 2>/dev/null)" == *Running* ]] || { warn "Keycloak is not running"; failed=1; }
   kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || { warn "IngressClass not found: $INGRESS_CLASS_NAME"; failed=1; }
-  if [[ "$CICD_SOURCE" == scm ]]; then
-    command -v git >/dev/null || { warn "git is not installed (dnf install -y git)"; failed=1; }
+  info "Sources: $CICD_SOURCES (+ Argo CD)"
+  command -v git >/dev/null || { warn "git is not installed (dnf install -y git)"; failed=1; }
+  if has_source scm; then
     [[ "$(kubectl -n "$SCM_NAMESPACE" get pods --no-headers 2>/dev/null)" == *Running* ]] || {
       warn "K-PaaS source control is not running in $SCM_NAMESPACE (deploy cp-source-control-deployment first)"; failed=1; }
     if [[ -n "${SCM_ADMIN_PASSWORD:-}" ]]; then
@@ -57,15 +59,15 @@ step_preflight() {
     else
       warn "SCM_ADMIN_PASSWORD not set - SCM login not checked (needed by onboard-vendor.sh / add-app.sh)"
     fi
-    echo "       Node capacity (Jenkins requests 0.5 CPU / 1Gi, limit 3Gi; build pods up to 6Gi each):"
-  else
+  fi
+  if has_source gitlab; then
     local tag=${GITLAB_IMAGE##*:} repo=${GITLAB_IMAGE%:*}
     if [[ "$repo" == gitlab/gitlab-ce ]]; then
       curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/gitlab/gitlab-ce/tags/$tag" 2>/dev/null || \
         warn "Image tag not found on Docker Hub (or no internet): $GITLAB_IMAGE"
     fi
-    echo "       Node capacity (GitLab requests ${GITLAB_CPU_REQUEST} CPU / ${GITLAB_MEMORY_REQUEST}, limit ${GITLAB_MEMORY_LIMIT}):"
   fi
+  echo "       Node capacity - requests: Argo CD ~1Gi$(has_source scm && echo ", Jenkins 0.5 CPU/1Gi (limit 3Gi)")$(has_source gitlab && echo ", GitLab ${GITLAB_CPU_REQUEST} CPU/${GITLAB_MEMORY_REQUEST} (limit ${GITLAB_MEMORY_LIMIT})"); builds up to 6Gi each:"
   kubectl top nodes 2>/dev/null | sed 's/^/       /' || warn "kubectl top nodes unavailable (metrics-server)"
   ((failed == 0)) || die "Preflight failed."
   ok "Preflight passed"
@@ -73,16 +75,16 @@ step_preflight() {
 
 step_keycloak() {
   info "Keycloak clients in realm $KEYCLOAK_CP_REALM (existing clients are not changed)"
-  ensure_namespace "$SECRETS_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
-  local secret source_client
-  if [[ "$CICD_SOURCE" == scm ]]; then
-    source_client=$KEYCLOAK_JENKINS_CLIENT_ID
+  local secret clients=()
+  if has_source scm; then
+    clients+=("$KEYCLOAK_JENKINS_CLIENT_ID")
     secret=$($API kc-client "$KEYCLOAK_JENKINS_CLIENT_ID" --groups-mapper \
       --redirect "https://$JENKINS_HOST/securityRealm/finishLogin" --redirect "https://$JENKINS_HOST/*" \
       --origin "https://$JENKINS_HOST")
     set_secret jenkins-oidc-secret "$secret"
-  else
-    source_client=$KEYCLOAK_GITLAB_CLIENT_ID
+  fi
+  if has_source gitlab; then
+    clients+=("$KEYCLOAK_GITLAB_CLIENT_ID")
     secret=$($API kc-client "$KEYCLOAK_GITLAB_CLIENT_ID" \
       --redirect "https://$GITLAB_HOST/users/auth/openid_connect/callback" --origin "https://$GITLAB_HOST")
     set_secret gitlab-oidc-secret "$secret"
@@ -91,7 +93,7 @@ step_keycloak() {
     --redirect "https://$ARGOCD_HOST/auth/callback" --origin "https://$ARGOCD_HOST")
   set_secret argocd-oidc-secret "$secret"
   $API kc-group "$KEYCLOAK_ADMIN_GROUP" --members "$KEYCLOAK_ADMIN_USERNAME"
-  ok "Keycloak clients: $source_client, $KEYCLOAK_ARGOCD_CLIENT_ID; admin group: $KEYCLOAK_ADMIN_GROUP"
+  ok "Keycloak clients: ${clients[*]} $KEYCLOAK_ARGOCD_CLIENT_ID; admin group: $KEYCLOAK_ADMIN_GROUP"
 }
 
 step_gitlab() {
@@ -277,24 +279,31 @@ step_argocd() {
 }
 
 for step in "${STEPS[@]}"; do
-  case "$CICD_SOURCE:$step" in
-    *:preflight|*:keycloak|*:argocd|scm:jenkins|scm:jenkins-token|gitlab:gitlab|gitlab:bootstrap|gitlab:templates|gitlab:runner)
+  case "$step" in
+    preflight|keycloak|argocd) "step_$step" ;;
+    jenkins|jenkins-token)
+      has_source scm || die "Step $step needs scm in CICD_SOURCES (now: $CICD_SOURCES)"
       "step_$step" ;;
-    scm:*) die "Unknown step for CICD_SOURCE=scm: $step (preflight keycloak jenkins argocd jenkins-token)" ;;
-    *) die "Unknown step for CICD_SOURCE=gitlab: $step (preflight keycloak gitlab bootstrap templates runner argocd)" ;;
+    gitlab|bootstrap|templates|runner)
+      has_source gitlab || die "Step $step needs gitlab in CICD_SOURCES (now: $CICD_SOURCES)"
+      "step_$step" ;;
+    *) die "Unknown step: $step (preflight keycloak jenkins jenkins-token gitlab bootstrap templates runner argocd)" ;;
   esac
 done
 
 echo
 echo "-----------------------------------------------------------------------------"
-if [[ "$CICD_SOURCE" == scm ]]; then
+if has_source scm; then
   echo "SCM    : https://scm.$HOST_DOMAIN   (K-PaaS source control: repositories, accounts, 참여자 권한)"
   echo "Jenkins: https://$JENKINS_HOST   (K-PaaS SSO; admins: Keycloak group '$KEYCLOAK_ADMIN_GROUP')"
-else
+fi
+if has_source gitlab; then
   echo "GitLab : $GITLAB_URL   (K-PaaS SSO; break-glass: root / kubectl -n $GITLAB_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.root-password}' | base64 -d)"
 fi
 echo "Argo CD: https://$ARGOCD_HOST   (K-PaaS SSO, admin group '$KEYCLOAK_ADMIN_GROUP'; break-glass: admin / kubectl -n $ARGOCD_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
-echo "Next   : ./onboard-vendor.sh <vendor> [users]  ->  ./add-app.sh <vendor> <app> <java-gradle|java-maven|php|node|vue>"
-[[ "$CICD_SOURCE" == scm ]] && echo "         (SCM: create the repositories and accounts in scm.$HOST_DOMAIN first - see README)"
+echo "Next   : ./onboard-vendor.sh --source <$(echo $CICD_SOURCES | tr ' ' '|')> <vendor> [users]  ->  ./add-app.sh <vendor> <app> <java-gradle|java-maven|php|node|vue>"
+if has_source scm; then
+  echo "         (scm vendors: create the repositories and accounts in scm.$HOST_DOMAIN first - see README)"
+fi
 echo "Check  : ./check-cicd-portal.sh"
 echo "-----------------------------------------------------------------------------"

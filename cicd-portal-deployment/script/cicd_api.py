@@ -191,7 +191,7 @@ class GitLab:
     def project(self, full_path):
         return self.get(f"/projects/{q(full_path)}")
 
-    def ensure_project(self, namespace, path, visibility):
+    def ensure_project(self, namespace, path, visibility, empty=False):
         p = self.project(f"{namespace}/{path}")
         if p is not None:
             return p, False
@@ -199,7 +199,7 @@ class GitLab:
         if ns is None:
             raise SystemExit(f"[ERROR] GitLab namespace not found: {namespace}")
         p = self.call("POST", "/projects", {"name": path, "path": path, "namespace_id": ns["id"],
-                                             "visibility": visibility, "initialize_with_readme": True,
+                                             "visibility": visibility, "initialize_with_readme": not empty,
                                              "default_branch": "main"})
         log(f"[OK]   GitLab project created: {namespace}/{path}")
         return p, True
@@ -207,7 +207,8 @@ class GitLab:
     def push_dir(self, project, branch, src, prefix, subs, message, only_missing, exclude=()):
         pid = self.project(project)["id"]
         actions = []
-        for root, _, files in os.walk(src):
+        for root, dirs, files in os.walk(src):
+            dirs[:] = [d for d in dirs if d != ".git"]
             for name in sorted(files):
                 if name in exclude:
                     continue
@@ -503,7 +504,8 @@ def main():
     p = sub.add_parser("gl-instance-var"); p.add_argument("pairs", nargs="+")
     p = sub.add_parser("gl-group"); p.add_argument("path"); p.add_argument("--visibility", default="private")
     p = sub.add_parser("gl-project"); p.add_argument("namespace"); p.add_argument("path")
-    p.add_argument("--visibility", default="private")
+    p.add_argument("--visibility", default="private"); p.add_argument("--empty", action="store_true")
+    p = sub.add_parser("gl-default-branch"); p.add_argument("project"); p.add_argument("branch")
     p = sub.add_parser("gl-push-dir"); p.add_argument("project"); p.add_argument("src")
     p.add_argument("--branch", default="main"); p.add_argument("--prefix", default="")
     p.add_argument("--subst", action="append", default=[]); p.add_argument("--message", default="Update by cicd-portal")
@@ -527,6 +529,7 @@ def main():
     p.add_argument("--release", action="store_true"); p.add_argument("--description", default="")
     p = sub.add_parser("jenkins-ping")
     p = sub.add_parser("jenkins-build"); p.add_argument("folder"); p.add_argument("name")
+    p = sub.add_parser("jenkins-disable"); p.add_argument("folder"); p.add_argument("name")
     p = sub.add_parser("harbor-project"); p.add_argument("name"); p.add_argument("--public", action="store_true")
     p = sub.add_parser("harbor-robot"); p.add_argument("project"); p.add_argument("name")
     a = ap.parse_args()
@@ -565,8 +568,12 @@ def main():
         elif a.cmd == "gl-group":
             print(GitLab().ensure_group(a.path, a.visibility))
         elif a.cmd == "gl-project":
-            project, created = GitLab().ensure_project(a.namespace, a.path, a.visibility)
+            project, created = GitLab().ensure_project(a.namespace, a.path, a.visibility, a.empty)
             print("created" if created else "exists")
+        elif a.cmd == "gl-default-branch":
+            gl = GitLab()
+            gl.call("PUT", f"/projects/{gl.project(a.project)['id']}", {"default_branch": a.branch})
+            log(f"[OK]   default branch of {a.project}: {a.branch}")
         elif a.cmd == "gl-push-dir":
             subs = dict(s.split("=", 1) for s in a.subst)
             GitLab().push_dir(a.project, a.branch, a.src, a.prefix, subs, a.message, a.only_missing, a.exclude)
@@ -606,6 +613,13 @@ def main():
             j = Jenkins()
             request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/build", j.headers, form={})
             log(f"[OK]   Jenkins build queued: {a.folder}/{a.name}")
+        elif a.cmd == "jenkins-disable":
+            j = Jenkins()
+            if j.exists(f"/job/{q(a.folder)}/job/{q(a.name)}"):
+                request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/disable", j.headers, form={})
+                log(f"[OK]   Jenkins job disabled: {a.folder}/{a.name}")
+            else:
+                log(f"[INFO] Jenkins job not found: {a.folder}/{a.name}")
         elif a.cmd == "jenkins-ping":
             request("GET", Jenkins().base + "/api/json", Jenkins().headers)
             print("ok")

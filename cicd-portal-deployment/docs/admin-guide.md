@@ -1,11 +1,18 @@
-# CI/CD 포털 운영 관리자 가이드 (GitLab 모드)
+# CI/CD 포털 운영 관리자 가이드
 
-업체(유지보수사)별로 소스를 분리해 Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 빌드·배포하는 CI/CD 포털의
-운영 절차다. 업체 개발자용 안내는 [업체 개발자 가이드](vendor-guide.md)를 배포한다.
+업체(유지보수사·내부 팀)별로 Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 빌드·배포하는 CI/CD 포털의 운영 절차다.
+GitLab과 K-PaaS SCM을 함께 설치하고, **업체를 등록할 때 업체별로 소스를 선택**한다.
 
-> **GitLab 모드를 쓰는 이유**: K-PaaS 소스 컨트롤(`scm.<도메인>`) 웹 화면은 참여자가 아닌 사용자에게도 모든 저장소와
-> 파일을 보여 준다(git 접근만 권한으로 막힘). 업체 간 소스 분리가 필요하므로 업체 소스는 GitLab 비공개 그룹에 둔다.
-> K-PaaS 소스 컨트롤은 내부·기존 서비스용으로 유지한다.
+| 소스 (`--source`) | 저장소·CI | 대상 | 업체 배포 문서 |
+| --- | --- | --- | --- |
+| `gitlab` | GitLab CE 비공개 그룹 + GitLab Runner | **외부 업체** (업체 간 소스 분리) | [업체 개발자 가이드](vendor-guide.md) |
+| `scm` | K-PaaS 소스 컨트롤 + Jenkins | **내부 팀**, 기존 K-PaaS SCM 서비스 | [SCM 개발자 가이드](vendor-guide-scm.md) |
+
+> **외부 업체를 `scm`에 두지 않는다.** K-PaaS 소스 컨트롤(`scm.<도메인>`) 웹 화면은 참여자가 아닌 사용자에게도 모든
+> 저장소와 파일을 보여 준다(git 접근만 권한으로 막힘). 외부 업체 계정이 하나라도 SCM에 있으면 SCM의 모든 소스가 노출된다.
+
+Argo CD, Harbor, namespace, 배포 구조는 두 소스가 같다. 이 문서의 2장 이후는 `gitlab` 기준이며, `scm` 업체의
+차이는 [4-3](#4-3-scm-업체-등록)에 정리했다.
 
 ## 1. 구성과 역할
 
@@ -42,9 +49,10 @@
 
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
-export CICD_SOURCE=gitlab                 # 이 가이드의 모든 명령에 필요 (~/.bashrc 에 추가 권장)
-./deploy-cicd-portal.sh preflight
-./deploy-cicd-portal.sh                   # keycloak gitlab bootstrap templates runner argocd
+# 설치할 소스: 기본 "scm gitlab" (cicd-vars.sh 의 CICD_SOURCES). 하나만 쓰면 CICD_SOURCES=gitlab
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
+./deploy-cicd-portal.sh                   # keycloak jenkins gitlab bootstrap templates runner argocd
+JENKINS_USER=admin JENKINS_API_TOKEN='<토큰>' ./deploy-cicd-portal.sh jenkins-token   # scm 사용 시 1회
 ./check-cicd-portal.sh                    # [RESULT] OK 확인
 ```
 
@@ -87,11 +95,13 @@ Keycloak 관리 콘솔 → realm **cp-realm** → **Users** → **Add user**
 
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
-CICD_SOURCE=gitlab PM_USERS=saeoll-pm ./onboard-vendor.sh saeoll saeoll-hong,saeoll-kim
-#                  └ Maintainer         └ 업체 ID └ Developer 목록
+PM_USERS=saeoll-pm ./onboard-vendor.sh --source gitlab saeoll saeoll-hong,saeoll-kim
+#        └ Maintainer                   └ 소스         └ 업체 ID └ Developer 목록
 ```
 
 `GitLab user ... not found` 경고가 나온 사용자는 아직 GitLab에 로그인하지 않은 것이다. 로그인 후 같은 명령을 다시 실행한다.
+소스는 첫 등록 때 Argo CD 프로젝트에 기록되므로, 재실행할 때는 `--source`를 생략해도 된다. 다른 소스로 바꾸려면
+[4-4 이전](#4-4-scm--gitlab-이전)을 쓴다(직접 바꾸면 거부됨).
 
 ### 4-2. 생성 결과
 
@@ -103,14 +113,46 @@ CICD_SOURCE=gitlab PM_USERS=saeoll-pm ./onboard-vendor.sh saeoll saeoll-hong,sae
 | Kubernetes | `saeoll-dev`, `saeoll-prod` (ResourceQuota CPU 4 / 메모리 8Gi / Pod 30, LimitRange, pull secret `harbor-cicd`, TLS secret) |
 | Argo CD | 프로젝트 `saeoll` (배포 대상 namespace 2개로 제한, `cicd-saeoll`: 조회·dev Sync) |
 
-자원 한도 변경: `QUOTA_CPU=8 QUOTA_MEMORY=16Gi QUOTA_PODS=50 CICD_SOURCE=gitlab ./onboard-vendor.sh saeoll ...`
+자원 한도 변경: `QUOTA_CPU=8 QUOTA_MEMORY=16Gi QUOTA_PODS=50 ./onboard-vendor.sh saeoll ...`
+
+### 4-3. SCM 업체 등록
+
+내부 팀만 `scm`으로 등록한다. `SCM_ADMIN_PASSWORD`(scmadmin)가 필요하다.
+
+1. `scm.<도메인>`에서 저장소 `<팀>-gitops` 생성(Git)
+2. `SCM_ADMIN_PASSWORD='...' ./onboard-vendor.sh --source scm <팀> <사용자들>` → Keycloak에 CI 계정 `jenkins-<팀>` 생성,
+   남은 할 일 출력(종료 코드 3)
+3. `jenkins-<팀>`으로 `scm.` 최초 로그인 → 내정보 관리에서 git 비밀번호 설정 → `<팀>-gitops` 참여자에 쓰기 권한
+4. `SCM_CI_PASSWORD='<그 git 비밀번호>' ./onboard-vendor.sh <팀> <사용자들>` → Jenkins 폴더·credential 생성
+5. 앱 추가 전 `scm.`에서 `<팀>-<앱>` 저장소 생성, 참여자: `jenkins-<팀>` 보기, 개발자 쓰기 → `./add-app.sh <팀> <앱> <유형>`
+
+빌드는 Jenkins `<팀>/<앱>-dev`(develop 5분 폴링)와 `<팀>/<앱>-release`(RELEASE_TAG 입력)로 실행된다.
+운영 배포 승인(6장)·롤백(7장)은 GitLab 업체와 같다.
+
+### 4-4. SCM → GitLab 이전
+
+```bash
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' PM_USERS=<PM> ./migrate-vendor.sh <업체> <개발자들>
+```
+
+| 단계 | 내용 |
+| --- | --- |
+| 1 | GitLab 등록(그룹·gitops·CI 변수), Argo CD 프로젝트 소스를 `gitlab`으로 변경 |
+| 2 | SCM `<업체>-gitops` 내용(현재 이미지 태그 포함)을 GitLab `<업체>/gitops`로 복사 |
+| 3 | 앱 저장소 `<업체>-<앱>`을 브랜치·태그 이력째 GitLab `<업체>/<앱>`으로 복사, `v*` 태그 보호 |
+| 4 | Argo CD 앱이 GitLab gitops를 보도록 변경(배포 중인 서비스는 그대로 유지) |
+| 5 | `main`·`develop`에 `.gitlab-ci.yml` 추가 → develop 파이프라인이 dev 재배포 |
+| 6 | Jenkins `<앱>-dev`·`-release` 비활성화(이력 보존) |
+
+이전 후: SCM 저장소의 참여자 정리(또는 보관), 업체에 [업체 개발자 가이드](vendor-guide.md) 전달,
+개발자 PC는 `git remote set-url origin https://gitlab.<도메인>/<업체>/<앱>.git`. 중간에 실패하면 같은 명령을 다시 실행한다.
 
 ## 5. 서비스(앱) 추가
 
 ```bash
-CICD_SOURCE=gitlab ./add-app.sh saeoll homepage php        # java-gradle | java-maven | php | node | vue
-CICD_SOURCE=gitlab ./add-app.sh saeoll front vue
-CICD_SOURCE=gitlab ./add-app.sh saeoll api java-gradle /actuator/health   # 헬스 체크 경로 지정
+./add-app.sh saeoll homepage php        # java-gradle | java-maven | php | node | vue (업체 소스는 자동 판별)
+./add-app.sh saeoll front vue
+./add-app.sh saeoll api java-gradle /actuator/health   # 헬스 체크 경로 지정
 ```
 
 | 생성물 | 내용 |
@@ -121,7 +163,7 @@ CICD_SOURCE=gitlab ./add-app.sh saeoll api java-gradle /actuator/health   # 헬�
 
 `develop` 생성 시 첫 파이프라인이 자동 실행되어 dev에 배포된다(약 3~10분). 그 전까지 dev 앱은 `Degraded`로 보인다.
 
-**기존 소스 이관**: `SKIP_STARTER=1 CICD_SOURCE=gitlab ./add-app.sh saeoll homepage php`로 빈 프로젝트를 만든 뒤
+**기존 소스 이관**: `SKIP_STARTER=1 ./add-app.sh saeoll homepage php`로 빈 프로젝트를 만든 뒤
 업체가 기존 이력을 push한다(`git remote add gitlab https://gitlab.<도메인>/saeoll/homepage.git && git push gitlab --all && git push gitlab --tags`).
 저장소에 [업체 개발자 가이드 3장](vendor-guide.md#3-저장소-규칙)의 필수 파일이 있어야 한다.
 
@@ -161,14 +203,16 @@ Deployment에 `envFrom`을 추가한다. 비밀값은 Git에 넣지 않는다.
 
 | 주기 | 작업 |
 | --- | --- |
-| 매일 | `CICD_SOURCE=gitlab ./check-cicd-portal.sh` |
+| 매일 | `SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh` (설치된 소스 전체, 업체별 소스 목록 포함) |
 | 매주 | GitLab 백업: `kubectl -n cicd-gitlab exec deploy/gitlab -- gitlab-backup create` → `/var/opt/gitlab/backups`를 외부로 복사. `/etc/gitlab/gitlab-secrets.json`도 함께 보관 |
 | 매월 | Harbor 취약점 스캔 확인, 베이스 이미지 갱신, GitLab 보안 패치 검토 |
 | 연 1회 (364일) | 토큰 갱신: `onboard-vendor.sh <업체>` 재실행(gitops 토큰), 자동화 토큰은 만료 후 `./deploy-cicd-portal.sh bootstrap` |
 | 수시 | CI 템플릿 수정 후 `./deploy-cicd-portal.sh templates` (모든 서비스에 즉시 적용되므로 dev에서 먼저 확인) |
 
 GitLab 업그레이드: `cicd-vars.sh`의 `GITLAB_IMAGE`를 [업그레이드 경로](https://docs.gitlab.com/update/upgrade_paths/)에 따라
-한 단계씩 올리고 `CICD_SOURCE=gitlab ./deploy-cicd-portal.sh gitlab` (백업 후, 수 분 중단).
+한 단계씩 올리고 `./deploy-cicd-portal.sh gitlab` (백업 후, 수 분 중단).
+
+소스 하나를 더 이상 쓰지 않으면 `./uninstall-cicd-portal.sh scm` 또는 `gitlab` (그 소스를 쓰는 업체가 있으면 거부됨).
 
 ## 10. 장애 대응
 

@@ -1,18 +1,23 @@
-# CI/CD 포털 배포 (K-PaaS SCM + Jenkins + Argo CD)
+# CI/CD 포털 배포 (GitLab / K-PaaS SCM + Argo CD)
 
 K-PaaS 파이프라인(`cp-pipeline`)과 소스 컨트롤(`cp-source-control`) 배포는 **변경하지 않고**,
 Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구축한다.
 
-| 모드 (`CICD_SOURCE`) | 소스 저장소 | CI | CD | 비고 |
-| --- | --- | --- | --- | --- |
-| **`scm` (기본)** | K-PaaS 소스 컨트롤 (`scm.<도메인>`, SCM-Manager 1.x) | 신규 Jenkins (`jenkins.<도메인>`) | Argo CD | 기존 SCM·계정 재사용, 자원 적음 |
-| `gitlab` | GitLab CE (`gitlab.<도메인>`) | GitLab Runner | Argo CD | 업체 간 소스 분리, 코드 리뷰(MR), 자원 많음 → [11장](#11-gitlab-모드) |
+두 소스를 함께 설치하고(`CICD_SOURCES`, 기본 `"scm gitlab"`), **업체를 등록할 때 업체별로 선택**한다
+(`onboard-vendor.sh --source scm|gitlab`). Argo CD·Harbor·namespace·배포 구조는 공용이다.
 
-> **여러 업체가 함께 쓰면 `gitlab` 모드를 사용한다.** K-PaaS 소스 컨트롤 웹 화면은 참여자가 아닌 사용자에게도 모든
-> 저장소 목록과 파일 내용을 보여 준다(git clone/push만 참여자 권한으로 막힘, 실측 확인). `scm` 모드는 모든 사용자를
-> 신뢰하는 내부 환경에서만 쓴다.
+| 소스 | 소스 저장소 | CI | 대상 | 업체 문서 |
+| --- | --- | --- | --- | --- |
+| `gitlab` | GitLab CE (`gitlab.<도메인>`) 비공개 그룹 | GitLab Runner | **외부 업체**: 업체 간 소스 분리, 코드 리뷰(MR) | [업체 개발자 가이드](docs/vendor-guide.md) |
+| `scm` | K-PaaS 소스 컨트롤 (`scm.<도메인>`, SCM-Manager 1.x) | Jenkins (`jenkins.<도메인>`) | **내부 팀**, 기존 SCM 서비스 | [SCM 개발자 가이드](docs/vendor-guide-scm.md) |
+
+> **외부 업체는 `gitlab`으로 등록한다.** K-PaaS 소스 컨트롤 웹 화면은 참여자가 아닌 사용자에게도 모든 저장소 목록과
+> 파일 내용을 보여 준다(git clone/push만 참여자 권한으로 막힘, 실측 확인). `scm`은 신뢰할 수 있는 내부 사용자만 쓴다.
+> `scm` 업체는 `migrate-vendor.sh`로 이력째 `gitlab`으로 옮길 수 있다.
 >
-> 운영 가이드: [운영 관리자 가이드](docs/admin-guide.md) · [업체 개발자 가이드](docs/vendor-guide.md) (GitLab 모드 기준)
+> 운영 절차: [운영 관리자 가이드](docs/admin-guide.md)
+
+아래 1~9장은 `scm`(Jenkins) 구성, [11장](#11-gitlab-구성)은 `gitlab` 구성이다.
 
 ```text
 scm.<도메인>       K-PaaS SCM (기존) ── 업체 저장소 <업체>-<앱>, <업체>-gitops
@@ -50,7 +55,7 @@ argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Syn
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
-| `CICD_SOURCE` | `scm` | `gitlab`이면 GitLab 모드 (환경변수로도 지정 가능) |
+| `CICD_SOURCES` | `scm gitlab` | 설치할 소스(공백 구분). 하나만 쓰면 `scm` 또는 `gitlab`. 환경변수로도 지정 가능 |
 | `JENKINS_CHART_VERSION` | (최신) | 첫 설치 후 출력되는 차트 버전으로 고정 권장 |
 | `JENKINS_SSO` | `true` | `false`면 차트 기본 로컬 admin (SSO 문제 해결용) |
 | `SCM_ADMIN_USER` | `scmadmin` | SCM-Manager 관리자 (비밀번호는 환경변수 `SCM_ADMIN_PASSWORD`, 계정도 환경변수로 변경 가능) |
@@ -63,7 +68,7 @@ argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Syn
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
 SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
-./deploy-cicd-portal.sh 2>&1 | tee cicd-portal-deploy.log      # preflight keycloak jenkins argocd
+./deploy-cicd-portal.sh 2>&1 | tee cicd-portal-deploy.log      # preflight keycloak jenkins gitlab bootstrap templates runner argocd
 ```
 
 | 단계 | 내용 |
@@ -111,8 +116,8 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
 
 ```bash
 export SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>'
-./onboard-vendor.sh saeoll saeoll,vendor-dev1        # 1차: Keycloak 사용자 jenkins-saeoll 생성 + 남은 할 일 출력
-SCM_CI_PASSWORD='<jenkins-saeoll git 비밀번호>' ./onboard-vendor.sh saeoll saeoll,vendor-dev1
+./onboard-vendor.sh --source scm saeoll saeoll,vendor-dev1   # 1차: Keycloak 사용자 jenkins-saeoll 생성 + 남은 할 일 출력
+SCM_CI_PASSWORD='<jenkins-saeoll git 비밀번호>' ./onboard-vendor.sh saeoll saeoll,vendor-dev1   # 재실행 시 --source 생략 가능
 ```
 
 SCM 준비가 덜 됐으면 할 일 목록을 출력하고 종료 코드 3으로 끝난다. 완료 후 다시 실행한다(재실행 안전).
@@ -166,7 +171,7 @@ Jenkinsfile은 저장소에 있으므로 빌드 명령·이미지를 서비스�
 
 ```bash
 SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh   # Pod, SCM·Jenkins·Argo CD·Keycloak, API 로그인, Argo CD 앱 상태
-./uninstall-cicd-portal.sh                         # Jenkins·Argo CD·Keycloak 클라이언트 삭제 (SCM 저장소, 업체 namespace, Harbor 유지)
+./uninstall-cicd-portal.sh scm|gitlab|all         # 구성별 삭제 (사용 중인 업체가 있으면 거부, SCM 저장소·업체 namespace·Harbor 유지)
 ```
 
 ## 9. 운영 참고
@@ -204,17 +209,17 @@ kubectl -n cp-source-control logs deploy/cp-source-control-api-deployment --tail
 ```
 
 최신 SCM이 필요하면 K-PaaS 소스 컨트롤은 그대로 두고 **별도로 구축**한다. 이 경우 Keycloak SSO·MR·webhook을 모두 갖춘
-GitLab CE([11장](#11-gitlab-모드))가 SCM-Manager 3.x 별도 설치보다 적합하다. Argo CD·gitops·Dockerfile은 그대로 재사용된다.
+GitLab CE([11장](#11-gitlab-구성))가 SCM-Manager 3.x 별도 설치보다 적합하다. Argo CD·gitops·Dockerfile은 그대로 재사용된다.
 
-## 11. GitLab 모드
+## 11. GitLab 구성
 
-`CICD_SOURCE=gitlab`으로 실행하면 SCM·Jenkins 대신 GitLab CE(Omnibus 단일 Pod) + GitLab Runner를 설치한다.
+`CICD_SOURCES`에 `gitlab`이 있으면 GitLab CE(Omnibus 단일 Pod) + GitLab Runner를 설치한다.
 
 ```bash
-export CICD_SOURCE=gitlab
-./deploy-cicd-portal.sh            # preflight keycloak gitlab bootstrap templates runner argocd
-PM_USERS=saeoll-pm ./onboard-vendor.sh saeoll saeoll-hong,saeoll-kim   # PM=Maintainer, 나머지=Developer
+./deploy-cicd-portal.sh gitlab bootstrap templates runner        # 이미 scm·Argo CD가 설치된 경우 GitLab만 추가
+PM_USERS=saeoll-pm ./onboard-vendor.sh --source gitlab saeoll saeoll-hong,saeoll-kim   # PM=Maintainer, 나머지=Developer
 ./add-app.sh saeoll homepage php
+SCM_ADMIN_PASSWORD='...' PM_USERS=<PM> ./migrate-vendor.sh <scm 업체> <개발자들>      # scm 업체를 gitlab으로 이전
 ```
 
 | 항목 | 내용 |
@@ -227,5 +232,5 @@ PM_USERS=saeoll-pm ./onboard-vendor.sh saeoll saeoll-hong,saeoll-kim   # PM=Main
 | 한계 | 단일 Pod(HA 아님). OIDC 그룹이 GitLab 그룹으로 동기화되지 않아 멤버십은 `onboard-vendor.sh`로 관리 |
 | 운영 절차 | [운영 관리자 가이드](docs/admin-guide.md), [업체 개발자 가이드](docs/vendor-guide.md) |
 
-SCM 모드에서 이미 설치한 Jenkins는 GitLab 모드와 겹치지 않는다. 내부 서비스용으로 유지하거나, 쓰지 않으면
-`helm uninstall jenkins -n cicd-jenkins && kubectl delete ns cicd-jenkins`로 삭제한다(Argo CD는 그대로 공용).
+소스 하나를 쓰지 않게 되면 `./uninstall-cicd-portal.sh scm`(또는 `gitlab`)으로 삭제한다. 그 소스를 쓰는 업체가 남아
+있으면 거부된다. 전체 삭제는 `./uninstall-cicd-portal.sh all`.

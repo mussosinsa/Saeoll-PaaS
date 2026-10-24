@@ -86,11 +86,11 @@ CP-Portal 배포 후 아래 순서로 설치한다.
 1. [소스 컨트롤(SCM) 배포 가이드](cp-source-control-deployment/README.md) — `https://scm.<HOST_DOMAIN>`
 2. [파이프라인 배포 가이드](cp-pipeline-deployment/README.md) — `https://pipeline.<HOST_DOMAIN>`
 
-### CI/CD 포털 (K-PaaS SCM + Jenkins + Argo CD)
+### CI/CD 포털 (GitLab / K-PaaS SCM + Argo CD)
 
 K-PaaS 파이프라인을 변경하지 않고 Java(Gradle/Maven)·PHP·Node.js·Vue 서비스용 CI/CD를 별도로 구축한다.
-기본은 K-PaaS 소스 컨트롤(SCM) + 신규 Jenkins + Argo CD이며, GitLab CE 모드도 선택할 수 있다.
-[CI/CD 포털 배포 가이드](cicd-portal-deployment/README.md) — `https://jenkins.<HOST_DOMAIN>`, `https://argocd.<HOST_DOMAIN>`
+GitLab CE(+ Runner)와 K-PaaS 소스 컨트롤(+ Jenkins)을 함께 두고 업체별로 선택한다(외부 업체는 GitLab).
+[CI/CD 포털 배포 가이드](cicd-portal-deployment/README.md) — `https://gitlab.<HOST_DOMAIN>`, `https://jenkins.<HOST_DOMAIN>`, `https://argocd.<HOST_DOMAIN>`
 
 ### 기존 Kubernetes에 CP-Portal 설치
 

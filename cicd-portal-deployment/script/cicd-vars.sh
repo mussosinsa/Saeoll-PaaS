@@ -6,10 +6,12 @@
 HOST_DOMAIN="{host domain}"                     # leave as-is to reuse the CP-Portal value
 K8S_STORAGECLASS=""                             # empty: CP-Portal value (e.g. cp-storageclass)
 
-# SOURCE REPOSITORY
-#   scm    : K-PaaS source control (SCM-Manager, scm.<domain>) + new Jenkins (CI) + Argo CD (CD)
-#   gitlab : GitLab CE (repositories + CI) + GitLab Runner + Argo CD
-CICD_SOURCE=${CICD_SOURCE:-scm}                 # env CICD_SOURCE=gitlab ./... to override
+# SOURCES TO INSTALL (Argo CD is shared). Each vendor picks one at onboarding:
+#   ./onboard-vendor.sh --source scm|gitlab <vendor> ...
+#   scm    : K-PaaS source control (SCM-Manager, scm.<domain>) + Jenkins   - trusted/internal teams only:
+#            the SCM web UI shows every repository to every signed-in user
+#   gitlab : GitLab CE (repositories + CI) + GitLab Runner                 - external vendors (isolated groups)
+CICD_SOURCES=${CICD_SOURCES:-${CICD_SOURCE:-"scm gitlab"}}   # env overrides, e.g. CICD_SOURCES=gitlab
 
 # K-PaaS SCM (CICD_SOURCE=scm). Repositories/accounts are managed in scm.<domain>;
 # the scripts only check them and push starter/gitops files.

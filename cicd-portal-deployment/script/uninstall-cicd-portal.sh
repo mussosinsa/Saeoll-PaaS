@@ -1,48 +1,72 @@
 #!/bin/bash
-# Remove the CI/CD portal (Jenkins or GitLab CE + Runner, Argo CD and their Keycloak clients).
-# Vendor namespaces (<vendor>-dev/prod), Harbor projects, SCM repositories and the K-PaaS
-# components are kept.
+# Remove CI/CD portal components and their Keycloak clients.
+#   ./uninstall-cicd-portal.sh scm      Jenkins (jobs, credentials, build history)
+#   ./uninstall-cicd-portal.sh gitlab   GitLab CE (all repositories and data) + Runner
+#   ./uninstall-cicd-portal.sh all      both sources + Argo CD (all applications)
+# A source still used by a vendor is refused unless FORCE=1. Vendor namespaces (<vendor>-dev/prod),
+# Harbor projects, SCM repositories and the K-PaaS components are kept.
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
 # shellcheck source=lib.sh
 source ./lib.sh
 load_portal_vars
 
-if [[ "$CICD_SOURCE" == scm ]]; then
-  CONFIRM=$JENKINS_HOST
-  echo "This deletes Jenkins (jobs, credentials, build history), Argo CD and the Keycloak clients"
-  echo "$KEYCLOAK_JENKINS_CLIENT_ID / $KEYCLOAK_ARGOCD_CLIENT_ID. SCM repositories are not touched."
-else
-  CONFIRM=$GITLAB_HOST
-  echo "This deletes GitLab (all repositories and data PVCs), the runner, Argo CD and the"
-  echo "Keycloak clients $KEYCLOAK_GITLAB_CLIENT_ID / $KEYCLOAK_ARGOCD_CLIENT_ID."
-fi
-read -r -p "Type the host ($CONFIRM) to confirm: " answer
-[[ "$answer" == "$CONFIRM" ]] || { echo "Cancelled."; exit 0; }
+TARGET=${1:-}
+case "$TARGET" in
+  scm) REMOVE=(scm) ;;
+  gitlab) REMOVE=(gitlab) ;;
+  all) REMOVE=(scm gitlab argocd) ;;
+  *) echo "Usage: $0 <scm|gitlab|all>" >&2; exit 2 ;;
+esac
 
-# Argo CD applications first so their finalizers do not block the namespace
-kubectl -n "$ARGOCD_NAMESPACE" delete applications.argoproj.io --all --wait=false 2>/dev/null
-helm uninstall argocd -n "$ARGOCD_NAMESPACE" 2>/dev/null
-if [[ "$CICD_SOURCE" == scm ]]; then
-  helm uninstall jenkins -n "$JENKINS_NAMESPACE" 2>/dev/null
-  REMOVE_NS=("$ARGOCD_NAMESPACE" "$JENKINS_NAMESPACE")
-else
-  helm uninstall gitlab-runner -n "$RUNNER_NAMESPACE" 2>/dev/null
-  REMOVE_NS=("$ARGOCD_NAMESPACE" "$RUNNER_NAMESPACE" "$GITLAB_NAMESPACE")
-fi
-for ns in "${REMOVE_NS[@]}"; do
-  PVS=$(kubectl get pvc -n "$ns" -o jsonpath='{.items[*].spec.volumeName}' 2>/dev/null)
-  kubectl delete namespace "$ns" --ignore-not-found
-  [[ -n "$PVS" ]] && kubectl delete pv $PVS --ignore-not-found
+# Vendors that would lose their CI/source
+users=""
+for src in scm gitlab; do
+  [[ " ${REMOVE[*]} " == *" $src "* ]] || continue
+  for v in $(kubectl -n "$ARGOCD_NAMESPACE" get appprojects.argoproj.io -o name 2>/dev/null | sed 's|.*/||'); do
+    [[ "$v" == default ]] && continue
+    [[ "$(vendor_source "$v")" == "$src" ]] && users+=" $v($src)"
+  done
 done
-if [[ "$CICD_SOURCE" == scm ]]; then
+if [[ -n "$users" && "$TARGET" != all && "${FORCE:-0}" != 1 ]]; then
+  die "Vendors still use this source:$users. Migrate them (./migrate-vendor.sh) or set FORCE=1."
+fi
+
+echo "This deletes:"
+[[ " ${REMOVE[*]} " == *" scm "* ]] && echo "  - Jenkins (jobs, credentials, build history), Keycloak client $KEYCLOAK_JENKINS_CLIENT_ID"
+[[ " ${REMOVE[*]} " == *" gitlab "* ]] && echo "  - GitLab (ALL repositories and data PVCs), runner, Keycloak client $KEYCLOAK_GITLAB_CLIENT_ID"
+[[ " ${REMOVE[*]} " == *" argocd "* ]] && echo "  - Argo CD (all applications), Keycloak client $KEYCLOAK_ARGOCD_CLIENT_ID"
+[[ -n "$users" ]] && echo "  Vendors affected:$users"
+read -r -p "Type '$TARGET' to confirm: " answer
+[[ "$answer" == "$TARGET" ]] || { echo "Cancelled."; exit 0; }
+
+remove_namespace() {
+  local ns=$1 pvs
+  pvs=$(kubectl get pvc -n "$ns" -o jsonpath='{.items[*].spec.volumeName}' 2>/dev/null)
+  kubectl delete namespace "$ns" --ignore-not-found
+  [[ -n "$pvs" ]] && kubectl delete pv $pvs --ignore-not-found
+}
+
+if [[ " ${REMOVE[*]} " == *" argocd "* ]]; then
+  # Applications first so their finalizers do not block the namespace
+  kubectl -n "$ARGOCD_NAMESPACE" delete applications.argoproj.io --all --wait=false 2>/dev/null
+  helm uninstall argocd -n "$ARGOCD_NAMESPACE" 2>/dev/null
+  remove_namespace "$ARGOCD_NAMESPACE"
+  $API kc-delete-client "$KEYCLOAK_ARGOCD_CLIENT_ID"
+fi
+if [[ " ${REMOVE[*]} " == *" scm "* ]]; then
+  helm uninstall jenkins -n "$JENKINS_NAMESPACE" 2>/dev/null
+  remove_namespace "$JENKINS_NAMESPACE"
   $API kc-delete-client "$KEYCLOAK_JENKINS_CLIENT_ID"
-else
+fi
+if [[ " ${REMOVE[*]} " == *" gitlab "* ]]; then
+  helm uninstall gitlab-runner -n "$RUNNER_NAMESPACE" 2>/dev/null
+  remove_namespace "$RUNNER_NAMESPACE"
+  remove_namespace "$GITLAB_NAMESPACE"
   $API kc-delete-client "$KEYCLOAK_GITLAB_CLIENT_ID"
 fi
-$API kc-delete-client "$KEYCLOAK_ARGOCD_CLIENT_ID"
-rm -rf ../values
+[[ "$TARGET" == all ]] && rm -rf ../values
 echo
-echo "Removed. Kept: Keycloak groups ($KEYCLOAK_ADMIN_GROUP, cicd-<vendor>) and users jenkins-<vendor>,"
-echo "vendor namespaces, Harbor projects, SCM repositories."
-echo "With an NFS StorageClass (Retain) clean the GitLab data on the NFS server manually."
+echo "Removed: ${REMOVE[*]}. Kept: Keycloak groups and users, vendor namespaces, Harbor projects, SCM repositories."
+echo "Remove '${TARGET/all/scm gitlab}' from CICD_SOURCES in cicd-vars.sh (or the environment)."
+echo "With an NFS StorageClass (Retain) clean the deleted volumes on the NFS server manually."

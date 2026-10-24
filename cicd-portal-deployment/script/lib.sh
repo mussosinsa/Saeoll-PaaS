@@ -1,4 +1,4 @@
-# Common helpers for the CI/CD portal scripts (CICD_SOURCE=scm or gitlab). Source from cicd-portal-deployment/script.
+# Common helpers for the CI/CD portal scripts (sources: scm and/or gitlab). Source from cicd-portal-deployment/script.
 # shellcheck shell=bash
 LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=cicd-vars.sh
@@ -38,6 +38,7 @@ load_portal_vars() {
   GITLAB_HOST="gitlab.${HOST_DOMAIN}"
   # CICD_GITLAB_URL: API address used by these scripts if gitlab.<domain> does not resolve here
   GITLAB_URL=${CICD_GITLAB_URL:-"https://${GITLAB_HOST}"}
+  GITLAB_GIT_URL=${CICD_GITLAB_GIT_URL:-$GITLAB_URL}   # git over HTTPS (same host; overridable for tests)
   GITLAB_INTERNAL_HOST="gitlab.${GITLAB_NAMESPACE}.svc.cluster.local"
   GITLAB_INTERNAL_URL="http://${GITLAB_INTERNAL_HOST}"
   ARGOCD_HOST="argocd.${HOST_DOMAIN}"
@@ -55,11 +56,11 @@ load_portal_vars() {
   SCM_GIT_URL=${CICD_SCM_GIT_URL:-"$SCM_URL/git"}
   SCM_INTERNAL_GIT_URL="$SCM_INTERNAL_URL/git"
 
-  case "$CICD_SOURCE" in
-    scm) SECRETS_NAMESPACE=$JENKINS_NAMESPACE ;;
-    gitlab) SECRETS_NAMESPACE=$GITLAB_NAMESPACE ;;
-    *) die "CICD_SOURCE must be scm or gitlab (got '$CICD_SOURCE')." ;;
-  esac
+  local src
+  for src in $CICD_SOURCES; do
+    [[ "$src" == scm || "$src" == gitlab ]] || die "CICD_SOURCES entries must be scm or gitlab (got '$src')."
+  done
+  [[ -n "${CICD_SOURCES// /}" ]] || die "CICD_SOURCES is empty."
 
   # Environment for cicd_api.py
   export CA_FILE KEYCLOAK_URL KEYCLOAK_ADMIN_USERNAME KEYCLOAK_ADMIN_PASSWORD
@@ -94,18 +95,52 @@ ensure_ca_secret() { # namespace
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
-# Generated credentials live in one secret: get_secret key / set_secret key value
-get_secret() {
-  kubectl -n "$SECRETS_NAMESPACE" get secret "$SECRET_NAME" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null
+has_source() { [[ " $CICD_SOURCES " == *" $1 "* ]]; }
+
+# Generated credentials: secret $SECRET_NAME in the namespace of the component that uses
+# them (pods read gitlab-*/jenkins-* keys from their own namespace).
+secret_namespace() { # key
+  case "$1" in
+    gitlab-*|root-password|automation-token) echo "$GITLAB_NAMESPACE" ;;
+    jenkins-*|kc-jenkins-*) echo "$JENKINS_NAMESPACE" ;;
+    *) echo "$ARGOCD_NAMESPACE" ;;
+  esac
 }
-set_secret() { # values go through stdin, not the command line
-  if kubectl -n "$SECRETS_NAMESPACE" get secret "$SECRET_NAME" >/dev/null 2>&1; then
+# get_secret key - also reads the namespaces used by earlier versions (single-source installs)
+get_secret() {
+  local ns value
+  for ns in "$(secret_namespace "$1")" "$JENKINS_NAMESPACE" "$GITLAB_NAMESPACE"; do
+    value=$(kubectl -n "$ns" get secret "$SECRET_NAME" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null)
+    [[ -n "$value" ]] && { printf '%s' "$value"; return 0; }
+  done
+  return 0
+}
+set_secret() { # key value - values go through stdin, not the command line
+  local ns
+  ns=$(secret_namespace "$1")
+  ensure_namespace "$ns" app.kubernetes.io/part-of=cicd-portal
+  if kubectl -n "$ns" get secret "$SECRET_NAME" >/dev/null 2>&1; then
     printf '{"data":{"%s":"%s"}}' "$1" "$(printf '%s' "$2" | base64 -w0)" | \
-      kubectl -n "$SECRETS_NAMESPACE" patch secret "$SECRET_NAME" --type merge --patch-file /dev/stdin >/dev/null
+      kubectl -n "$ns" patch secret "$SECRET_NAME" --type merge --patch-file /dev/stdin >/dev/null
   else
-    printf '%s' "$2" | kubectl -n "$SECRETS_NAMESPACE" create secret generic "$SECRET_NAME" \
+    printf '%s' "$2" | kubectl -n "$ns" create secret generic "$SECRET_NAME" \
       --from-file="$1=/dev/stdin" >/dev/null
   fi
+}
+
+# Source (scm|gitlab) recorded on the vendor's Argo CD project; empty if not onboarded.
+# Projects created before the label existed are recognised by their gitops repository URL.
+vendor_source() { # vendor
+  local label repos
+  label=$(kubectl -n "$ARGOCD_NAMESPACE" get appproject "$1" \
+    -o jsonpath='{.metadata.labels.cicd\.k-paas\.org/source}' 2>/dev/null || true)
+  if [[ -n "$label" ]]; then echo "$label"; return 0; fi
+  repos=$(kubectl -n "$ARGOCD_NAMESPACE" get appproject "$1" -o jsonpath='{.spec.sourceRepos[*]}' 2>/dev/null || true)
+  case "$repos" in
+    *"$SCM_INTERNAL_GIT_URL"*) echo scm ;;
+    *"$GITLAB_INTERNAL_URL"*) echo gitlab ;;
+  esac
+  return 0
 }
 random_string() { # length
   python3 -c 'import secrets,string,sys; a=string.ascii_letters+string.digits; print("".join(secrets.choice(a) for _ in range(int(sys.argv[1]))))' "$1"
