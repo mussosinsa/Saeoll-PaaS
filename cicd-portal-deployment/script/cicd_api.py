@@ -667,6 +667,10 @@ def main():
             print(secret)
     except HTTPError as e:
         log(f"[ERROR] {e}")
+        if e.code in (301, 302, 303) and "jenkins" in str(e):
+            log("[ERROR] Jenkins redirected the API call to the login page: the API token was not accepted.\n"
+                "        Apply allowTokenAccessWithoutOicSession (./deploy-cicd-portal.sh jenkins) or register a\n"
+                "        new token (JENKINS_USER=.. JENKINS_API_TOKEN=.. ./deploy-cicd-portal.sh jenkins-token).")
         sys.exit(1)
     except (urllib.error.URLError, OSError) as e:  # DNS, connection, TLS (certificate) errors
         log(f"[ERROR] {getattr(e, 'reason', e)}")

@@ -16,6 +16,10 @@ controller:
         emailFieldName: "email"
         groupsFieldName: "groups"
         logoutFromOpenidProvider: true
+        # Scripts (onboard-vendor.sh, add-app.sh) call the API with a user's API token. oic-auth 4.x
+        # otherwise redirects token requests to the login page (HTTP 302) once the user's OIDC
+        # session has expired.
+        allowTokenAccessWithoutOicSession: true
         postLogoutRedirectUrl: "https://{JENKINS_HOST}/"
         # PKCE is optional for this confidential client; recent oic-auth versions no longer
         # accept a top-level pkceEnabled attribute (JCasC UnknownAttributesException).
