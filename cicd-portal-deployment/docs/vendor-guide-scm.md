@@ -90,4 +90,6 @@ Jenkins `<앱>-dev` → 빌드 번호 → **Console Output**에서 로그를, **
 | `git clone` 403 / not found | 저장소 참여자 등록 요청 |
 | `warning: remote HEAD refers to nonexistent ref` | `-b develop`으로 clone |
 | Jenkins 빌드가 시작되지 않음 | 5분 대기. 계속되면 `<앱>-dev` → **Build Now**, 그래도 안 되면 운영 관리자 문의 |
+| Console에 `No such DSL method 'junit'` | 운영 관리자: `./deploy-cicd-portal.sh jenkins`(JUnit 플러그인 설치) 후 `REPLACE_CI=1 ./add-app.sh ...`로 Jenkinsfile 갱신 |
+| Console에 `detected dubious ownership` | 이전 Jenkinsfile. 운영 관리자에게 `REPLACE_CI=1` 갱신 요청(빌드 결과에는 영향 없음) |
 | 기타 | [GitLab 가이드 9장](vendor-guide.md#9-문제-해결)의 배포·Argo CD 항목 참고 |
