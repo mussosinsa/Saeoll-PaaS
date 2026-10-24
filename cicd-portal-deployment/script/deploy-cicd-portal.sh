@@ -219,6 +219,15 @@ step_jenkins() {
   helm repo update jenkins >/dev/null
   helm upgrade --install jenkins jenkins/jenkins ${JENKINS_CHART_VERSION:+--version "$JENKINS_CHART_VERSION"} \
     -n "$JENKINS_NAMESPACE" "${values[@]}"
+  # A crash-looping StatefulSet pod is not replaced by the upgrade (and keeps old JCasC
+  # files in its emptyDir): recreate it so the new configuration is used.
+  local restarts
+  restarts=$(kubectl -n "$JENKINS_NAMESPACE" get pod jenkins-0 \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="jenkins")].restartCount}' 2>/dev/null || true)
+  if [[ "${restarts:-0}" -gt 0 ]]; then
+    info "jenkins-0 restarted $restarts time(s) before - recreating it with the new configuration"
+    kubectl -n "$JENKINS_NAMESPACE" delete pod jenkins-0 --wait=true >/dev/null
+  fi
   info "Waiting for Jenkins (plugin download on first start takes a few minutes)..."
   kubectl -n "$JENKINS_NAMESPACE" rollout status statefulset/jenkins --timeout=1200s || \
     die "Jenkins is not ready. Check: kubectl -n $JENKINS_NAMESPACE logs statefulset/jenkins -c jenkins --tail=100"
