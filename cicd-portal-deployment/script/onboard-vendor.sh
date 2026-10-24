@@ -16,7 +16,7 @@
 #   SCM_CI_PASSWORD     git password of the CI account (after its first scm login)
 #   SCM_CI_USER         CI account (default jenkins-<vendor>, created in Keycloak if missing). An existing
 #                       user with a git password can be used instead, e.g. SCM_CI_USER=saeoll (remembered).
-#   Prepared in scm.<domain>: repository <vendor>-gitops with jenkins-<vendor> as 참여자 (쓰기 권한).
+#   The gitops repository <vendor>-gitops is created in SCM-Manager if missing (SCM_CREATE_GITOPS=0 to skip).
 #   The script creates the Keycloak account jenkins-<vendor> if it does not exist and stops
 #   with a checklist while SCM items are missing; re-run after completing them.
 #
@@ -145,8 +145,14 @@ if [[ "$SOURCE" == scm ]]; then
     TODO+=("Sign in to https://scm.$HOST_DOMAIN as $CI_USER, set its git password in 내정보 관리 if not done, re-run with SCM_CI_PASSWORD='<that git password>'
       $login_hint")
   fi
+  # The gitops repository is used only by Jenkins/Argo CD: create it directly in SCM-Manager when
+  # missing (SCM_CREATE_GITOPS=0 to require creating it in scm.<domain> instead)
+  if [[ "${SCM_CREATE_GITOPS:-1}" == 1 ]]; then
+    $API scm-create "$GITOPS_REPO" --user "$CI_USER" --level WRITE \
+      --description "$VENDOR deployment manifests (CI/CD portal, Argo CD)" >/dev/null
+  fi
   if ! $API scm-check "$GITOPS_REPO" --user "$CI_USER" --level WRITE; then
-    TODO+=("In https://scm.$HOST_DOMAIN create Git repository '$GITOPS_REPO' and add $CI_USER as 참여자 (쓰기 권한)")
+    TODO+=("In https://scm.$HOST_DOMAIN make sure Git repository '$GITOPS_REPO' exists and $CI_USER is 참여자 (쓰기 권한)")
   fi
   if ((${#TODO[@]} == 0)); then
     # gitops repository skeleton (main branch)

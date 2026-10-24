@@ -119,12 +119,12 @@ PM_USERS=saeoll-pm ./onboard-vendor.sh --source gitlab saeoll saeoll-hong,saeoll
 
 내부 팀만 `scm`으로 등록한다. `SCM_ADMIN_PASSWORD`(scmadmin)가 필요하다.
 
-1. `scm.<도메인>`에서 저장소 `<팀>-gitops` 생성(Git)
-2. `SCM_ADMIN_PASSWORD='...' ./onboard-vendor.sh --source scm <팀> <사용자들>` → Keycloak에 CI 계정 `jenkins-<팀>` 생성,
+1. `SCM_ADMIN_PASSWORD='...' ./onboard-vendor.sh --source scm <팀> <사용자들>` → Keycloak에 CI 계정 `jenkins-<팀>` 생성,
    남은 할 일 출력(종료 코드 3)
-3. `jenkins-<팀>`으로 `scm.` 최초 로그인 → 내정보 관리에서 git 비밀번호 설정 → `<팀>-gitops` 참여자에 쓰기 권한
-4. `SCM_CI_PASSWORD='<그 git 비밀번호>' ./onboard-vendor.sh <팀> <사용자들>` → Jenkins 폴더·credential 생성
-5. 앱 추가 전 `scm.`에서 `<팀>-<앱>` 저장소 생성, 참여자: `jenkins-<팀>` 보기, 개발자 쓰기 → `./add-app.sh <팀> <앱> <유형>`
+2. `jenkins-<팀>`으로 `scm.` 최초 로그인 → 내정보 관리에서 git 비밀번호 설정
+3. `SCM_CI_PASSWORD='<그 git 비밀번호>' ./onboard-vendor.sh <팀> <사용자들>` → 배포 설정 저장소 `<팀>-gitops`가 없으면
+   SCM-Manager에 생성(CI 계정 쓰기 권한, `scm.` 목록에는 나오지 않음), Jenkins 폴더·credential 생성
+4. 앱 추가 전 `scm.`에서 `<팀>-<앱>` 저장소 생성, 참여자: `jenkins-<팀>` 보기, 개발자 쓰기 → `./add-app.sh <팀> <앱> <유형>`
 
 **기존 계정을 CI 계정으로 사용**: Keycloak·SCM에 이미 있고 git 비밀번호를 설정한 계정(예: `saeoll`)을 쓰려면
 `SCM_CI_USER=<계정>`을 지정한다. 새 Keycloak 계정을 만들지 않으며, 업체 정보에 저장되어 `add-app.sh`도 같은 계정을 쓴다.

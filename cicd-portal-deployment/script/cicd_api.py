@@ -362,6 +362,17 @@ class SCM:
     def repositories(self):
         return request("GET", self.base + "/repositories.json", self.headers)[1] or []
 
+    def create(self, repo, user, level, description):
+        """Create a git repository directly in SCM-Manager (used for the machine-managed gitops
+        repository; it is not registered in the K-PaaS source control DB, so scm.<domain> does not list it)."""
+        if any(r.get("name") == repo for r in self.repositories()):
+            return False
+        perms = [{"name": user, "type": level, "groupPermission": False}] if user else []
+        request("POST", self.base + "/repositories", self.headers,
+                {"name": repo, "type": "git", "public": False, "description": description, "permissions": perms})
+        log(f"[OK]   SCM repository created in SCM-Manager: {repo}" + (f" ({user}: {level})" if user else ""))
+        return True
+
     def check(self, repo, user, level):
         found = [r for r in self.repositories() if r.get("name") == repo]
         if not found:
@@ -542,6 +553,8 @@ def main():
     p = sub.add_parser("scm-check"); p.add_argument("repo"); p.add_argument("--user", default="")
     p.add_argument("--level", default="READ", choices=["READ", "WRITE", "OWNER"])
     sub.add_parser("scm-ping")
+    p = sub.add_parser("scm-create"); p.add_argument("repo"); p.add_argument("--user", default="")
+    p.add_argument("--level", default="WRITE", choices=["READ", "WRITE", "OWNER"]); p.add_argument("--description", default="")
     p = sub.add_parser("jenkins-folder"); p.add_argument("name"); p.add_argument("--group", required=True)
     p = sub.add_parser("jenkins-cred"); p.add_argument("folder"); p.add_argument("id")
     p.add_argument("--username", required=True); p.add_argument("--description", default="")
@@ -621,6 +634,8 @@ def main():
                 log(f"[FAIL] {problem}")
                 sys.exit(3)
             log(f"[OK]   SCM repository {a.repo}" + (f" ({a.user}: {a.level})" if a.user else ""))
+        elif a.cmd == "scm-create":
+            print("created" if SCM().create(a.repo, a.user, a.level, a.description) else "exists")
         elif a.cmd == "scm-ping":
             print(len(SCM().repositories()))
         elif a.cmd == "jenkins-folder":

@@ -106,7 +106,7 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
 
 | 항목 | 내용 |
 | --- | --- |
-| gitops 저장소 | **레파지토리 신규생성** → 이름 `<업체>-gitops`, 유형 Git |
+| gitops 저장소 | `<업체>-gitops`: 없으면 `onboard-vendor.sh`가 SCM-Manager API로 생성(CI 계정 쓰기 권한). Jenkins·Argo CD 전용이라 `scm.` 목록에는 나오지 않음(SCM-Manager 관리 화면에서 보임). `scm.`에서 직접 만들려면 `SCM_CREATE_GITOPS=0` |
 | CI 계정 | `jenkins-<업체>`: `onboard-vendor.sh`가 Keycloak에 생성 → 그 계정으로 `scm.` **최초 로그인** → 내정보 관리에서 **git 비밀번호 설정** |
 | 권한 | `<업체>-gitops` 참여자: `jenkins-<업체>` **쓰기 권한** |
 
