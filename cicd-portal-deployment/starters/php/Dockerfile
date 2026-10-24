@@ -8,7 +8,9 @@ WORKDIR /app
 COPY composer.json composer.lock* ./
 RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --no-scripts
 
-FROM ${BASE_REGISTRY}/php:8.3-apache
+# bookworm: the trixie images' xz (Landlock sandbox) fails under kaniko in docker-php-ext-install
+#   ("xz: Failed to enable the sandbox")
+FROM ${BASE_REGISTRY}/php:8.3-apache-bookworm
 RUN docker-php-ext-install pdo_mysql opcache \
  && sed -ri 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/*.conf \
  && sed -ri 's/Listen 80$/Listen 8080/; s/:80>/:8080>/' /etc/apache2/ports.conf /etc/apache2/sites-available/*.conf
