@@ -27,17 +27,20 @@ RUNNER_DESCRIPTION="cicd-k8s"
 
 step_preflight() {
   info "Preflight"
-  require_cmds kubectl helm curl python3 base64
-  local failed=0
+  local failed=0 cmd
+  for cmd in kubectl helm curl python3 base64; do
+    command -v "$cmd" >/dev/null || { warn "$cmd is not installed"; failed=1; }
+  done
   kubectl get storageclass "$K8S_STORAGECLASS" >/dev/null 2>&1 || { warn "StorageClass not found: $K8S_STORAGECLASS"; failed=1; }
   kubectl -n "$CP_PORTAL_NAMESPACE" get secret "$TLS_SECRET" >/dev/null 2>&1 || {
     warn "TLS secret $TLS_SECRET not found in $CP_PORTAL_NAMESPACE (deploy CP-Portal first)"; failed=1; }
   [[ -s "$CA_FILE" ]] || { warn "K-PaaS CA certificate not found: $CA_FILE (set CA_FILE)"; failed=1; }
-  kubectl -n keycloak get pods --no-headers 2>/dev/null | grep -q Running || { warn "Keycloak is not running"; failed=1; }
+  # no "grep -q" in pipes here: with pipefail its early exit makes kubectl fail with SIGPIPE
+  [[ "$(kubectl -n keycloak get pods --no-headers 2>/dev/null)" == *Running* ]] || { warn "Keycloak is not running"; failed=1; }
   kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || { warn "IngressClass not found: $INGRESS_CLASS_NAME"; failed=1; }
   if [[ "$CICD_SOURCE" == scm ]]; then
-    require_cmds git
-    kubectl -n "$SCM_NAMESPACE" get pods --no-headers 2>/dev/null | grep -q Running || {
+    command -v git >/dev/null || { warn "git is not installed (dnf install -y git)"; failed=1; }
+    [[ "$(kubectl -n "$SCM_NAMESPACE" get pods --no-headers 2>/dev/null)" == *Running* ]] || {
       warn "K-PaaS source control is not running in $SCM_NAMESPACE (deploy cp-source-control-deployment first)"; failed=1; }
     if [[ -n "${SCM_ADMIN_PASSWORD:-}" ]]; then
       export SCM_ADMIN_PASSWORD
