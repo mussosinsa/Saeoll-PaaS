@@ -176,7 +176,7 @@ kubectl -n vendor-a-dev get resourcequota,secret,sa
 
 ```bash
 cd ~/Saeoll-PaaS/cp-source-control-deployment/script
-SCM_ADMIN_PASSWORD='<관리자 git 비밀번호>' SCM_CHECK_USER=vendor-a-hong,jenkins-vendor-a ./check-cp-source-control.sh
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_CHECK_USER=vendor-a-hong,jenkins-vendor-a ./check-cp-source-control.sh
 ```
 
 ### 3-2. 저장소 생성 및 권한 부여
@@ -207,7 +207,7 @@ git clone https://scm-manager.<도메인>/scm/git/vendor-a-homepage   # 개인 �
 
 ```bash
 cd ~/Saeoll-PaaS/cp-source-control-deployment/script
-SCM_ADMIN_PASSWORD='<관리자 git 비밀번호>' SCM_TEST_REPO=vendor-a-homepage \
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_TEST_REPO=vendor-a-homepage \
   SCM_CHECK_USER=vendor-a-hong,jenkins-vendor-a ./check-cp-source-control.sh
 ```
 

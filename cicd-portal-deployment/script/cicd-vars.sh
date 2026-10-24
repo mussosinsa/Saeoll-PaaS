@@ -15,7 +15,7 @@ CICD_SOURCE=${CICD_SOURCE:-scm}                 # env CICD_SOURCE=gitlab ./... t
 # the scripts only check them and push starter/gitops files.
 SCM_NAMESPACE="cp-source-control"
 SCM_INTERNAL_URL="http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm"
-SCM_ADMIN_USER="admin"                          # SCM admin; password: env SCM_ADMIN_PASSWORD (git password)
+SCM_ADMIN_USER=${SCM_ADMIN_USER:-scmadmin}      # SCM-Manager admin used by K-PaaS; password: env SCM_ADMIN_PASSWORD
 
 # JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
 JENKINS_NAMESPACE="cicd-jenkins"

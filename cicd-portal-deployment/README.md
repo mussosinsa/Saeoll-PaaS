@@ -35,7 +35,8 @@ argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Syn
 - 자원: Jenkins 요청 0.5 CPU / 1Gi(상한 3Gi), PVC 20Gi + Argo CD 약 1Gi + 빌드 Pod(빌드당 최대 6Gi)
 - 인터넷 접근: `charts.jenkins.io`·`updates.jenkins.io`(플러그인), Docker Hub(빌드 이미지), `gcr.io`(kaniko),
   `quay.io`·`ghcr.io`(Argo CD), `argoproj.github.io`. 폐쇄망이면 `CICD_DOCKERHUB`·`CICD_BASE_REGISTRY`를 Harbor 미러로 지정
-- SCM 관리자 git 비밀번호: `scm.<도메인>`에 `admin`으로 로그인 → 내정보 관리에서 설정한 값(`SCM_ADMIN_PASSWORD`)
+- SCM 관리자 `scmadmin`(K-PaaS가 SCM-Manager 관리자로 사용하는 계정)의 비밀번호(`SCM_ADMIN_PASSWORD`).
+  다른 계정을 쓰면 `SCM_ADMIN_USER=<계정>`을 함께 지정한다
 
 ## 2. 설정
 
@@ -46,7 +47,7 @@ argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Syn
 | `CICD_SOURCE` | `scm` | `gitlab`이면 GitLab 모드 (환경변수로도 지정 가능) |
 | `JENKINS_CHART_VERSION` | (최신) | 첫 설치 후 출력되는 차트 버전으로 고정 권장 |
 | `JENKINS_SSO` | `true` | `false`면 차트 기본 로컬 admin (SSO 문제 해결용) |
-| `SCM_ADMIN_USER` | `admin` | SCM 관리자 (비밀번호는 환경변수 `SCM_ADMIN_PASSWORD`) |
+| `SCM_ADMIN_USER` | `scmadmin` | SCM-Manager 관리자 (비밀번호는 환경변수 `SCM_ADMIN_PASSWORD`, 계정도 환경변수로 변경 가능) |
 | `ARGOCD_CHART_VERSION` | `7.8.0` | Argo CD 2.14 |
 | `CICD_DOCKERHUB` / `CICD_BASE_REGISTRY` | `docker.io/library` | 빌드 도구 이미지 / Dockerfile `BASE_REGISTRY` |
 | `KANIKO_IMAGE` | `gcr.io/kaniko-project/executor:v1.23.2-debug` | 이미지 빌드 (원 프로젝트는 보관 상태, 필요 시 교체) |
@@ -55,7 +56,7 @@ argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Syn
 
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
-SCM_ADMIN_PASSWORD='<SCM admin git 비밀번호>' ./deploy-cicd-portal.sh preflight
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
 ./deploy-cicd-portal.sh 2>&1 | tee cicd-portal-deploy.log      # preflight keycloak jenkins argocd
 ```
 
@@ -103,7 +104,7 @@ SCM_ADMIN_PASSWORD='<SCM admin git 비밀번호>' ./deploy-cicd-portal.sh prefli
 ### 5-2. 실행
 
 ```bash
-export SCM_ADMIN_PASSWORD='<SCM admin git 비밀번호>'
+export SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>'
 ./onboard-vendor.sh saeoll saeoll,vendor-dev1        # 1차: Keycloak 사용자 jenkins-saeoll 생성 + 남은 할 일 출력
 SCM_CI_PASSWORD='<jenkins-saeoll git 비밀번호>' ./onboard-vendor.sh saeoll saeoll,vendor-dev1
 ```

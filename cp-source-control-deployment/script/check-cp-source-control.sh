@@ -8,7 +8,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
 SC_VARS="$SCRIPT_DIR/../upstream/script/cp-source-control-vars.sh"
 PORTAL_VARS=${PORTAL_VARS:-"$SCRIPT_DIR/../../cp-portal-deployment/script/cp-portal-vars.sh"}
-SCM_ADMIN_ID=${SCM_ADMIN_ID:-admin}
+SCM_ADMIN_ID=${SCM_ADMIN_ID:-scmadmin}          # SCM-Manager admin used by K-PaaS
 FAILED=0
 
 section() { printf '\n===== %s =====\n' "$*"; }

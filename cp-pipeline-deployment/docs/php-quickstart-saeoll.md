@@ -73,7 +73,7 @@ cat ../vendors/saeoll/jenkins-credentials.txt
 
 ```bash
 cd ~/Saeoll-PaaS/cp-source-control-deployment/script
-SCM_ADMIN_PASSWORD='<admin git 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-saeoll \
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-saeoll \
   SCM_TEST_REPO=saeoll-homepage ./check-cp-source-control.sh
 ```
 

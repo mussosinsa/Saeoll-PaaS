@@ -59,7 +59,7 @@ kubectl -n cp-source-control get pods
 | `https://scm.<HOST_DOMAIN>` | 소스 컨트롤 화면(사용자·관리자). 평소 접속 주소 |
 | `https://scm-manager.<HOST_DOMAIN>/scm/git/<저장소명>` | **git clone/push URL** (업체·Jenkins가 사용) |
 | `https://scm-manager.<HOST_DOMAIN>/scm/api/rest/<리소스>.json` | SCM-Manager 1.x REST API (예: `repositories.json`) |
-| `https://scm-manager.<HOST_DOMAIN>/scm/` | SCM-Manager 1.x 관리 화면(필요 시에만) |
+| `https://scm-manager.<HOST_DOMAIN>/scm/` | SCM-Manager 1.x 관리 화면(필요 시에만, 관리자 `scmadmin`) |
 
 - 관리자: 포털 관리자 계정(`admin` / 초기화한 패스워드)
 - 사용자: 로그인 화면 하단 **Register**로 가입 후 로그인
@@ -91,13 +91,13 @@ cd ~/Saeoll-PaaS/cp-source-control-deployment/script
 ./check-cp-source-control.sh
 
 # 관리자 로그인까지 확인
-SCM_ADMIN_PASSWORD='<관리자 비밀번호>' ./check-cp-source-control.sh
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./check-cp-source-control.sh
 
 # git 접근까지 확인 (scm. 화면에서 만든 저장소 이름)
-SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_TEST_REPO=test ./check-cp-source-control.sh
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_TEST_REPO=test ./check-cp-source-control.sh
 
 # 사용자 등록 확인 (포털 DB, 소스 컨트롤 DB, SCM-Manager 계정, 저장소 권한)
-SCM_ADMIN_PASSWORD='<관리자 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-vendor-a ./check-cp-source-control.sh
+SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-vendor-a ./check-cp-source-control.sh
 ```
 
 | 단계 | 정상 기준 |
