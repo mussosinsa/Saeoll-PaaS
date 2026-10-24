@@ -44,8 +44,16 @@ step_preflight() {
       warn "K-PaaS source control is not running in $SCM_NAMESPACE (deploy cp-source-control-deployment first)"; failed=1; }
     if [[ -n "${SCM_ADMIN_PASSWORD:-}" ]]; then
       export SCM_ADMIN_PASSWORD
-      $API scm-ping >/dev/null 2>&1 && ok "SCM-Manager REST API reachable as $SCM_ADMIN_USER ($SCM_URL)" || {
-        warn "SCM-Manager REST API login failed ($SCM_URL/api/rest, user $SCM_ADMIN_USER)"; failed=1; }
+      local scm_err
+      if scm_err=$($API scm-ping 2>&1 >/dev/null); then
+        ok "SCM-Manager REST API reachable as $SCM_ADMIN_USER ($SCM_URL)"
+      else
+        warn "SCM-Manager REST API login failed ($SCM_URL/api/rest, user $SCM_ADMIN_USER): ${scm_err:-unknown error}"
+        [[ "$scm_err" == *"HTTP 401"* ]] && \
+          warn "  401: SCM_ADMIN_PASSWORD must be the git password set in https://scm.$HOST_DOMAIN > 내정보 관리 (not the Keycloak password)"
+        [[ "$scm_err" == *CERTIFICATE* ]] && warn "  TLS: CA_FILE ($CA_FILE) does not verify scm-manager.$HOST_DOMAIN"
+        failed=1
+      fi
     else
       warn "SCM_ADMIN_PASSWORD not set - SCM login not checked (needed by onboard-vendor.sh / add-app.sh)"
     fi

@@ -31,7 +31,10 @@ def ssl_context():
     ca = ENV.get("CA_FILE", "")
     if ca and os.path.isfile(ca):
         ctx = ssl.create_default_context()
-        ctx.load_verify_locations(ca)  # K-PaaS CA in addition to the system store
+        try:
+            ctx.load_verify_locations(ca)  # K-PaaS CA in addition to the system store
+        except ssl.SSLError as e:
+            log(f"[WARN] CA_FILE {ca} is not a valid certificate ({e.reason}); using the system CAs only")
         return ctx
     return ssl.create_default_context()
 
@@ -614,6 +617,9 @@ def main():
             print(secret)
     except HTTPError as e:
         log(f"[ERROR] {e}")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as e:  # DNS, connection, TLS (certificate) errors
+        log(f"[ERROR] {getattr(e, 'reason', e)}")
         sys.exit(1)
 
 
