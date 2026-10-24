@@ -48,13 +48,12 @@ controller:
       - hosts:
           - {JENKINS_HOST}
         secretName: {TLS_SECRET}
+  # Builds run only on Kubernetes agents. Set through chart values: the chart's default
+  # JCasC already defines jenkins.numExecutors/systemMessage, and repeating them in a
+  # configScript makes JCasC fail at boot with a merge conflict (YamlUtils.merge).
+  numExecutors: 0
   JCasC:
     defaultConfig: true
-    configScripts:
-      cicd-portal: |
-        jenkins:
-          systemMessage: "CI/CD portal - K-PaaS SCM + Jenkins + Argo CD. Deployments: https://{ARGOCD_HOST}"
-          numExecutors: 0
 persistence:
   enabled: true
   storageClass: {STORAGECLASS}
