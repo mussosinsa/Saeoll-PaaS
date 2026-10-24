@@ -218,10 +218,17 @@ scm_clone() { # repo
   git -C "$dir/repo" config user.email "cicd-portal@${HOST_DOMAIN}"
   git -C "$dir/repo" config core.askPass "$askpass"
   git -C "$dir/repo" config http.sslCAInfo "$CA_FILE"
-  # SCM-Manager 1.x repositories keep HEAD -> master; the portal uses main
-  if git -C "$dir/repo" rev-parse -q --verify origin/main >/dev/null; then
-    git -C "$dir/repo" checkout -q -B main origin/main
-  fi
+  # SCM-Manager 1.x repositories keep HEAD -> master; the portal uses main. A repository that
+  # only has master (or another branch) continues from it, so its history is kept on main.
+  local base
+  for base in origin/main origin/master $(git -C "$dir/repo" for-each-ref --format='%(refname:short)' refs/remotes/origin); do
+    [[ "$base" == origin/HEAD ]] && continue
+    if git -C "$dir/repo" rev-parse -q --verify "$base" >/dev/null; then
+      git -C "$dir/repo" checkout -q -B main "$base"
+      [[ "$base" != origin/main ]] && echo "[INFO] SCM $1 has no main branch - main is created from $base" >&2
+      break
+    fi
+  done
   echo "$dir/repo"
 }
 scm_cleanup() { # dir from scm_clone

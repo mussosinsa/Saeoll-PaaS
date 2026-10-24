@@ -11,6 +11,8 @@
 # Creates (idempotent; existing files are never overwritten):
 #   source  : starter files on main + branch develop (scm: repository <vendor>-<app>;
 #             gitlab: project <vendor>/<app> with protected tags v*). SKIP_STARTER=1 keeps your own source.
+#   existing SCM repository with another name : SCM_REPO=<repository> (default <vendor>-<app>)
+#   replace an old CI file (Jenkinsfile / .gitlab-ci.yml) with the portal one : REPLACE_CI=1
 #   gitops  : apps/<app>/base + overlays/dev,prod
 #   CI      : scm: Jenkins jobs <vendor>/<app>-dev (Poll SCM develop) and <vendor>/<app>-release (RELEASE_TAG)
 #             gitlab: .gitlab-ci.yml from the starter
@@ -45,7 +47,7 @@ if [[ "$SOURCE" == scm ]]; then
   require_cmds git
   require_scm_admin
   load_jenkins_token
-  SOURCE_REPO="$VENDOR-$APP"
+  SOURCE_REPO=${SCM_REPO:-"$VENDOR-$APP"}
   GITOPS_REPO="$VENDOR-gitops"
   GITOPS_URL="$SCM_INTERNAL_GIT_URL/$GITOPS_REPO"
 else
@@ -62,6 +64,14 @@ if [[ "$SOURCE" == scm ]]; then
   $API scm-check "$SOURCE_REPO" --user "$CI_USER" --level READ || \
     die "Prepare '$SOURCE_REPO' in https://scm.$HOST_DOMAIN (Git, 참여자: $CI_USER 보기 권한, developers 쓰기 권한) and re-run."
   dir=$(scm_clone "$SOURCE_REPO")
+  if [[ "${REPLACE_CI:-0}" == 1 && -f "$dir/Jenkinsfile" ]]; then
+    git -C "$dir" rm -q Jenkinsfile
+    ci_only=$(mktemp -d)
+    cp "../starters/$TYPE/Jenkinsfile" "$ci_only/"
+    render_tree "$ci_only" "$dir" "${SUBST[@]}" >/dev/null
+    rm -rf "$ci_only"
+    info "SCM $SOURCE_REPO: Jenkinsfile replaced with the CI/CD portal version"
+  fi
   if [[ "${SKIP_STARTER:-0}" != 1 ]]; then
     added=$(render_tree "../starters/$TYPE" "$dir" --exclude .gitlab-ci.yml "${SUBST[@]}")
     if scm_commit_push "$dir" main "Add $TYPE starter (cicd-portal)"; then
