@@ -1,0 +1,147 @@
+// {VENDOR}/{APP} pipeline - CI/CD portal (K-PaaS SCM + Jenkins + Argo CD)
+//   job {APP}-dev     : develop (Poll SCM, 5 min) -> image dev-<sha>-<build> -> gitops overlays/dev  -> Argo CD auto sync
+//   job {APP}-release : RELEASE_TAG=vX.Y.Z        -> image vX.Y.Z           -> gitops overlays/prod -> Argo CD sync by cicd-admins
+// Folder credentials (onboard-vendor.sh): {VENDOR}-harbor (Harbor robot), {VENDOR}-scm (SCM account jenkins-{VENDOR})
+// Language: Vue / Vite
+def vendor = '{VENDOR}'
+def app = '{APP}'
+def harborHost = '{HARBOR_HOST}'
+def gitopsRepo = '{GITOPS_REPO_URL}'
+def baseRegistry = '{BASE_REGISTRY}'
+def kanikoImage = '{KANIKO_IMAGE}'
+def buildImage = '{CICD_DOCKERHUB}/node:20-alpine'
+
+def buildScript = '''
+if [ -f package-lock.json ]; then npm ci; else npm install; fi
+npm run build
+'''
+def testScript = '''
+npm run lint --if-present
+npm run test:unit --if-present
+'''
+def junitReports = ''
+
+properties([
+  disableConcurrentBuilds(),
+  buildDiscarder(logRotator(numToKeepStr: '30')),
+  parameters([string(name: 'RELEASE_TAG', defaultValue: '', trim: true,
+                     description: 'Release job only: tag vX.Y.Z to build and deploy to prod (empty: develop build)')])
+])
+
+podTemplate(yaml: """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: build
+      image: ${buildImage}
+      command: ["sleep"]
+      args: ["infinity"]
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {memory: 3Gi}
+    - name: kaniko
+      image: ${kanikoImage}
+      command: ["/busybox/cat"]
+      tty: true
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {memory: 3Gi}
+      volumeMounts:
+        - {name: cicd-ca, mountPath: /etc/cicd-ca, readOnly: true}
+  volumes:
+    - name: cicd-ca
+      secret: {secretName: cicd-ca}
+""") {
+  node(POD_LABEL) {
+    def releaseTag = (params.RELEASE_TAG ?: '').trim()
+    def deployEnv = releaseTag ? 'prod' : 'dev'
+    def imageTag = ''
+
+    stage('Checkout') {
+      checkout scm
+      def commit = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim()
+      if (releaseTag) {
+        if (!(releaseTag ==~ /v\d+\.\d+\.\d+/)) {
+          error "RELEASE_TAG must look like v1.2.0 (got '${releaseTag}')"
+        }
+        if (sh(script: "git tag --points-at HEAD | grep -qx '${releaseTag}'", returnStatus: true) != 0) {
+          error "Checked-out commit ${commit} is not tag ${releaseTag}. The release job branch must be refs/tags/\${RELEASE_TAG}."
+        }
+        imageTag = releaseTag
+      } else {
+        imageTag = "dev-${commit}-${env.BUILD_NUMBER}"
+      }
+      currentBuild.displayName = "#${env.BUILD_NUMBER} ${deployEnv} ${imageTag}"
+    }
+
+    stage('Build') {
+      container('build') { sh buildScript }
+    }
+
+    stage('Test') {
+      try {
+        container('build') { sh testScript }
+      } finally {
+        if (junitReports) { junit allowEmptyResults: true, testResults: junitReports }
+      }
+    }
+
+    stage('Image') {
+      def image = "${harborHost}/${vendor}/${app}:${imageTag}"
+      container('kaniko') {
+        withCredentials([usernamePassword(credentialsId: "${vendor}-harbor",
+                                          usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASSWORD')]) {
+          withEnv(["IMAGE=${image}", "REGISTRY_HOST=${harborHost}", "BASE_REGISTRY=${baseRegistry}"]) {
+            sh '''
+              AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASSWORD" | base64 | tr -d '\\n')
+              mkdir -p /kaniko/.docker
+              printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY_HOST" "$AUTH" > /kaniko/.docker/config.json
+              /kaniko/executor --context "$WORKSPACE" --dockerfile "$WORKSPACE/Dockerfile" \
+                --destination "$IMAGE" --build-arg "BASE_REGISTRY=$BASE_REGISTRY" \
+                --registry-certificate "$REGISTRY_HOST=/etc/cicd-ca/ca.crt"
+            '''
+          }
+        }
+      }
+      echo "Pushed ${image}"
+    }
+
+    stage('Deploy') {
+      container('jnlp') {
+        withCredentials([usernamePassword(credentialsId: "${vendor}-scm",
+                                          usernameVariable: 'SCM_USER', passwordVariable: 'SCM_PASSWORD')]) {
+          withEnv(["GITOPS_REPO=${gitopsRepo}", "OVERLAY=apps/${app}/overlays/${deployEnv}/kustomization.yaml",
+                   "IMAGE_TAG=${imageTag}", "COMMIT_MSG=${app} ${deployEnv} -> ${imageTag} (${env.JOB_NAME} #${env.BUILD_NUMBER})"]) {
+            sh '''
+              set -e
+              cred='!f() { echo "username=$SCM_USER"; echo "password=$SCM_PASSWORD"; }; f'
+              rm -rf gitops-repo
+              git -c credential.helper="$cred" clone -q --depth 1 --branch main "$GITOPS_REPO" gitops-repo
+              cd gitops-repo
+              git config user.name "Jenkins"
+              git config user.email "jenkins@cicd-portal"
+              [ -f "$OVERLAY" ] || { echo "$OVERLAY not found - run add-app.sh"; exit 1; }
+              for attempt in 1 2 3; do
+                sed -i "s|^\\(    newTag:\\).*|\\1 $IMAGE_TAG|" "$OVERLAY"
+                git add "$OVERLAY"
+                if git diff --cached --quiet; then echo "Already at $IMAGE_TAG"; exit 0; fi
+                git commit -q -m "$COMMIT_MSG"
+                if git -c credential.helper="$cred" push -q origin HEAD:main; then break; fi
+                [ "$attempt" = 3 ] && exit 1
+                git -c credential.helper="$cred" fetch -q --depth 1 origin main
+                git reset -q --hard origin/main
+              done
+              echo "gitops $OVERLAY -> $IMAGE_TAG"
+            '''
+          }
+        }
+      }
+      if (deployEnv == 'prod') {
+        echo "Production: ask cicd-admins to sync '${vendor}-${app}-prod' in Argo CD."
+      } else {
+        echo "Argo CD syncs '${vendor}-${app}-dev' automatically."
+      }
+    }
+  }
+}

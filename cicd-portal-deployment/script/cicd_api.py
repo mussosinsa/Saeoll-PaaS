@@ -3,7 +3,8 @@
 
 Standard library only. Settings come from the environment (exported by lib.sh):
   CA_FILE, KEYCLOAK_URL, KEYCLOAK_ADMIN_USERNAME, KEYCLOAK_ADMIN_PASSWORD, KC_REALM,
-  GITLAB_URL, GITLAB_TOKEN, HARBOR_URL, REPOSITORY_USERNAME, REPOSITORY_PASSWORD
+  GITLAB_URL, GITLAB_TOKEN, HARBOR_URL, REPOSITORY_USERNAME, REPOSITORY_PASSWORD,
+  SCM_URL, SCM_ADMIN_USER, SCM_ADMIN_PASSWORD, JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
 Results are printed to stdout; progress goes to stderr.
 """
 import argparse
@@ -17,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from xml.sax.saxutils import escape as xml_escape
 
 ENV = os.environ
 
@@ -44,10 +46,13 @@ class HTTPError(Exception):
         self.body = body
 
 
-def request(method, url, headers=None, data=None, form=None):
+def request(method, url, headers=None, data=None, form=None, xml=None):
     headers = dict(headers or {})
     body = None
-    if form is not None:
+    if xml is not None:
+        body = xml.encode()
+        headers["Content-Type"] = "application/xml"
+    elif form is not None:
         body = urllib.parse.urlencode(form).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     elif data is not None:
@@ -125,6 +130,15 @@ class Keycloak:
         log(f"[OK]   Keycloak group created: {name}")
         return self.ensure_group(name)
 
+    def ensure_user(self, username, email, password):
+        if self.call("GET", f"/users?username={q(username)}&exact=true"):
+            return False
+        self.call("POST", "/users", {"username": username, "email": email, "emailVerified": True, "enabled": True,
+                                     "firstName": username, "lastName": "CI",
+                                     "credentials": [{"type": "password", "value": password, "temporary": False}]})
+        log(f"[OK]   Keycloak user created: {username}")
+        return True
+
     def add_members(self, group, users):
         gid = self.ensure_group(group)
         for user in users:
@@ -187,11 +201,13 @@ class GitLab:
         log(f"[OK]   GitLab project created: {namespace}/{path}")
         return p, True
 
-    def push_dir(self, project, branch, src, prefix, subs, message, only_missing):
+    def push_dir(self, project, branch, src, prefix, subs, message, only_missing, exclude=()):
         pid = self.project(project)["id"]
         actions = []
         for root, _, files in os.walk(src):
             for name in sorted(files):
+                if name in exclude:
+                    continue
                 local = os.path.join(root, name)
                 rel = os.path.relpath(local, src).replace(os.sep, "/")
                 dest = (prefix.rstrip("/") + "/" + rel).lstrip("/")
@@ -300,11 +316,172 @@ class Harbor:
                 break
             page += 1
         r = self.call("POST", "/robots", {
-            "name": name, "description": f"GitLab CI for {project}", "duration": -1, "level": "project",
+            "name": name, "description": f"CI/CD portal for {project}", "duration": -1, "level": "project",
             "permissions": [{"kind": "project", "namespace": project, "access": [
                 {"resource": "repository", "action": "push"}, {"resource": "repository", "action": "pull"}]}]})
         log(f"[OK]   Harbor robot account {r['name']}")
         return r["name"], r["secret"]
+
+
+# ------------------------------------------------- SCM-Manager 1.x (K-PaaS) ---
+class SCM:
+    """Read-only use of the SCM-Manager 1.x REST API. Repositories and permissions are
+    managed in scm.<domain> so that the K-PaaS source control DB stays consistent."""
+    LEVELS = {"READ": 1, "WRITE": 2, "OWNER": 3}
+
+    def __init__(self):
+        self.base = ENV["SCM_URL"].rstrip("/") + "/api/rest"
+        cred = base64.b64encode(f"{ENV['SCM_ADMIN_USER']}:{ENV['SCM_ADMIN_PASSWORD']}".encode()).decode()
+        self.headers = {"Authorization": "Basic " + cred}
+
+    def repositories(self):
+        return request("GET", self.base + "/repositories.json", self.headers)[1] or []
+
+    def check(self, repo, user, level):
+        found = [r for r in self.repositories() if r.get("name") == repo]
+        if not found:
+            return f"repository '{repo}' not found - create it in scm.<domain> (레파지토리 신규생성, type Git)"
+        if found[0].get("type", "git") != "git":
+            return f"repository '{repo}' is {found[0].get('type')}, not git"
+        if user:
+            perms = [p for p in found[0].get("permissions") or []
+                     if p.get("name") == user and not p.get("groupPermission")]
+            have = max((self.LEVELS.get(p.get("type", ""), 0) for p in perms), default=0)
+            if have < self.LEVELS[level]:
+                return (f"user '{user}' needs {level} on '{repo}' - add as 참여자 "
+                        f"({'쓰기' if level != 'READ' else '보기'} 권한) in scm.<domain>")
+        return ""
+
+
+# ------------------------------------------------------------------ Jenkins ---
+class Jenkins:
+    # Folder permissions for the vendor group (matrix-auth): view, build, cancel, read logs
+    VENDOR_PERMISSIONS = ["hudson.model.Item.Read", "hudson.model.Item.Discover", "hudson.model.Item.Build",
+                          "hudson.model.Item.Cancel", "hudson.model.Item.Workspace", "hudson.model.Run.Replay"]
+
+    def __init__(self):
+        self.base = ENV["JENKINS_URL"].rstrip("/")
+        cred = base64.b64encode(f"{ENV['JENKINS_USER']}:{ENV['JENKINS_API_TOKEN']}".encode()).decode()
+        self.headers = {"Authorization": "Basic " + cred}
+
+    def exists(self, path):
+        try:
+            request("GET", f"{self.base}{path}/api/json", self.headers)
+            return True
+        except HTTPError as e:
+            if e.code == 404:
+                return False
+            raise
+
+    def post_xml(self, path, xml):
+        request("POST", self.base + path, self.headers, xml=xml)
+
+    def ensure_folder(self, name, group):
+        if self.exists(f"/job/{q(name)}"):
+            log(f"[INFO] Jenkins folder exists: {name}")
+            return
+        perms = "\n".join(f"      <permission>GROUP:{p}:{xml_escape(group)}</permission>"
+                          for p in self.VENDOR_PERMISSIONS)
+        self.post_xml(f"/createItem?name={q(name)}", f"""<?xml version='1.1' encoding='UTF-8'?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>{xml_escape(name)} services (CI/CD portal). Access: Keycloak group {xml_escape(group)}</description>
+  <properties>
+    <com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+{perms}
+    </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>""")
+        log(f"[OK]   Jenkins folder {name} (group {group}: read/build)")
+
+    def put_credential(self, folder, cid, username, password, description):
+        store = f"/job/{q(folder)}/credentials/store/folder/domain/_"
+        xml = f"""<com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl>
+  <scope>GLOBAL</scope>
+  <id>{xml_escape(cid)}</id>
+  <description>{xml_escape(description)}</description>
+  <username>{xml_escape(username)}</username>
+  <password>{xml_escape(password)}</password>
+</com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl>"""
+        if self.exists(f"{store}/credential/{q(cid)}"):
+            self.post_xml(f"{store}/credential/{q(cid)}/config.xml", xml)
+            log(f"[OK]   Jenkins credential updated: {folder}/{cid}")
+        else:
+            self.post_xml(f"{store}/createCredentials", xml)
+            log(f"[OK]   Jenkins credential created: {folder}/{cid}")
+
+    @staticmethod
+    def job_xml(description, repo_url, credentials_id, release):
+        if release:
+            branch, lightweight, extra = "refs/tags/${RELEASE_TAG}", "false", """
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>RELEASE_TAG</name>
+          <description>Release tag to build and deploy to prod, e.g. v1.2.0</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>"""
+        else:
+            branch, lightweight, extra = "*/develop", "true", """
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.SCMTrigger>
+          <spec>H/5 * * * *</spec>
+          <ignorePostCommitHooks>false</ignorePostCommitHooks>
+        </hudson.triggers.SCMTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>"""
+        return f"""<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition>
+  <description>{xml_escape(description)}</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <org.jenkinsci.plugins.workflow.job.properties.DisableConcurrentBuildsJobProperty/>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>30</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>{extra}
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+    <scm class="hudson.plugins.git.GitSCM">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>{xml_escape(repo_url)}</url>
+          <credentialsId>{xml_escape(credentials_id)}</credentialsId>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>{branch}</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile</scriptPath>
+    <lightweight>{lightweight}</lightweight>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>"""
+
+    def put_job(self, folder, name, xml):
+        path = f"/job/{q(folder)}/job/{q(name)}"
+        if self.exists(path):
+            self.post_xml(f"{path}/config.xml", xml)
+            log(f"[OK]   Jenkins job updated: {folder}/{name}")
+        else:
+            self.post_xml(f"/job/{q(folder)}/createItem?name={q(name)}", xml)
+            log(f"[OK]   Jenkins job created: {folder}/{name}")
 
 
 # --------------------------------------------------------------------- CLI ---
@@ -317,6 +494,7 @@ def main():
     p = sub.add_parser("kc-exists"); p.add_argument("client_id")
     p = sub.add_parser("gl-get"); p.add_argument("path")
     p = sub.add_parser("kc-group"); p.add_argument("name"); p.add_argument("--members", default="")
+    p = sub.add_parser("kc-user"); p.add_argument("username"); p.add_argument("--email", required=True)
     p = sub.add_parser("gl-wait"); p.add_argument("--timeout", type=int, default=900)
     sub.add_parser("gl-settings")
     p = sub.add_parser("gl-instance-var"); p.add_argument("pairs", nargs="+")
@@ -326,7 +504,7 @@ def main():
     p = sub.add_parser("gl-push-dir"); p.add_argument("project"); p.add_argument("src")
     p.add_argument("--branch", default="main"); p.add_argument("--prefix", default="")
     p.add_argument("--subst", action="append", default=[]); p.add_argument("--message", default="Update by cicd-portal")
-    p.add_argument("--only-missing", action="store_true")
+    p.add_argument("--only-missing", action="store_true"); p.add_argument("--exclude", action="append", default=[])
     p = sub.add_parser("gl-branch"); p.add_argument("project"); p.add_argument("branch"); p.add_argument("--ref", default="main")
     p = sub.add_parser("gl-protect-tag"); p.add_argument("project"); p.add_argument("pattern")
     p = sub.add_parser("gl-project-token"); p.add_argument("project"); p.add_argument("name")
@@ -335,6 +513,17 @@ def main():
     p = sub.add_parser("gl-members"); p.add_argument("group"); p.add_argument("users"); p.add_argument("--level", type=int, default=30)
     p = sub.add_parser("gl-runner"); p.add_argument("description")
     p = sub.add_parser("gl-runners-online"); p.add_argument("description")
+    p = sub.add_parser("scm-check"); p.add_argument("repo"); p.add_argument("--user", default="")
+    p.add_argument("--level", default="READ", choices=["READ", "WRITE", "OWNER"])
+    sub.add_parser("scm-ping")
+    p = sub.add_parser("jenkins-folder"); p.add_argument("name"); p.add_argument("--group", required=True)
+    p = sub.add_parser("jenkins-cred"); p.add_argument("folder"); p.add_argument("id")
+    p.add_argument("--username", required=True); p.add_argument("--description", default="")
+    p = sub.add_parser("jenkins-job"); p.add_argument("folder"); p.add_argument("name")
+    p.add_argument("--repo-url", required=True); p.add_argument("--credentials", required=True)
+    p.add_argument("--release", action="store_true"); p.add_argument("--description", default="")
+    p = sub.add_parser("jenkins-ping")
+    p = sub.add_parser("jenkins-build"); p.add_argument("folder"); p.add_argument("name")
     p = sub.add_parser("harbor-project"); p.add_argument("name"); p.add_argument("--public", action="store_true")
     p = sub.add_parser("harbor-robot"); p.add_argument("project"); p.add_argument("name")
     a = ap.parse_args()
@@ -357,6 +546,9 @@ def main():
             users = [u.strip() for u in a.members.split(",") if u.strip()]
             if users:
                 kc.add_members(a.name, users)
+        elif a.cmd == "kc-user":
+            created = Keycloak().ensure_user(a.username, a.email, sys.stdin.read().rstrip("\n"))
+            print("created" if created else "exists")
         elif a.cmd == "gl-wait":
             print(GitLab().wait(a.timeout))
         elif a.cmd == "gl-settings":
@@ -374,7 +566,7 @@ def main():
             print("created" if created else "exists")
         elif a.cmd == "gl-push-dir":
             subs = dict(s.split("=", 1) for s in a.subst)
-            GitLab().push_dir(a.project, a.branch, a.src, a.prefix, subs, a.message, a.only_missing)
+            GitLab().push_dir(a.project, a.branch, a.src, a.prefix, subs, a.message, a.only_missing, a.exclude)
         elif a.cmd == "gl-branch":
             GitLab().ensure_branch(a.project, a.branch, a.ref)
         elif a.cmd == "gl-protect-tag":
@@ -392,6 +584,28 @@ def main():
             print(GitLab().create_runner(a.description))
         elif a.cmd == "gl-runners-online":
             print(GitLab().runners_online(a.description))
+        elif a.cmd == "scm-check":
+            problem = SCM().check(a.repo, a.user, a.level)
+            if problem:
+                log(f"[FAIL] {problem}")
+                sys.exit(3)
+            log(f"[OK]   SCM repository {a.repo}" + (f" ({a.user}: {a.level})" if a.user else ""))
+        elif a.cmd == "scm-ping":
+            print(len(SCM().repositories()))
+        elif a.cmd == "jenkins-folder":
+            Jenkins().ensure_folder(a.name, a.group)
+        elif a.cmd == "jenkins-cred":
+            Jenkins().put_credential(a.folder, a.id, a.username, sys.stdin.read().rstrip("\n"), a.description)
+        elif a.cmd == "jenkins-job":
+            j = Jenkins()
+            j.put_job(a.folder, a.name, j.job_xml(a.description, a.repo_url, a.credentials, a.release))
+        elif a.cmd == "jenkins-build":
+            j = Jenkins()
+            request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/build", j.headers, form={})
+            log(f"[OK]   Jenkins build queued: {a.folder}/{a.name}")
+        elif a.cmd == "jenkins-ping":
+            request("GET", Jenkins().base + "/api/json", Jenkins().headers)
+            print("ok")
         elif a.cmd == "harbor-project":
             Harbor().ensure_project(a.name, a.public)
         elif a.cmd == "harbor-robot":

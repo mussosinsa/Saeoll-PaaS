@@ -1,0 +1,31 @@
+# Keycloak cp-realm SSO and group-based authorization (JENKINS_SSO=true).
+#   cicd-admins       : Overall/Administer
+#   signed-in users   : Overall/Read; vendor folders grant cicd-<vendor> read/build
+controller:
+  JCasC:
+    securityRealm: |-
+      oic:
+        clientId: "{OIDC_CLIENT_ID}"
+        clientSecret: "${CICD_OIDC_CLIENT_SECRET}"
+        serverConfiguration:
+          wellKnown:
+            wellKnownOpenIDConfigurationUrl: "{KEYCLOAK_ISSUER}/.well-known/openid-configuration"
+            scopesOverride: "openid profile email"
+        userNameField: "preferred_username"
+        fullNameFieldName: "name"
+        emailFieldName: "email"
+        groupsFieldName: "groups"
+        logoutFromOpenidProvider: true
+        postLogoutRedirectUrl: "https://{JENKINS_HOST}/"
+        pkceEnabled: true
+    authorizationStrategy: |-
+      globalMatrix:
+        entries:
+          - group:
+              name: "{ADMIN_GROUP}"
+              permissions:
+                - "Overall/Administer"
+          - group:
+              name: "authenticated"
+              permissions:
+                - "Overall/Read"

@@ -1,0 +1,73 @@
+# jenkins/jenkins chart values (CICD_SOURCE=scm). Rendered by deploy-cicd-portal.sh.
+# Builds run as Kubernetes agent pods in this namespace (pod templates in each Jenkinsfile).
+controller:
+  jenkinsUrl: https://{JENKINS_HOST}/
+  installLatestPlugins: true
+  additionalPlugins:
+    - oic-auth
+    - matrix-auth
+    - credentials-binding
+    - pipeline-stage-view
+    - timestamper
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 3Gi
+  javaOpts: "-Djavax.net.ssl.trustStore=/var/jenkins_home/cicd-cacerts -Djavax.net.ssl.trustStorePassword=changeit"
+  # JVM truststore = default CAs + K-PaaS CA (Keycloak and Harbor use the K-PaaS certificate)
+  customInitContainers:
+    - name: cicd-truststore
+      image: {JENKINS_TOOL_IMAGE}
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c"]
+      args:
+        - >-
+          cp "$JAVA_HOME/lib/security/cacerts" /var/jenkins_home/cicd-cacerts &&
+          chmod 644 /var/jenkins_home/cicd-cacerts &&
+          keytool -importcert -noprompt -trustcacerts -alias kpaas-ca -file /etc/cicd-ca/ca.crt
+          -keystore /var/jenkins_home/cicd-cacerts -storepass changeit
+      volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+        - name: cicd-ca
+          mountPath: /etc/cicd-ca
+          readOnly: true
+  containerEnv:
+    - name: CICD_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: {SECRET_NAME}
+          key: jenkins-oidc-secret
+  ingress:
+    enabled: true
+    ingressClassName: {INGRESS_CLASS_NAME}
+    hostName: {JENKINS_HOST}
+    tls:
+      - hosts:
+          - {JENKINS_HOST}
+        secretName: {TLS_SECRET}
+  JCasC:
+    defaultConfig: true
+    configScripts:
+      cicd-portal: |
+        jenkins:
+          systemMessage: "CI/CD portal - K-PaaS SCM + Jenkins + Argo CD. Deployments: https://{ARGOCD_HOST}"
+          numExecutors: 0
+persistence:
+  enabled: true
+  storageClass: {STORAGECLASS}
+  size: {JENKINS_DATA_SIZE}
+  volumes:
+    - name: cicd-ca
+      secret:
+        secretName: {CA_SECRET_NAME}
+agent:
+  enabled: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

@@ -1,11 +1,12 @@
 #!/bin/bash
 # Deploy the CI/CD portal next to K-PaaS (the K-PaaS cp-pipeline and
-# cp-source-control are not touched):
-#   GitLab CE (gitlab.<domain>) + GitLab Runner (Kubernetes executor)
-#   + Argo CD (argocd.<domain>), SSO through new clients in Keycloak cp-realm.
+# cp-source-control deployments are not changed). SSO through new clients in Keycloak cp-realm.
+#   CICD_SOURCE=scm    : K-PaaS SCM (repositories) + Jenkins (jenkins.<domain>) + Argo CD (argocd.<domain>)
+#   CICD_SOURCE=gitlab : GitLab CE (gitlab.<domain>) + GitLab Runner + Argo CD
 #
 # Usage: ./deploy-cicd-portal.sh [step ...]
-#   steps: preflight keycloak gitlab bootstrap templates runner argocd  (default: all)
+#   scm steps   : preflight keycloak jenkins argocd   (default) + jenkins-token (after the first login)
+#   gitlab steps: preflight keycloak gitlab bootstrap templates runner argocd (default)
 # Re-runnable; each step can be run on its own.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -15,7 +16,13 @@ source ./lib.sh
 load_portal_vars
 VALUES_DIR="$SCRIPT_DIR/../values"
 STEPS=("$@")
-((${#STEPS[@]})) || STEPS=(preflight keycloak gitlab bootstrap templates runner argocd)
+if ((${#STEPS[@]} == 0)); then
+  if [[ "$CICD_SOURCE" == scm ]]; then
+    STEPS=(preflight keycloak jenkins argocd)
+  else
+    STEPS=(preflight keycloak gitlab bootstrap templates runner argocd)
+  fi
+fi
 RUNNER_DESCRIPTION="cicd-k8s"
 
 step_preflight() {
@@ -28,12 +35,26 @@ step_preflight() {
   [[ -s "$CA_FILE" ]] || { warn "K-PaaS CA certificate not found: $CA_FILE (set CA_FILE)"; failed=1; }
   kubectl -n keycloak get pods --no-headers 2>/dev/null | grep -q Running || { warn "Keycloak is not running"; failed=1; }
   kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || { warn "IngressClass not found: $INGRESS_CLASS_NAME"; failed=1; }
-  local tag=${GITLAB_IMAGE##*:} repo=${GITLAB_IMAGE%:*}
-  if [[ "$repo" == gitlab/gitlab-ce ]]; then
-    curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/gitlab/gitlab-ce/tags/$tag" 2>/dev/null || \
-      warn "Image tag not found on Docker Hub (or no internet): $GITLAB_IMAGE"
+  if [[ "$CICD_SOURCE" == scm ]]; then
+    require_cmds git
+    kubectl -n "$SCM_NAMESPACE" get pods --no-headers 2>/dev/null | grep -q Running || {
+      warn "K-PaaS source control is not running in $SCM_NAMESPACE (deploy cp-source-control-deployment first)"; failed=1; }
+    if [[ -n "${SCM_ADMIN_PASSWORD:-}" ]]; then
+      export SCM_ADMIN_PASSWORD
+      $API scm-ping >/dev/null 2>&1 && ok "SCM-Manager REST API reachable as $SCM_ADMIN_USER ($SCM_URL)" || {
+        warn "SCM-Manager REST API login failed ($SCM_URL/api/rest, user $SCM_ADMIN_USER)"; failed=1; }
+    else
+      warn "SCM_ADMIN_PASSWORD not set - SCM login not checked (needed by onboard-vendor.sh / add-app.sh)"
+    fi
+    echo "       Node capacity (Jenkins requests 0.5 CPU / 1Gi, limit 3Gi; build pods up to 6Gi each):"
+  else
+    local tag=${GITLAB_IMAGE##*:} repo=${GITLAB_IMAGE%:*}
+    if [[ "$repo" == gitlab/gitlab-ce ]]; then
+      curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/gitlab/gitlab-ce/tags/$tag" 2>/dev/null || \
+        warn "Image tag not found on Docker Hub (or no internet): $GITLAB_IMAGE"
+    fi
+    echo "       Node capacity (GitLab requests ${GITLAB_CPU_REQUEST} CPU / ${GITLAB_MEMORY_REQUEST}, limit ${GITLAB_MEMORY_LIMIT}):"
   fi
-  echo "       Node capacity (GitLab requests ${GITLAB_CPU_REQUEST} CPU / ${GITLAB_MEMORY_REQUEST}, limit ${GITLAB_MEMORY_LIMIT}):"
   kubectl top nodes 2>/dev/null | sed 's/^/       /' || warn "kubectl top nodes unavailable (metrics-server)"
   ((failed == 0)) || die "Preflight failed."
   ok "Preflight passed"
@@ -41,16 +62,25 @@ step_preflight() {
 
 step_keycloak() {
   info "Keycloak clients in realm $KEYCLOAK_CP_REALM (existing clients are not changed)"
-  ensure_namespace "$GITLAB_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
-  local secret
-  secret=$($API kc-client "$KEYCLOAK_GITLAB_CLIENT_ID" \
-    --redirect "https://$GITLAB_HOST/users/auth/openid_connect/callback" --origin "https://$GITLAB_HOST")
-  set_secret gitlab-oidc-secret "$secret"
+  ensure_namespace "$SECRETS_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  local secret source_client
+  if [[ "$CICD_SOURCE" == scm ]]; then
+    source_client=$KEYCLOAK_JENKINS_CLIENT_ID
+    secret=$($API kc-client "$KEYCLOAK_JENKINS_CLIENT_ID" --groups-mapper \
+      --redirect "https://$JENKINS_HOST/securityRealm/finishLogin" --redirect "https://$JENKINS_HOST/*" \
+      --origin "https://$JENKINS_HOST")
+    set_secret jenkins-oidc-secret "$secret"
+  else
+    source_client=$KEYCLOAK_GITLAB_CLIENT_ID
+    secret=$($API kc-client "$KEYCLOAK_GITLAB_CLIENT_ID" \
+      --redirect "https://$GITLAB_HOST/users/auth/openid_connect/callback" --origin "https://$GITLAB_HOST")
+    set_secret gitlab-oidc-secret "$secret"
+  fi
   secret=$($API kc-client "$KEYCLOAK_ARGOCD_CLIENT_ID" --groups-mapper \
     --redirect "https://$ARGOCD_HOST/auth/callback" --origin "https://$ARGOCD_HOST")
   set_secret argocd-oidc-secret "$secret"
   $API kc-group "$KEYCLOAK_ADMIN_GROUP" --members "$KEYCLOAK_ADMIN_USERNAME"
-  ok "Keycloak clients: $KEYCLOAK_GITLAB_CLIENT_ID, $KEYCLOAK_ARGOCD_CLIENT_ID; admin group: $KEYCLOAK_ADMIN_GROUP"
+  ok "Keycloak clients: $source_client, $KEYCLOAK_ARGOCD_CLIENT_ID; admin group: $KEYCLOAK_ADMIN_GROUP"
 }
 
 step_gitlab() {
@@ -154,6 +184,48 @@ step_runner() {
   ((online > 0)) && ok "Runner online: $RUNNER_DESCRIPTION" || warn "Runner not online yet: kubectl -n $RUNNER_NAMESPACE logs deploy/gitlab-runner"
 }
 
+step_jenkins() {
+  info "Jenkins (chart ${JENKINS_CHART_VERSION:-latest}) in $JENKINS_NAMESPACE"
+  ensure_namespace "$JENKINS_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  copy_tls_secret "$JENKINS_NAMESPACE"
+  ensure_ca_secret "$JENKINS_NAMESPACE"
+  [[ "$JENKINS_SSO" != true || -n "$(get_secret jenkins-oidc-secret)" ]] || die "Keycloak client secret missing. Run: $0 keycloak"
+  [[ -n "$(get_secret jenkins-oidc-secret)" ]] || set_secret jenkins-oidc-secret none
+  mkdir -p "$VALUES_DIR"
+  local subst=(JENKINS_HOST="$JENKINS_HOST" ARGOCD_HOST="$ARGOCD_HOST" INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME"
+               TLS_SECRET="$TLS_SECRET" STORAGECLASS="$K8S_STORAGECLASS" JENKINS_DATA_SIZE="$JENKINS_DATA_SIZE"
+               CA_SECRET_NAME="$CA_SECRET_NAME" SECRET_NAME="$SECRET_NAME" JENKINS_TOOL_IMAGE="$JENKINS_TOOL_IMAGE"
+               OIDC_CLIENT_ID="$KEYCLOAK_JENKINS_CLIENT_ID" KEYCLOAK_ISSUER="$KEYCLOAK_ISSUER" ADMIN_GROUP="$KEYCLOAK_ADMIN_GROUP")
+  render_file ../values_orig/jenkins.yaml "$VALUES_DIR/jenkins.yaml" "${subst[@]}"
+  local values=(-f "$VALUES_DIR/jenkins.yaml")
+  if [[ "$JENKINS_SSO" == true ]]; then
+    render_file ../values_orig/jenkins-sso.yaml "$VALUES_DIR/jenkins-sso.yaml" "${subst[@]}"
+    values+=(-f "$VALUES_DIR/jenkins-sso.yaml")
+  else
+    warn "JENKINS_SSO=false: local admin (kubectl -n $JENKINS_NAMESPACE get secret jenkins -o jsonpath='{.data.jenkins-admin-password}' | base64 -d)"
+  fi
+  helm repo add jenkins https://charts.jenkins.io >/dev/null 2>&1 || true
+  helm repo update jenkins >/dev/null
+  helm upgrade --install jenkins jenkins/jenkins ${JENKINS_CHART_VERSION:+--version "$JENKINS_CHART_VERSION"} \
+    -n "$JENKINS_NAMESPACE" "${values[@]}"
+  info "Waiting for Jenkins (plugin download on first start takes a few minutes)..."
+  kubectl -n "$JENKINS_NAMESPACE" rollout status statefulset/jenkins --timeout=1200s || \
+    die "Jenkins is not ready. Check: kubectl -n $JENKINS_NAMESPACE logs statefulset/jenkins -c jenkins --tail=100"
+  ok "Jenkins: https://$JENKINS_HOST (chart $(helm list -n "$JENKINS_NAMESPACE" -f '^jenkins$' -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["chart"])'))"
+  echo "       Next: sign in as a member of '$KEYCLOAK_ADMIN_GROUP', create an API token (user menu > Security),"
+  echo "       then: JENKINS_USER=<user> JENKINS_API_TOKEN=<token> $0 jenkins-token"
+}
+
+step_jenkins-token() {
+  [[ -n "${JENKINS_USER:-}" && -n "${JENKINS_API_TOKEN:-}" ]] || \
+    die "Usage: JENKINS_USER=<cicd-admins member> JENKINS_API_TOKEN=<token> $0 jenkins-token"
+  export JENKINS_USER JENKINS_API_TOKEN
+  $API jenkins-ping >/dev/null || die "Jenkins API login failed for $JENKINS_USER ($JENKINS_URL)."
+  set_secret jenkins-user "$JENKINS_USER"
+  set_secret jenkins-api-token "$JENKINS_API_TOKEN"
+  ok "Jenkins API token stored for $JENKINS_USER (used by onboard-vendor.sh / add-app.sh)"
+}
+
 step_argocd() {
   info "Argo CD (chart $ARGOCD_CHART_VERSION) in $ARGOCD_NAMESPACE"
   ensure_namespace "$ARGOCD_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
@@ -181,16 +253,24 @@ step_argocd() {
 }
 
 for step in "${STEPS[@]}"; do
-  case "$step" in
-    preflight|keycloak|gitlab|bootstrap|templates|runner|argocd) "step_$step" ;;
-    *) die "Unknown step: $step (preflight keycloak gitlab bootstrap templates runner argocd)" ;;
+  case "$CICD_SOURCE:$step" in
+    *:preflight|*:keycloak|*:argocd|scm:jenkins|scm:jenkins-token|gitlab:gitlab|gitlab:bootstrap|gitlab:templates|gitlab:runner)
+      "step_$step" ;;
+    scm:*) die "Unknown step for CICD_SOURCE=scm: $step (preflight keycloak jenkins argocd jenkins-token)" ;;
+    *) die "Unknown step for CICD_SOURCE=gitlab: $step (preflight keycloak gitlab bootstrap templates runner argocd)" ;;
   esac
 done
 
 echo
 echo "-----------------------------------------------------------------------------"
-echo "GitLab : $GITLAB_URL   (K-PaaS SSO; break-glass: root / kubectl -n $GITLAB_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.root-password}' | base64 -d)"
+if [[ "$CICD_SOURCE" == scm ]]; then
+  echo "SCM    : https://scm.$HOST_DOMAIN   (K-PaaS source control: repositories, accounts, 참여자 권한)"
+  echo "Jenkins: https://$JENKINS_HOST   (K-PaaS SSO; admins: Keycloak group '$KEYCLOAK_ADMIN_GROUP')"
+else
+  echo "GitLab : $GITLAB_URL   (K-PaaS SSO; break-glass: root / kubectl -n $GITLAB_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.root-password}' | base64 -d)"
+fi
 echo "Argo CD: https://$ARGOCD_HOST   (K-PaaS SSO, admin group '$KEYCLOAK_ADMIN_GROUP'; break-glass: admin / kubectl -n $ARGOCD_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
 echo "Next   : ./onboard-vendor.sh <vendor> [users]  ->  ./add-app.sh <vendor> <app> <java-gradle|java-maven|php|node|vue>"
+[[ "$CICD_SOURCE" == scm ]] && echo "         (SCM: create the repositories and accounts in scm.$HOST_DOMAIN first - see README)"
 echo "Check  : ./check-cicd-portal.sh"
 echo "-----------------------------------------------------------------------------"

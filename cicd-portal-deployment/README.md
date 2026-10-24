@@ -1,158 +1,219 @@
-# CI/CD 포털 배포 (GitLab CE + GitLab Runner + Argo CD)
+# CI/CD 포털 배포 (K-PaaS SCM + Jenkins + Argo CD)
 
-K-PaaS 파이프라인(`cp-pipeline`)과 소스 컨트롤(`cp-source-control`)은 **변경하지 않고**,
-Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD 포털을 별도로 구축한다.
+K-PaaS 파이프라인(`cp-pipeline`)과 소스 컨트롤(`cp-source-control`) 배포는 **변경하지 않고**,
+Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구축한다.
+
+| 모드 (`CICD_SOURCE`) | 소스 저장소 | CI | CD | 비고 |
+| --- | --- | --- | --- | --- |
+| **`scm` (기본)** | K-PaaS 소스 컨트롤 (`scm.<도메인>`, SCM-Manager 1.x) | 신규 Jenkins (`jenkins.<도메인>`) | Argo CD | 기존 SCM·계정 재사용, 자원 적음 |
+| `gitlab` | GitLab CE (`gitlab.<도메인>`) | GitLab Runner | Argo CD | 코드 리뷰(MR)·통합 화면, 자원 많음 → [11장](#11-gitlab-모드) |
 
 ```text
-[개발자] ── K-PaaS SSO (Keycloak cp-realm) ──┐
-                                            ▼
- gitlab.<도메인>   GitLab CE  ── 그룹=업체, 프로젝트=서비스, MR·보호 태그
-                     │ push / tag
+scm.<도메인>       K-PaaS SCM (기존) ── 업체 저장소 <업체>-<앱>, <업체>-gitops
+                     │ Poll SCM 5분 (클러스터 내부 http)
+jenkins.<도메인>   Jenkins (cicd-jenkins) ── 업체 폴더, 빌드는 Kubernetes Pod(빌드 도구 + kaniko)
+                     │ build → test → 이미지 → Harbor push → <업체>-gitops 이미지 태그 갱신
+harbor.<도메인>    Harbor (기존) ── 업체별 프로젝트, robot 계정
+argocd.<도메인>    Argo CD (cicd-argocd) ── gitops 감시: dev 자동 Sync / prod 수동 Sync(cicd-admins)
                      ▼
- cicd-runner       GitLab Runner (Kubernetes executor)
-                     │ build → test → kaniko 이미지 빌드
-                     ▼
- harbor.<도메인>   Harbor (기존) ── 업체별 프로젝트, robot 계정
-                     │ CI가 <업체>/gitops 의 이미지 태그 갱신
-                     ▼
- argocd.<도메인>   Argo CD ── dev 자동 Sync / prod 수동 Sync(승인)
-                     ▼
-                  <업체>-dev, <업체>-prod namespace
+                   <업체>-dev, <업체>-prod namespace
 ```
 
-| 구성요소 | namespace | 주소 | 비고 |
-| --- | --- | --- | --- |
-| GitLab CE (Omnibus, 단일 Pod) | `cicd-gitlab` | `https://gitlab.<도메인>` | PVC 3개(설정 1Gi, 로그 5Gi, 데이터 50Gi) |
-| GitLab Runner | `cicd-runner` | - | 빌드 Pod도 이 namespace에서 실행, privileged 미사용 |
-| Argo CD | `cicd-argocd` | `https://argocd.<도메인>` | Helm `argo/argo-cd` |
-| Keycloak | (기존) `keycloak` | - | `cp-realm`에 클라이언트 `cicd-gitlab`, `cicd-argocd`, 그룹 `cicd-admins` **추가만** |
-| Harbor | (기존) `harbor` | - | 업체별 프로젝트·robot 계정 추가 |
+기존 시스템에는 다음만 **추가**한다.
+
+| 대상 | 추가 내용 |
+| --- | --- |
+| Keycloak `cp-realm` | 클라이언트 `cicd-jenkins`, `cicd-argocd`(groups 매퍼), 그룹 `cicd-admins`·`cicd-<업체>`, 사용자 `jenkins-<업체>` |
+| K-PaaS SCM | 저장소 `<업체>-gitops`, `<업체>-<앱>` (운영자가 `scm.` 화면에서 생성), 시작 소스·매니페스트 push |
+| Harbor | 업체별 프로젝트, robot 계정 `robot$<업체>+cicd` |
 
 ## 1. 사전 조건
 
-- CP-Portal 배포 완료: Keycloak, Harbor, `cp-portal` namespace의 TLS secret, `cp-portal-deployment/certs/ca.crt`
-- `kubectl`, `helm`, `curl`, `python3`(표준 라이브러리만 사용)
-- 클러스터 여유 자원: GitLab 요청 CPU 2 / 메모리 4Gi(상한 8Gi) + Runner 빌드 Pod(빌드당 최대 4Gi) + Argo CD 약 1Gi
-- StorageClass 여유 약 60Gi. GitLab 데이터는 NFS보다 블록 스토리지(Rook-Ceph RBD 등)를 권장
-- Master Node와 Pod에서 인터넷 접근: Docker Hub(`gitlab/gitlab-ce`, 빌드 이미지), `registry.gitlab.com`(runner helper),
-  `quay.io`·`ghcr.io`(Argo CD), `gcr.io`(kaniko), `charts.gitlab.io`, `argoproj.github.io`
-
-```bash
-kubectl top nodes
-kubectl describe nodes | grep -A6 "Allocated resources"
-kubectl get sc
-```
+- CP-Portal, K-PaaS 소스 컨트롤(`cp-source-control-deployment`) 배포 완료
+- `cp-portal-deployment/certs/ca.crt`(K-PaaS CA), `cp-portal` namespace의 TLS secret
+- Master Node: `kubectl`, `helm`, `git`, `curl`, `python3`
+- 자원: Jenkins 요청 0.5 CPU / 1Gi(상한 3Gi), PVC 20Gi + Argo CD 약 1Gi + 빌드 Pod(빌드당 최대 6Gi)
+- 인터넷 접근: `charts.jenkins.io`·`updates.jenkins.io`(플러그인), Docker Hub(빌드 이미지), `gcr.io`(kaniko),
+  `quay.io`·`ghcr.io`(Argo CD), `argoproj.github.io`. 폐쇄망이면 `CICD_DOCKERHUB`·`CICD_BASE_REGISTRY`를 Harbor 미러로 지정
+- SCM 관리자 git 비밀번호: `scm.<도메인>`에 `admin`으로 로그인 → 내정보 관리에서 설정한 값(`SCM_ADMIN_PASSWORD`)
 
 ## 2. 설정
 
-`script/cicd-vars.sh`. 도메인·StorageClass·Keycloak 관리자·Harbor 계정은 `cp-portal-vars.sh`에서 읽으므로
-보통은 수정하지 않는다.
+`script/cicd-vars.sh`. 도메인·StorageClass·Keycloak·Harbor 값은 `cp-portal-vars.sh`에서 읽는다.
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
-| `GITLAB_IMAGE` | `gitlab/gitlab-ce:17.11.1-ce.0` | 설치 전 [최신 패치 버전](https://hub.docker.com/r/gitlab/gitlab-ce/tags)으로 지정 권장 |
-| `GITLAB_RUNNER_CHART_VERSION` | `0.76.0` | GitLab 버전과 같은 대(major.minor) 버전 권장 |
+| `CICD_SOURCE` | `scm` | `gitlab`이면 GitLab 모드 (환경변수로도 지정 가능) |
+| `JENKINS_CHART_VERSION` | (최신) | 첫 설치 후 출력되는 차트 버전으로 고정 권장 |
+| `JENKINS_SSO` | `true` | `false`면 차트 기본 로컬 admin (SSO 문제 해결용) |
+| `SCM_ADMIN_USER` | `admin` | SCM 관리자 (비밀번호는 환경변수 `SCM_ADMIN_PASSWORD`) |
 | `ARGOCD_CHART_VERSION` | `7.8.0` | Argo CD 2.14 |
-| `GITLAB_DATA_SIZE` 등 | 50Gi / 1Gi / 5Gi | GitLab PVC 크기 |
-| `CICD_DOCKERHUB` | `docker.io/library` | CI 도구 이미지 위치. 폐쇄망이면 Harbor 미러 경로 |
-| `CICD_BASE_REGISTRY` | `docker.io/library` | Dockerfile `BASE_REGISTRY` (예: `harbor.<도메인>/base-images`) |
-| `KEYCLOAK_ADMIN_GROUP` | `cicd-admins` | Argo CD 관리자 그룹(운영 배포 Sync 권한) |
+| `CICD_DOCKERHUB` / `CICD_BASE_REGISTRY` | `docker.io/library` | 빌드 도구 이미지 / Dockerfile `BASE_REGISTRY` |
+| `KANIKO_IMAGE` | `gcr.io/kaniko-project/executor:v1.23.2-debug` | 이미지 빌드 (원 프로젝트는 보관 상태, 필요 시 교체) |
 
 ## 3. 설치
 
 ```bash
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
-./deploy-cicd-portal.sh 2>&1 | tee cicd-portal-deploy.log
-./check-cicd-portal.sh
+SCM_ADMIN_PASSWORD='<SCM admin git 비밀번호>' ./deploy-cicd-portal.sh preflight
+./deploy-cicd-portal.sh 2>&1 | tee cicd-portal-deploy.log      # preflight keycloak jenkins argocd
 ```
-
-단계별 실행도 가능하다(재실행 안전): `./deploy-cicd-portal.sh <단계> ...`
 
 | 단계 | 내용 |
 | --- | --- |
-| `preflight` | 도구, StorageClass, TLS secret, CA, Keycloak, IngressClass, 이미지 태그, 노드 자원 확인 |
-| `keycloak` | `cp-realm`에 클라이언트 `cicd-gitlab`·`cicd-argocd`(groups 매퍼) 생성, 그룹 `cicd-admins`에 포털 관리자 추가 |
-| `gitlab` | GitLab CE 배포(TLS secret·CA 복사, Omnibus 설정, Ingress). 최초 기동 5~15분 |
-| `bootstrap` | root 자동화 토큰 생성(`gitlab-rails runner`), 회원가입 차단, 인스턴스 CI 변수 등록 |
-| `templates` | `cicd/ci-templates` 프로젝트에 언어별 CI 템플릿 업로드 |
-| `runner` | Runner 등록(인스턴스 runner `cicd-k8s`), Helm 설치, online 확인 |
-| `argocd` | Argo CD Helm 설치(Keycloak OIDC, `cicd-admins` → admin) |
+| `preflight` | 도구, StorageClass, TLS secret, CA, Keycloak, IngressClass, SCM 실행·로그인, 노드 자원 |
+| `keycloak` | 클라이언트 `cicd-jenkins`·`cicd-argocd` 생성, 그룹 `cicd-admins`에 포털 관리자 추가 |
+| `jenkins` | Jenkins Helm 설치: K-PaaS SSO(oic-auth), `cicd-admins`=관리자, JVM에 K-PaaS CA 등록, Ingress |
+| `argocd` | Argo CD Helm 설치: K-PaaS SSO, `cicd-admins`=관리자 |
+| `jenkins-token` | (설치 후 1회) 스크립트용 Jenkins API 토큰 저장 |
 
-생성된 비밀값은 `cicd-gitlab/cicd-portal-secrets`에 저장된다(root 비밀번호, 자동화 토큰, OIDC 클라이언트 secret).
+설치 후 **Jenkins API 토큰 등록**(업체 등록·앱 추가 스크립트가 사용):
+
+1. `cicd-admins` 그룹 사용자(예: `admin`)로 `https://jenkins.<도메인>` 로그인(K-PaaS SSO)
+2. 우측 상단 사용자 → **Security** → API Token **Add new Token** → 복사
+3. `JENKINS_USER=admin JENKINS_API_TOKEN='<토큰>' ./deploy-cicd-portal.sh jenkins-token`
+
+생성된 비밀값은 `cicd-jenkins/cicd-portal-secrets`에 저장된다(OIDC secret, Jenkins API 토큰, `jenkins-<업체>` Keycloak 비밀번호).
 
 ## 4. 로그인
 
-| 시스템 | 일반 로그인 | 비상(break-glass) 계정 |
+| 시스템 | 로그인 | 권한 |
 | --- | --- | --- |
-| GitLab | **K-PaaS SSO** 버튼 (Keycloak `cp-realm` 계정) | `root` / `kubectl -n cicd-gitlab get secret cicd-portal-secrets -o jsonpath='{.data.root-password}' \| base64 -d` |
-| Argo CD | **LOG IN VIA K-PAAS SSO** | `admin` / `kubectl -n cicd-argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+| SCM `https://scm.<도메인>` | Keycloak `cp-realm` 계정 | 저장소별 참여자(쓰기/보기) |
+| Jenkins `https://jenkins.<도메인>` | **K-PaaS SSO** | `cicd-admins`: 관리자 / `cicd-<업체>`: 업체 폴더 조회·빌드 / 그 외: 읽기 |
+| Argo CD `https://argocd.<도메인>` | **LOG IN VIA K-PAAS SSO** | `cicd-admins`: 관리자 / `cicd-<업체>`: 업체 앱 조회·dev Sync |
 
-- **Keycloak 사용자에 이메일이 있어야 GitLab에 로그인된다.** Keycloak 관리 콘솔 → `cp-realm` → Users에서 Email 입력
-  (Email verified 켬). 이메일이 없으면 "Email can't be blank"로 실패한다.
-- GitLab 계정은 SSO 최초 로그인 시 자동 생성된다(사용자명 = Keycloak `preferred_username`). 회원가입은 막혀 있다.
-- Argo CD 권한은 Keycloak 그룹으로 부여된다: `cicd-admins` = 전체 관리자, `cicd-<업체>` = 해당 업체 프로젝트
-  조회 + dev Sync. 그룹 변경 후에는 Argo CD에서 로그아웃/로그인한다.
+- Argo CD 비상 계정: `admin` / `kubectl -n cicd-argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
+- Jenkins SSO가 실패하면 `JENKINS_SSO=false ./deploy-cicd-portal.sh jenkins`로 로컬 admin 모드 전환 후 원인 확인
+  (`kubectl -n cicd-jenkins get secret jenkins -o jsonpath='{.data.jenkins-admin-password}' | base64 -d`)
+- Keycloak 그룹 변경 후에는 Jenkins·Argo CD에서 로그아웃/로그인한다.
 
-## 5. 업체 등록과 서비스 추가
+## 5. 업체 등록
 
-```bash
-# 업체 등록: GitLab 그룹·gitops 저장소, Harbor 프로젝트·robot, namespace, Argo CD 프로젝트
-./onboard-vendor.sh saeoll saeoll,vendor-dev1
+### 5-1. SCM 준비 (운영 관리자, `scm.<도메인>`)
 
-# 서비스 추가: 소스 프로젝트(starter), gitops 매니페스트, Argo CD 애플리케이션(dev/prod)
-./add-app.sh saeoll homepage php            # java-gradle | java-maven | php | node | vue
-./add-app.sh saeoll front vue
-./add-app.sh saeoll api java-gradle
-```
-
-- `onboard-vendor.sh`의 사용자는 GitLab에 **한 번 로그인한 뒤** 그룹 멤버(Developer)로 추가된다.
-  로그인 전이면 경고만 나오므로 로그인 후 같은 명령을 다시 실행한다. Keycloak 그룹(`cicd-<업체>`)은 바로 추가된다.
-- `add-app.sh`는 기존 파일을 덮어쓰지 않는다. 기존 소스 저장소를 쓰려면 `SKIP_STARTER=1 ./add-app.sh ...` 후
-  `starters/<유형>/.gitlab-ci.yml`의 `include`, 8080 포트로 동작하는 Dockerfile, 헬스 체크 경로(기본 `/healthz`,
-  PHP `/healthz.php`)를 저장소에 추가한다.
-
-| 생성물 | 위치 |
+| 항목 | 내용 |
 | --- | --- |
-| 소스 | `https://gitlab.<도메인>/<업체>/<앱>` (main, develop, 보호 태그 `v*`) |
-| GitOps | `<업체>/gitops` → `apps/<앱>/base`, `apps/<앱>/overlays/{dev,prod}` (kustomize) |
-| 이미지 | `harbor.<도메인>/<업체>/<앱>:dev-<sha>-<번호>` / `:vX.Y.Z` |
-| Argo CD | `<업체>-<앱>-dev`(자동 Sync), `<업체>-<앱>-prod`(수동 Sync) |
-| URL | dev `https://<앱>-<업체>-dev.<도메인>`, prod `https://<앱>-<업체>.<도메인>` |
+| gitops 저장소 | **레파지토리 신규생성** → 이름 `<업체>-gitops`, 유형 Git |
+| CI 계정 | `jenkins-<업체>`: `onboard-vendor.sh`가 Keycloak에 생성 → 그 계정으로 `scm.` **최초 로그인** → 내정보 관리에서 **git 비밀번호 설정** |
+| 권한 | `<업체>-gitops` 참여자: `jenkins-<업체>` **쓰기 권한** |
 
-## 6. 개발·배포 흐름
+저장소·권한은 반드시 `scm.` 화면에서 만든다(SCM-Manager 관리 화면에서 직접 만들면 K-PaaS 화면에 나오지 않는다).
 
-| 동작 | 파이프라인 | 배포 |
-| --- | --- | --- |
-| feature 브랜치 push, MR | build, test | - |
-| `develop` push/merge | build, test, image, deploy | gitops dev 태그 갱신 → Argo CD 자동 Sync → `<업체>-dev` |
-| 태그 `vX.Y.Z` 생성(Maintainer만) | build, test, image, deploy | gitops prod 태그 갱신 → **`cicd-admins`가 Argo CD에서 Sync** → `<업체>-prod` |
-
-롤백: Argo CD 애플리케이션 → History and Rollback, 또는 gitops 저장소에서 overlay의 `newTag`를 이전 값으로 되돌린다.
-
-언어별 템플릿은 [ci-templates/README.md](ci-templates/README.md)를 참고한다. 템플릿을 고친 뒤에는
-`./deploy-cicd-portal.sh templates`로 다시 올린다(모든 서비스에 즉시 적용되므로, 안정판은 태그 `v1.0.0` 등을 만들어
-서비스에서 `ref: v1.0.0`으로 고정해도 된다).
-
-## 7. 점검과 삭제
+### 5-2. 실행
 
 ```bash
-./check-cicd-portal.sh          # Pod, 엔드포인트, Keycloak 클라이언트, GitLab API·runner·템플릿, Argo CD 앱 상태
-./uninstall-cicd-portal.sh      # GitLab(데이터 포함)·Runner·Argo CD·Keycloak 클라이언트 삭제, 업체 namespace·Harbor는 유지
+export SCM_ADMIN_PASSWORD='<SCM admin git 비밀번호>'
+./onboard-vendor.sh saeoll saeoll,vendor-dev1        # 1차: Keycloak 사용자 jenkins-saeoll 생성 + 남은 할 일 출력
+SCM_CI_PASSWORD='<jenkins-saeoll git 비밀번호>' ./onboard-vendor.sh saeoll saeoll,vendor-dev1
 ```
 
-## 8. 운영 참고
+SCM 준비가 덜 됐으면 할 일 목록을 출력하고 종료 코드 3으로 끝난다. 완료 후 다시 실행한다(재실행 안전).
 
-- **네트워크 정책**: K-PaaS Kyverno 정책이 새 namespace에 기본 NetworkPolicy를 만든다. GitLab Pod에는 기존 관례인
-  `cp-role: shared` 라벨을 붙여 Runner·Argo CD가 클러스터 내부 주소(`http://gitlab.cicd-gitlab.svc.cluster.local`)로
-  접근하게 했다.
-- **사설 인증서**: K-PaaS CA를 GitLab(`/etc/gitlab/trusted-certs`), Argo CD(OIDC `rootCA`), 빌드 Pod(`/etc/cicd-ca/ca.crt`,
-  kaniko `--registry-certificate`)에 넣는다. Runner·Argo CD는 GitLab에 내부 http로 접근하므로 인증서가 필요 없다.
-- **백업**: `kubectl -n cicd-gitlab exec deploy/gitlab -- gitlab-backup create` (결과: `/var/opt/gitlab/backups`) +
-  `gitlab-secrets.json`·`gitlab.rb`(`/etc/gitlab`). Argo CD 설정은 이 저장소와 gitops 저장소로 재현된다.
-- **업그레이드**: `GITLAB_IMAGE`를 [지원 업그레이드 경로](https://docs.gitlab.com/update/upgrade_paths/)대로 한 단계씩 올리고
-  `./deploy-cicd-portal.sh gitlab`. Runner 차트도 같은 버전대로 맞춘다.
-- **한계**: GitLab은 Omnibus 단일 Pod(HA 아님, 재시작 시 수 분 중단)이다. 사용자·저장소가 늘면 GitLab 공식 Helm 차트
-  (외부 PostgreSQL/Redis)로 이전을 검토한다. GitLab CE에서는 OIDC 그룹이 GitLab 그룹으로 자동 동기화되지 않으므로
-  GitLab 멤버십은 `onboard-vendor.sh`로 관리한다.
-- **토큰 만료**: 자동화 토큰과 gitops 프로젝트 토큰은 364일 후 만료된다. 만료 전 `./deploy-cicd-portal.sh bootstrap`
-  (자동화 토큰: secret에서 `automation-token`을 지운 뒤 실행)과 `./onboard-vendor.sh <업체>`를 다시 실행한다.
+| 생성물 | 내용 |
+| --- | --- |
+| Keycloak | 그룹 `cicd-saeoll`(+ 개발자), 사용자 `jenkins-saeoll` |
+| Harbor | 프로젝트 `saeoll`, robot `robot$saeoll+cicd` |
+| namespace | `saeoll-dev`, `saeoll-prod` (quota CPU 4 / 메모리 8Gi / Pod 30, pull secret `harbor-cicd`, TLS) |
+| SCM | `saeoll-gitops` 초기화(README, main) |
+| Jenkins | 폴더 `saeoll`(그룹 `cicd-saeoll` 조회·빌드), 폴더 credential `saeoll-harbor`, `saeoll-scm` |
+| Argo CD | 프로젝트 `saeoll`(dev만 업체 Sync, prod는 `cicd-admins`), gitops 저장소 인증 |
+
+## 6. 서비스 추가
+
+1. `scm.` 화면에서 저장소 `<업체>-<앱>` 생성(Git), 참여자: `jenkins-<업체>` **보기**, 개발자 **쓰기**
+2. 실행:
+
+```bash
+./add-app.sh saeoll homepage php            # java-gradle | java-maven | php | node | vue  [헬스 체크 경로]
+```
+
+| 생성물 | 내용 |
+| --- | --- |
+| 소스 `saeoll-homepage` | 시작 소스(Dockerfile, Jenkinsfile, 샘플 앱)를 `main`에 push, `develop` 브랜치 생성. 기존 파일은 덮어쓰지 않음 |
+| gitops `saeoll-gitops` | `apps/homepage/base` + `overlays/dev,prod` (kustomize) |
+| Jenkins | `saeoll/homepage-dev`(develop 폴링) 생성 후 첫 빌드 실행, `saeoll/homepage-release`(RELEASE_TAG) |
+| Argo CD | `saeoll-homepage-dev`(자동 Sync), `saeoll-homepage-prod`(수동 Sync) |
+| URL | dev `https://homepage-saeoll-dev.<도메인>`, prod `https://homepage-saeoll.<도메인>` |
+
+기존 소스를 쓰려면 `main`에 먼저 push하고 `SKIP_STARTER=1 ./add-app.sh ...`. 저장소에는 8080 포트 Dockerfile,
+헬스 체크 경로(기본 `/healthz`, PHP `/healthz.php`), `starters/<유형>/Jenkinsfile`을 추가한다.
+
+## 7. 개발·배포 흐름
+
+```bash
+git clone -b develop https://scm-manager.<도메인>/scm/git/saeoll-homepage   # 사용자 / 내정보 관리의 git 비밀번호
+```
+
+SCM-Manager 1.x 저장소의 기본 브랜치(HEAD)는 `master`라서 `-b develop`(또는 `-b main`)으로 clone한다.
+
+| 동작 | Jenkins | 배포 |
+| --- | --- | --- |
+| `develop` push | `<앱>-dev` (5분 내 자동): build → test → 이미지 `dev-<sha>-<번호>` | gitops dev 태그 갱신 → Argo CD 자동 Sync → `<업체>-dev` |
+| 릴리스 | `git tag v1.0.0 && git push origin v1.0.0` → `<앱>-release`를 `RELEASE_TAG=v1.0.0`으로 실행 | gitops prod 태그 갱신 → **`cicd-admins`가 Argo CD에서 Sync** → `<업체>-prod` |
+| 롤백 | - | Argo CD → History and Rollback, 또는 gitops overlay의 `newTag`를 이전 값으로 되돌림 |
+
+Jenkinsfile은 저장소에 있으므로 빌드 명령·이미지를 서비스별로 수정할 수 있다(상단 `buildScript`, `testScript`, `buildImage`).
+
+## 8. 점검과 삭제
+
+```bash
+SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh   # Pod, SCM·Jenkins·Argo CD·Keycloak, API 로그인, Argo CD 앱 상태
+./uninstall-cicd-portal.sh                         # Jenkins·Argo CD·Keycloak 클라이언트 삭제 (SCM 저장소, 업체 namespace, Harbor 유지)
+```
+
+## 9. 운영 참고
+
+- **네트워크**: Jenkins 빌드 Pod와 Argo CD는 SCM에 클러스터 내부 주소
+  `http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm/git/<저장소>`로 접근한다
+  (`cp-source-control` namespace는 K-PaaS Kyverno 기본 NetworkPolicy 대상에서 제외되어 있음).
+- **사설 인증서**: K-PaaS CA를 Jenkins JVM truststore(초기화 컨테이너), Argo CD OIDC `rootCA`, 빌드 Pod(`/etc/cicd-ca/ca.crt`,
+  kaniko `--registry-certificate`)에 넣는다.
+- **격리**: 업체 credential은 Jenkins 폴더 범위라 다른 업체 job에서 쓸 수 없다. 단, 빌드 Pod는 공통 namespace(`cicd-jenkins`)에서
+  실행되며 Jenkinsfile은 업체가 수정할 수 있으므로, 업체 수가 늘면 업체별 에이전트 namespace 분리를 검토한다.
+- **SCM 제약**: 코드 리뷰(MR)·브랜치 보호·webhook이 없다. 운영 반영은 Argo CD 수동 Sync(`cicd-admins`)로 통제하고,
+  빌드는 5분 폴링으로 시작한다.
+- **백업**: Jenkins PVC(`cicd-jenkins`), SCM(K-PaaS 소스 컨트롤 PVC), gitops 저장소. Argo CD는 이 저장소와 gitops로 재현된다.
+
+## 10. SCM-Manager 업그레이드 검토
+
+**결론: K-PaaS 소스 컨트롤의 SCM-Manager(1.x)를 그 자리에서 최신(3.x)으로 올리는 것은 권장하지 않는다.**
+
+| 항목 | 내용 |
+| --- | --- |
+| SCM-Manager 자체 | 1.60 이상이면 3.x로 데이터 이전 가능(사용자·그룹·저장소·권한). 3.x는 namespace/이름 구조로 바뀌어 첫 기동 시 이름 지정 마법사가 뜬다 |
+| K-PaaS 연동 | K-PaaS 소스 컨트롤 API/UI는 1.x REST API(`/scm/api/rest/...`)를 쓰는 것으로 보인다(서버 로그·API 응답으로 확인). 3.x에는 이 API가 없어 **`scm.` 화면의 저장소 생성·사용자 등록·권한이 동작하지 않을 가능성이 크다** |
+| 이미지 | `cp-source-control-manager:latest`는 K-PaaS가 빌드한 이미지라 공식 이미지로 바꾸면 K-PaaS 구성이 빠진다 |
+| clone 주소 | `/scm/git/<이름>` → `/scm/repo/<namespace>/<이름>`으로 바뀌어 Jenkins·Argo CD·개발자 설정을 모두 고쳐야 한다 |
+| SSO | 3.x에 공식 OIDC(Keycloak) 플러그인이 확인되지 않는다(제3자 플러그인만 존재) |
+
+서버에서 버전과 API 사용을 확인하는 방법:
+
+```bash
+kubectl -n cp-source-control exec deploy/cp-source-control-manager-deployment -- \
+  sh -c 'find / -name "scm-core-*.jar" 2>/dev/null | head -3'
+kubectl -n cp-source-control logs deploy/cp-source-control-api-deployment --tail=500 | grep -m5 "api/rest"
+```
+
+최신 SCM이 필요하면 K-PaaS 소스 컨트롤은 그대로 두고 **별도로 구축**한다. 이 경우 Keycloak SSO·MR·webhook을 모두 갖춘
+GitLab CE([11장](#11-gitlab-모드))가 SCM-Manager 3.x 별도 설치보다 적합하다. Argo CD·gitops·Dockerfile은 그대로 재사용된다.
+
+## 11. GitLab 모드
+
+`CICD_SOURCE=gitlab`으로 실행하면 SCM·Jenkins 대신 GitLab CE(Omnibus 단일 Pod) + GitLab Runner를 설치한다.
+
+```bash
+export CICD_SOURCE=gitlab
+./deploy-cicd-portal.sh            # preflight keycloak gitlab bootstrap templates runner argocd
+./onboard-vendor.sh saeoll saeoll
+./add-app.sh saeoll homepage php
+```
+
+| 항목 | 내용 |
+| --- | --- |
+| 자원 | GitLab 요청 CPU 2 / 4Gi(상한 8Gi), PVC 56Gi, 빌드당 최대 4Gi |
+| 로그인 | GitLab **K-PaaS SSO** (Keycloak 사용자에 이메일 필수). 비상: `root` / `cicd-gitlab/cicd-portal-secrets`의 `root-password` |
+| CI | `cicd/ci-templates`의 언어별 템플릿을 `.gitlab-ci.yml`에서 include ([ci-templates](ci-templates/README.md)) |
+| 흐름 | `develop` → dev 자동, 보호 태그 `vX.Y.Z`(Maintainer) → prod 태그 갱신 → Argo CD 수동 Sync |
+| 백업 | `kubectl -n cicd-gitlab exec deploy/gitlab -- gitlab-backup create` + `/etc/gitlab` |
+| 한계 | 단일 Pod(HA 아님). OIDC 그룹이 GitLab 그룹으로 동기화되지 않아 멤버십은 `onboard-vendor.sh`로 관리 |

@@ -2,16 +2,22 @@
 # Onboard a vendor (team) to the CI/CD portal.
 #
 # Usage: ./onboard-vendor.sh <vendor> [user1,user2,...]
-#   vendor : lowercase id, e.g. saeoll -> GitLab group, Harbor project, namespaces <vendor>-dev/prod
-#   users  : Keycloak/GitLab usernames of the vendor developers (Developer role).
-#            GitLab membership needs one prior GitLab sign-in per user; re-run to add later.
+#   vendor : lowercase id, e.g. saeoll -> Harbor project, namespaces <vendor>-dev/prod, Argo CD project
+#   users  : Keycloak usernames of the vendor developers (Keycloak group cicd-<vendor>;
+#            with CICD_SOURCE=gitlab also GitLab group members after their first GitLab sign-in)
+#
+# CICD_SOURCE=scm (K-PaaS SCM + Jenkins), env:
+#   SCM_ADMIN_PASSWORD  git password of the SCM admin (scm.<domain> > 내정보 관리)
+#   SCM_CI_PASSWORD     git password of the CI account jenkins-<vendor> (after its first scm login)
+#   Prepared in scm.<domain>: repository <vendor>-gitops with jenkins-<vendor> as 참여자 (쓰기 권한).
+#   The script creates the Keycloak account jenkins-<vendor> if it does not exist and stops
+#   with a checklist while SCM items are missing; re-run after completing them.
 #
 # Creates (idempotent):
-#   Keycloak group cicd-<vendor> (+ members)        -> Argo CD project role
-#   GitLab group <vendor>, project <vendor>/gitops, group CI variables
-#   Harbor project <vendor> + robot account "cicd"
-#   namespaces <vendor>-dev, <vendor>-prod (quota, limits, pull secret, TLS secret)
-#   Argo CD AppProject <vendor> + repository credentials for the gitops repo
+#   all    : Keycloak group cicd-<vendor>, Harbor project <vendor> + robot "cicd",
+#            namespaces <vendor>-dev/prod (quota, limits, pull secret, TLS), Argo CD AppProject + repo credentials
+#   scm    : Keycloak user jenkins-<vendor>, gitops repo README, Jenkins folder <vendor> + folder credentials
+#   gitlab : GitLab group <vendor>, project <vendor>/gitops, group CI variables
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR"
@@ -24,34 +30,32 @@ USERS=${2:-}
   echo "Usage: $0 <vendor: lowercase letters, digits, '-'> [user1,user2,...]" >&2; exit 2; }
 [[ "$VENDOR" != "$TEMPLATES_GROUP" ]] || die "'$TEMPLATES_GROUP' is reserved for the CI templates."
 load_portal_vars
-load_gitlab_token
 require_cmds kubectl python3
 ENVS=(dev prod)
 PULL_SECRET=harbor-cicd
-GITOPS_PROJECT="$VENDOR/gitops"
-GITOPS_URL="$GITLAB_INTERNAL_URL/$VENDOR/gitops.git"
+CI_USER="jenkins-$VENDOR"
+TODO=()
 
-# 1. Keycloak group (Argo CD access) --------------------------------------------
+if [[ "$CICD_SOURCE" == scm ]]; then
+  require_cmds git
+  require_scm_admin
+  load_jenkins_token
+  GITOPS_REPO="$VENDOR-gitops"
+  GITOPS_URL="$SCM_INTERNAL_GIT_URL/$GITOPS_REPO"
+else
+  load_gitlab_token
+  GITOPS_URL="$GITLAB_INTERNAL_URL/$VENDOR/gitops.git"
+fi
+
+# 1. Keycloak group (Argo CD / Jenkins access) -------------------------------------
 $API kc-group "cicd-$VENDOR" --members "$USERS"
 
-# 2. GitLab group, gitops project, members ----------------------------------------
-$API gl-group "$VENDOR" --visibility private >/dev/null
-$API gl-project "$VENDOR" gitops --visibility private >/dev/null
-[[ -n "$USERS" ]] && $API gl-members "$VENDOR" "$USERS" --level 30
-
-# CI writes image tags to the gitops repo; Argo CD reads it
-gitops_ci_token=$($API gl-project-token "$GITOPS_PROJECT" gitops-ci --scopes write_repository,read_repository --level 40)
-gitops_cd_token=$($API gl-project-token "$GITOPS_PROJECT" gitops-argocd --scopes read_repository --level 20)
-printf '%s' "$gitops_ci_token" | $API gl-group-var "$VENDOR" GITOPS_TOKEN --masked
-
-# 3. Harbor project and robot account ---------------------------------------------
+# 2. Harbor project and robot account ------------------------------------------------
 $API harbor-project "$VENDOR"
 mapfile -t robot < <($API harbor-robot "$VENDOR" cicd)
 ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account for $VENDOR."
-printf '%s' "${robot[0]}" | $API gl-group-var "$VENDOR" HARBOR_USER
-printf '%s' "${robot[1]}" | $API gl-group-var "$VENDOR" HARBOR_PASSWORD --masked
 
-# 4. Namespaces ---------------------------------------------------------------------
+# 3. Namespaces --------------------------------------------------------------------------
 for env in "${ENVS[@]}"; do
   ns="$VENDOR-$env"
   ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" cp.k-paas.org/env="$env" app.kubernetes.io/managed-by=cicd-portal
@@ -90,8 +94,71 @@ EOF
   ok "Namespace $ns (quota, limits, pull secret $PULL_SECRET, TLS secret)"
 done
 
-# 5. Argo CD project and repository credentials --------------------------------------
-kubectl apply -f - >/dev/null <<EOF
+# 4. Source repositories and CI -------------------------------------------------------------
+if [[ "$CICD_SOURCE" == scm ]]; then
+  # CI account in Keycloak (SCM/Jenkins/Argo CD use it for git access to the vendor repos)
+  ci_kc_password=$(get_secret "kc-$CI_USER-password")
+  [[ -n "$ci_kc_password" ]] || ci_kc_password=$(random_string 20)
+  state=$(printf '%s' "$ci_kc_password" | $API kc-user "$CI_USER" --email "$CI_USER@cicd.$HOST_DOMAIN")
+  if [[ "$state" == created ]]; then
+    set_secret "kc-$CI_USER-password" "$ci_kc_password"
+  fi
+  if [[ -z "${SCM_CI_PASSWORD:-}" ]]; then
+    TODO+=("Sign in to https://scm.$HOST_DOMAIN as $CI_USER, set its git password in 내정보 관리, re-run with SCM_CI_PASSWORD='<that git password>'
+      (Keycloak password of $CI_USER: kubectl -n $SECRETS_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.kc-$CI_USER-password}' | base64 -d)")
+  fi
+  if ! $API scm-check "$GITOPS_REPO" --user "$CI_USER" --level WRITE; then
+    TODO+=("In https://scm.$HOST_DOMAIN create Git repository '$GITOPS_REPO' and add $CI_USER as 참여자 (쓰기 권한)")
+  fi
+  if ((${#TODO[@]} == 0)); then
+    # gitops repository skeleton (main branch)
+    dir=$(scm_clone "$GITOPS_REPO")
+    if [[ ! -f "$dir/README.md" ]]; then
+      cat >"$dir/README.md" <<EOF
+# $VENDOR gitops
+
+Kubernetes manifests of $VENDOR services, deployed by Argo CD (CI/CD portal).
+
+- \`apps/<app>/base\`: Deployment, Service, Ingress
+- \`apps/<app>/overlays/dev\`: namespace $VENDOR-dev, image tag updated by Jenkins \`<app>-dev\`
+- \`apps/<app>/overlays/prod\`: namespace $VENDOR-prod, image tag updated by Jenkins \`<app>-release\`
+
+Do not edit \`newTag\` by hand except for a rollback.
+EOF
+    fi
+    if scm_commit_push "$dir" main "Initialize $VENDOR gitops (cicd-portal)"; then
+      ok "SCM $GITOPS_REPO initialized (main)"
+    else
+      info "SCM $GITOPS_REPO already initialized"
+    fi
+    scm_cleanup "$dir"
+
+    # Jenkins folder with folder-scoped credentials
+    $API jenkins-folder "$VENDOR" --group "cicd-$VENDOR"
+    printf '%s' "${robot[1]}" | $API jenkins-cred "$VENDOR" "$VENDOR-harbor" --username "${robot[0]}" \
+      --description "Harbor robot account ($VENDOR)"
+    printf '%s' "$SCM_CI_PASSWORD" | $API jenkins-cred "$VENDOR" "$VENDOR-scm" --username "$CI_USER" \
+      --description "SCM account $CI_USER (read app repositories, write $GITOPS_REPO)"
+    REPO_USER=$CI_USER
+    REPO_PASSWORD=$SCM_CI_PASSWORD
+  fi
+else
+  $API gl-group "$VENDOR" --visibility private >/dev/null
+  $API gl-project "$VENDOR" gitops --visibility private >/dev/null
+  [[ -n "$USERS" ]] && $API gl-members "$VENDOR" "$USERS" --level 30
+  # CI writes image tags to the gitops repo; Argo CD reads it
+  gitops_ci_token=$($API gl-project-token "$VENDOR/gitops" gitops-ci --scopes write_repository,read_repository --level 40)
+  gitops_cd_token=$($API gl-project-token "$VENDOR/gitops" gitops-argocd --scopes read_repository --level 20)
+  printf '%s' "$gitops_ci_token" | $API gl-group-var "$VENDOR" GITOPS_TOKEN --masked
+  printf '%s' "${robot[0]}" | $API gl-group-var "$VENDOR" HARBOR_USER
+  printf '%s' "${robot[1]}" | $API gl-group-var "$VENDOR" HARBOR_PASSWORD --masked
+  REPO_USER=gitops-argocd
+  REPO_PASSWORD=$gitops_cd_token
+fi
+
+# 5. Argo CD project and repository credentials ------------------------------------------------
+if [[ -n "${REPO_PASSWORD:-}" ]]; then
+  kubectl apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -102,9 +169,11 @@ metadata:
 stringData:
   type: git
   url: $GITOPS_URL
-  username: gitops-argocd
-  password: $gitops_cd_token
----
+  username: $REPO_USER
+  password: $REPO_PASSWORD
+EOF
+fi
+kubectl apply -f - >/dev/null <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -138,8 +207,18 @@ EOF
 ok "Argo CD project $VENDOR (repo $GITOPS_URL)"
 
 echo
+if ((${#TODO[@]})); then
+  echo "Vendor $VENDOR partially onboarded. Complete these in K-PaaS source control and re-run $0 $VENDOR:"
+  printf '  - %s\n' "${TODO[@]}"
+  exit 3
+fi
 echo "Vendor $VENDOR onboarded."
-echo "  GitLab group : $GITLAB_URL/$VENDOR   (gitops repo: $GITLAB_URL/$GITOPS_PROJECT)"
+if [[ "$CICD_SOURCE" == scm ]]; then
+  echo "  SCM          : https://scm.$HOST_DOMAIN  (gitops repository $GITOPS_REPO, CI account $CI_USER)"
+  echo "  Jenkins      : https://$JENKINS_HOST/job/$VENDOR/  (Keycloak group cicd-$VENDOR: read/build)"
+else
+  echo "  GitLab group : $GITLAB_URL/$VENDOR   (gitops repo: $GITLAB_URL/$VENDOR/gitops)"
+fi
 echo "  Harbor       : $HARBOR_URL/harbor/projects  (project $VENDOR, robot ${robot[0]})"
 echo "  Namespaces   : $VENDOR-dev, $VENDOR-prod"
 echo "  Argo CD      : https://$ARGOCD_HOST  (project $VENDOR, Keycloak group cicd-$VENDOR)"

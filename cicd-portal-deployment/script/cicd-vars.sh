@@ -1,10 +1,29 @@
-# CI/CD portal (GitLab CE + GitLab Runner + Argo CD) settings.
+# CI/CD portal settings (K-PaaS SCM + Jenkins + Argo CD, or GitLab CE + Runner + Argo CD).
 # HOST_DOMAIN, StorageClass, Keycloak, Harbor and TLS values are read from
 # cp-portal-deployment/script/cp-portal-vars.sh unless set here.
 
 # COMMON VARIABLE
 HOST_DOMAIN="{host domain}"                     # leave as-is to reuse the CP-Portal value
 K8S_STORAGECLASS=""                             # empty: CP-Portal value (e.g. cp-storageclass)
+
+# SOURCE REPOSITORY
+#   scm    : K-PaaS source control (SCM-Manager, scm.<domain>) + new Jenkins (CI) + Argo CD (CD)
+#   gitlab : GitLab CE (repositories + CI) + GitLab Runner + Argo CD
+CICD_SOURCE=${CICD_SOURCE:-scm}                 # env CICD_SOURCE=gitlab ./... to override
+
+# K-PaaS SCM (CICD_SOURCE=scm). Repositories/accounts are managed in scm.<domain>;
+# the scripts only check them and push starter/gitops files.
+SCM_NAMESPACE="cp-source-control"
+SCM_INTERNAL_URL="http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm"
+SCM_ADMIN_USER="admin"                          # SCM admin; password: env SCM_ADMIN_PASSWORD (git password)
+
+# JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
+JENKINS_NAMESPACE="cicd-jenkins"
+JENKINS_CHART_VERSION=""                        # empty: latest chart; pin after the first install
+JENKINS_SSO="true"                              # false: chart default local admin (for troubleshooting)
+JENKINS_DATA_SIZE="20Gi"
+JENKINS_TOOL_IMAGE="jenkins/jenkins:lts-jdk17"  # init container (keytool) for the JVM truststore
+KEYCLOAK_JENKINS_CLIENT_ID="cicd-jenkins"
 
 # NAMESPACES (new; the K-PaaS cp-pipeline / cp-source-control are not touched)
 GITLAB_NAMESPACE="cicd-gitlab"
