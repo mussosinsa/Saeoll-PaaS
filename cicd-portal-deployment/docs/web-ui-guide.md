@@ -333,7 +333,7 @@ Pod만 다시 띄우려면 앱 상세 → **deploy** 상자의 ⋮ → **Restart
 | ENABLE AUTO-SYNC (+ PRUNE RESOURCES, SELF HEAL 켬) | release 빌드가 끝나면 3분 안에 운영 자동 배포 |
 | DISABLE AUTO-SYNC | 다시 관리자 SYNC 승인 방식 |
 
-자동으로 바꾸면 release 잡을 관리자만 실행하도록 Jenkins 잡 권한도 함께 제한한다([설치 가이드 10-4](install-guide.md#10-4-선택-운영도-자동-배포로-바꾸기--소스-수정-없이)).
+자동으로 바꾸면 release 잡을 관리자만 실행하도록 Jenkins 잡 권한도 함께 제한한다([설치 가이드 10-3](install-guide.md#10-3-선택-운영도-자동-배포로--소스-수정-없이)).
 
 ## 5. 문제가 있을 때
 
