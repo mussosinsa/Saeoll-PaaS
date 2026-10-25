@@ -1,0 +1,81 @@
+# Dedicated MariaDB for the php-service dev environment (방식 A).
+# Copy to <vendor>-gitops: apps/php-service/overlays/dev/mariadb.yaml and add it to "resources" of
+# overlays/dev/kustomization.yaml. The namespace (<vendor>-dev) comes from that kustomization.
+# Credentials: Secrets php-service-db (app + DB user) and php-service-mariadb-root, created with
+# kubectl (never stored in Git) BEFORE pushing this file.
+apiVersion: v1
+kind: Service
+metadata:
+  name: php-service-mariadb
+  labels:
+    app: php-service-mariadb
+spec:
+  selector:
+    app: php-service-mariadb
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: php-service-mariadb
+  labels:
+    app: php-service-mariadb
+spec:
+  serviceName: php-service-mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: php-service-mariadb
+  template:
+    metadata:
+      labels:
+        app: php-service-mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: docker.io/library/mariadb:11.4      # LTS; mirror to Harbor in a closed network
+          args: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            # The official image creates the database and user on the first start (empty volume)
+            - name: MARIADB_DATABASE
+              valueFrom: {secretKeyRef: {name: php-service-db, key: DB_NAME}}
+            - name: MARIADB_USER
+              valueFrom: {secretKeyRef: {name: php-service-db, key: DB_USER}}
+            - name: MARIADB_PASSWORD
+              valueFrom: {secretKeyRef: {name: php-service-db, key: DB_PASSWORD}}
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: php-service-mariadb-root, key: password}}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: cp-storageclass            # kubectl get storageclass
+        resources:
+          requests:
+            storage: 2Gi

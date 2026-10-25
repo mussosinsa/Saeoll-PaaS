@@ -18,6 +18,7 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 > 처음 설치: [설치·설정·운영 전체 가이드](docs/install-guide.md) (초보자용, 신규 클러스터 기준)
 > 웹 화면 사용법: [Jenkins · Argo CD 웹 화면 가이드](docs/web-ui-guide.md)
 > 운영 절차: [운영 관리자 가이드](docs/admin-guide.md)
+> DB 연동 예제: [PHP + MariaDB 게시판 샘플](samples/php-board/README.md)
 
 아래 1~9장은 `scm`(Jenkins) 구성, [11장](#11-gitlab-구성)은 `gitlab` 구성이다.
 

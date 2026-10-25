@@ -1,0 +1,41 @@
+# Example: <vendor>-gitops apps/php-service/overlays/dev/kustomization.yaml after adding MariaDB.
+# Edit the existing file instead of replacing it: KEEP its current images[0].newTag (set by Jenkins)
+# and add only the lines marked "# + MariaDB".
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: saeoll-dev
+resources:
+  - ../../base
+  - mariadb.yaml                                   # + MariaDB (방식 A only; omit for 방식 B)
+images:
+  - name: app
+    newName: harbor.192.168.20.151.nip.io/saeoll/php-service
+    newTag: dev-e8ad2d85-4                         # keep the current value
+replicas:
+  - name: php-service
+    count: 1
+patches:
+  - target:
+      kind: Ingress
+      name: php-service
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: php-service-saeoll-dev.192.168.20.151.nip.io
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: php-service-saeoll-dev.192.168.20.151.nip.io
+  - target:                                        # + MariaDB: DB_* environment from Secret php-service-db
+      kind: Deployment
+      name: php-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - secretRef:
+              name: php-service-db
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: APP_NAME
+            value: php-service 게시판 (dev)

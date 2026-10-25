@@ -1,0 +1,12 @@
+{
+    "name": "kpaas/php-board",
+    "description": "MariaDB board sample for the CI/CD portal (PHP 8.3, PDO pdo_mysql from the Dockerfile)",
+    "type": "project",
+    "require": {
+        "php": ">=8.1"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}
