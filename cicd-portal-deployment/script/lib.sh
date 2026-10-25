@@ -28,6 +28,8 @@ load_portal_vars() {
     printf 'KEYCLOAK_CP_REALM=%q\n' "$KEYCLOAK_CP_REALM"
     printf 'REPOSITORY_USERNAME=%q\n' "$REPOSITORY_USERNAME"
     printf 'REPOSITORY_PASSWORD=%q\n' "$REPOSITORY_PASSWORD"
+    printf 'P_DATABASE_URL=%q\n' "${DATABASE_URL:-}"
+    printf 'DATABASE_USER_PASSWORD=%q\n' "${DATABASE_USER_PASSWORD:-}"
   )"
   HOST_DOMAIN=$own_domain
   [[ -z "$HOST_DOMAIN" || "$HOST_DOMAIN" == *'{'* ]] && HOST_DOMAIN=$P_HOST_DOMAIN
@@ -55,6 +57,8 @@ load_portal_vars() {
   SCM_URL=${CICD_SCM_URL:-"https://scm-manager.${HOST_DOMAIN}/scm"}
   SCM_GIT_URL=${CICD_SCM_GIT_URL:-"$SCM_URL/git"}
   SCM_INTERNAL_GIT_URL="$SCM_INTERNAL_URL/git"
+  # K-PaaS MariaDB (add-db.sh shared mode)
+  PLATFORM_DB_URL=${P_DATABASE_URL:-"mariadb.mariadb.svc.cluster.local:3306"}
 
   local src
   for src in $CICD_SOURCES; do

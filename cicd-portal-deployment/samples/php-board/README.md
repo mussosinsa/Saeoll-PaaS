@@ -70,6 +70,20 @@ Secret `php-service-db`의 키:
 순서: **① Secret → ② gitops(MariaDB·환경변수) → ③ 소스 push**. 순서를 바꿔도 결국 동작하지만,
 이 순서면 중간 오류 없이 한 번에 확인된다.
 
+### ①② 자동 (권장): add-db.sh
+
+서버(운영 관리자)에서 한 번 실행하면 ① Secret 생성과 ② gitops 수정(MariaDB 추가·envFrom 연결·push)을 모두 한다.
+비밀번호는 자동 생성되어 Secret에만 저장된다(화면·Git에 남지 않음). 다시 실행해도 기존 Secret·파일은 유지된다.
+
+```bash
+cd ~/Saeoll-PaaS/cicd-portal-deployment/script
+read -rsp 'scmadmin 비밀번호: ' SCM_ADMIN_PASSWORD; echo; export SCM_ADMIN_PASSWORD
+./add-db.sh saeoll php-service dev            # 방식 A (dedicated). 방식 B: ... dev shared
+```
+
+이미 아래 ①②를 손으로 진행했다면 실행해도 기존 Secret·`mariadb.yaml`·envFrom을 그대로 두고 없는 것만 채운다.
+아래 ①②는 스크립트가 하는 일을 손으로 하는 방법(참고용)이다.
+
 ### ① Secret 생성 (운영 관리자, 서버)
 
 ```bash
@@ -185,6 +199,10 @@ kubectl -n saeoll-dev exec -it php-service-mariadb-0 -- sh -c \
 MariaDB를 설치하지 않고 플랫폼 DB에 **전용 DB·계정**만 만든다. ②의 `mariadb.yaml`·`resources` 추가는 하지 않고
 `envFrom` 패치만 넣는다.
 
+자동: `./add-db.sh saeoll php-service dev shared` → DB·계정 `saeoll_php_service_dev`(그 DB에만 권한) 생성,
+Secret·gitops 연결까지 한다(K-PaaS MariaDB root 비밀번호는 `cp-portal-vars.sh`의 `DATABASE_USER_PASSWORD`).
+손으로 할 때:
+
 ```bash
 source ~/Saeoll-PaaS/cp-portal-deployment/script/cp-portal-vars.sh      # DATABASE_USER_PASSWORD (K-PaaS MariaDB root)
 DB_PW=$(openssl rand -hex 16)
@@ -205,8 +223,10 @@ unset DB_PW
 
 ## 5. 운영(prod) 적용 시
 
-1. `saeoll-prod`에 **dev와 다른 비밀번호**로 Secret을 만든다(①과 동일, `NS=saeoll-prod`).
-2. `apps/php-service/overlays/prod/`에 같은 변경(방식 A면 `mariadb.yaml` 복사 + `kustomization.yaml` 수정)을 하고 push.
+1. `./add-db.sh saeoll php-service prod` (dev와 다른 비밀번호의 Secret + gitops `overlays/prod` 변경).
+   손으로 할 때: ①과 동일하게 `NS=saeoll-prod`로 Secret 생성, `overlays/prod/`에 ②와 같은 변경 후 push.
+2. 이미 있는 DB를 쓸 때(관리형 DB 등):
+   `DB_HOST=<주소> DB_NAME=<DB> DB_USER=<계정> DB_PASSWORD=<비밀번호> ./add-db.sh saeoll php-service prod external`
 3. 운영 관리자가 Argo CD `saeoll-php-service-prod`에서 **APP DIFF**로 확인 후 SYNC.
 4. 백업: 방식 A는 정기 덤프를 받는다(예: `kubectl -n saeoll-prod exec php-service-mariadb-0 -- sh -c 'mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction "$MARIADB_DATABASE"' > board-$(date +%F).sql`).
    중요한 운영 데이터는 이중화·백업이 갖춰진 별도 DB(관리형 DB, Galera/Operator 등) 사용을 검토한다.

@@ -59,6 +59,10 @@ CICD_DOCKERHUB="docker.io/library"              # CI tool images (gradle, maven,
 CICD_BASE_REGISTRY="docker.io/library"          # Dockerfile BASE_REGISTRY (e.g. harbor.<domain>/base-images)
 KANIKO_IMAGE="gcr.io/kaniko-project/executor:v1.23.2-debug"
 
+# Application databases (add-db.sh)
+MARIADB_IMAGE="docker.io/library/mariadb:11.4"  # dedicated MariaDB per app/env (LTS); Harbor mirror in a closed network
+DB_SIZE=${DB_SIZE:-2Gi}                          # dedicated MariaDB volume
+
 # The belows are the default values.
 INGRESS_CLASS_NAME="nginx"
 CP_PORTAL_NAMESPACE="cp-portal"

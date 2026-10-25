@@ -18,6 +18,7 @@
 #   CI      : scm: Jenkins jobs <vendor>/<app>-dev (Poll SCM develop) and <vendor>/<app>-release (RELEASE_TAG)
 #             gitlab: .gitlab-ci.yml from the starter
 #   Argo CD : <vendor>-<app>-dev (auto sync), <vendor>-<app>-prod (manual sync)
+#   database: DB=dedicated|shared|external also runs ./add-db.sh <vendor> <app> dev <mode> (MariaDB + Secret <app>-db)
 # Your own repository needs a Dockerfile listening on 8080, the health path and the CI file
 # (Jenkinsfile or .gitlab-ci.yml) from ../starters/<type>/.
 set -euo pipefail
@@ -176,6 +177,11 @@ $sync
 EOF
   ok "Argo CD application $VENDOR-$APP-$env"
 done
+
+# Optional database for dev (prod: ./add-db.sh <vendor> <app> prod <mode> after the dev test)
+if [[ -n "${DB:-}" ]]; then
+  ./add-db.sh "$VENDOR" "$APP" dev "$DB"
+fi
 
 # Pipeline jobs need one build before Poll SCM starts watching develop
 if [[ "$SOURCE" == scm ]]; then

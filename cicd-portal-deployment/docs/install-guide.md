@@ -207,6 +207,7 @@ cicd-portal-deployment/
 | `check-cicd-portal.sh` | 설치 후, 매일 | Pod·접속·로그인·앱 상태 점검 | O (변경 없음) |
 | `onboard-vendor.sh` | 업체 추가·인원 변경 | 업체 그룹·Harbor·네임스페이스·Jenkins 폴더·Argo CD 프로젝트 | O |
 | `add-app.sh` | 앱 추가 | 시작 소스·gitops·Jenkins 잡·Argo CD 앱 | O (기존 파일은 덮어쓰지 않음) |
+| `add-db.sh` | 앱에 DB 연결 | DB Secret(비밀번호 자동 생성)·MariaDB·gitops 연결 | O (기존 Secret 유지) |
 | `migrate-vendor.sh` | scm→gitlab 이전 | 저장소 이력째 복사, 배포 대상 전환 | O |
 | `uninstall-cicd-portal.sh` | 삭제 | 구성 요소 삭제 | - |
 
@@ -276,7 +277,24 @@ Pod 상태, 각 URL 응답, Keycloak 클라이언트, API 로그인, 업체별 �
 
 헬스체크 경로 기본값: PHP `/healthz.php`, 그 외 `/healthz`.
 
-### 4-6. migrate-vendor.sh / uninstall-cicd-portal.sh
+### 4-6. add-db.sh (DB 연결)
+
+```text
+사용법: ./add-db.sh <업체ID> <앱이름> [dev|prod|all] [dedicated|shared|external]
+```
+
+| 방식 | 하는 일 | 용도 |
+| --- | --- | --- |
+| `dedicated` (기본) | `<업체>-<환경>`에 앱 전용 MariaDB(StatefulSet, PVC 2Gi)를 gitops로 추가 | 업체·환경별 분리 DB |
+| `shared` | K-PaaS 공용 MariaDB에 DB·계정 `<업체>_<앱>_<환경>` 생성 | 빠른 연결 확인 |
+| `external` | 환경변수 `DB_HOST DB_NAME DB_USER DB_PASSWORD [DB_PORT]`의 기존 DB 사용 | 관리형·외부 DB |
+
+공통: Secret `<앱>-db`(`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`)를 만들고 gitops overlay의 Deployment에
+`envFrom`으로 연결한다. 비밀번호는 자동 생성되어 Secret에만 저장된다. Secret이 이미 있으면 유지하고(`DB_SECRET_UPDATE=1`로
+shared·external 재생성), dedicated는 MariaDB가 처음 만든 비밀번호를 계속 쓰므로 바꾸지 않는다.
+`add-app.sh`에 `DB=dedicated` 등을 붙이면 앱 추가와 함께 dev에 연결한다. 예제: `samples/php-board`.
+
+### 4-7. migrate-vendor.sh / uninstall-cicd-portal.sh
 
 ```bash
 SCM_ADMIN_PASSWORD=... PM_USERS=<PM> ./migrate-vendor.sh <업체> <개발자들>   # scm → gitlab 이전 (11-6)
@@ -481,7 +499,7 @@ SCM_REPO=saeoll REPLACE_CI=1 ./add-app.sh saeoll php-service php
 ```
 - 저장소에 `main`이 없고 `master`만 있으면 `master` 이력으로 `main`·`develop`을 만든다(`master`는 그대로 둔다).
 - 시작 소스 파일(Dockerfile, Jenkinsfile, 샘플)은 **없는 파일만** 추가된다. 기존 Dockerfile은 바뀌지 않으므로
-  [9-4 저장소 규칙](#9-4-저장소-규칙-업체에-전달)에 맞는지 확인한다.
+  [9-5 저장소 규칙](#9-5-저장소-규칙-업체에-전달)에 맞는지 확인한다.
 - `REPLACE_CI=1`: 예전 K-PaaS 파이프라인용 Jenkinsfile을 포털용으로 교체한다.
 
 ### 9-3. 만들어지는 것
@@ -496,7 +514,16 @@ SCM_REPO=saeoll REPLACE_CI=1 ./add-app.sh saeoll php-service php
 
 > 첫 빌드가 성공하기 전까지 dev 앱은 **Degraded / ImagePullBackOff**(이미지 `none-yet` not found)로 보인다. 정상이다.
 
-### 9-4. 저장소 규칙 (업체에 전달)
+### 9-4. DB 연결 (선택)
+
+```bash
+./add-db.sh saeoll php-service dev        # dev에 앱 전용 MariaDB + Secret php-service-db + gitops 연결
+./add-db.sh saeoll php-service prod       # dev 확인 후 운영 (Argo CD prod SYNC는 관리자)
+```
+앱은 환경변수 `DB_HOST`·`DB_PORT`·`DB_NAME`·`DB_USER`·`DB_PASSWORD`로 접속한다.
+테스트 절차: [PHP + MariaDB 게시판 샘플](../samples/php-board/README.md)
+
+### 9-5. 저장소 규칙 (업체에 전달)
 
 | 파일 | 규칙 |
 | --- | --- |

@@ -154,6 +154,24 @@ SCM 준비가 덜 됐으면 할 일 목록을 출력하고 종료 코드 3으로
 기존 소스를 쓰려면 `main`에 먼저 push하고 `SKIP_STARTER=1 ./add-app.sh ...`. 저장소에는 8080 포트 Dockerfile,
 헬스 체크 경로(기본 `/healthz`, PHP `/healthz.php`), `starters/<유형>/Jenkinsfile`을 추가한다.
 
+### 6-1. DB 연결 (add-db.sh)
+
+```bash
+./add-db.sh saeoll homepage dev                     # 앱 전용 MariaDB (기본, dedicated)
+./add-db.sh saeoll homepage dev shared              # K-PaaS 공용 MariaDB에 전용 DB·계정 (빠른 확인용)
+DB_HOST=... DB_NAME=... DB_USER=... DB_PASSWORD=... ./add-db.sh saeoll homepage prod external   # 기존 DB
+DB=dedicated ./add-app.sh saeoll homepage php       # 앱 추가와 함께 (dev)
+```
+
+| 생성물 | 내용 |
+| --- | --- |
+| Secret `<앱>-db` (`<업체>-<환경>`) | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`. 비밀번호 자동 생성, Git에 넣지 않음. 이미 있으면 유지 |
+| dedicated | Secret `<앱>-mariadb-root`, gitops `overlays/<환경>/mariadb.yaml`(`db-template/`, StatefulSet + PVC `DB_SIZE`) |
+| shared | K-PaaS MariaDB(`mariadb` namespace)에 DB·계정 `<업체>_<앱>_<환경>` (그 DB에만 권한) |
+| gitops | `overlays/<환경>/kustomization.yaml`에 Deployment `envFrom: <앱>-db` 패치 (dev는 자동 Sync, prod는 `cicd-admins` Sync) |
+
+앱은 환경변수 `DB_*`를 읽어 접속한다. 예제: [PHP + MariaDB 게시판](samples/php-board/README.md).
+
 ## 7. 개발·배포 흐름
 
 ```bash

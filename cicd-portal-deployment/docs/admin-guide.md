@@ -185,7 +185,10 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' PM_USERS=<PM> ./migrate-vendor.sh <
 업체가 기존 이력을 push한다(`git remote add gitlab https://gitlab.<도메인>/saeoll/homepage.git && git push gitlab --all && git push gitlab --tags`).
 저장소에 [업체 개발자 가이드 3장](vendor-guide.md#3-저장소-규칙)의 필수 파일이 있어야 한다.
 
-**환경 설정·비밀값**(DB 접속정보 등): 업체 요청을 받아 운영 관리자가 gitops `apps/<앱>/overlays/<환경>`에
+**DB 연결**: `./add-db.sh <업체> <앱> <dev|prod|all> [dedicated|shared|external]` — Secret `<앱>-db`(`DB_*`, 비밀번호 자동 생성)와
+gitops 연결(dedicated는 MariaDB StatefulSet 포함)을 한 번에 만든다([README 6-1](../README.md#6-1-db-연결-add-dbsh)).
+
+**환경 설정·비밀값**(DB 외 접속정보 등): 업체 요청을 받아 운영 관리자가 gitops `apps/<앱>/overlays/<환경>`에
 ConfigMap을 추가하거나 `kubectl -n <업체>-<환경> create secret generic <앱>-env --from-literal=...`로 Secret을 만들고
 Deployment에 `envFrom`을 추가한다. 비밀값은 Git에 넣지 않는다.
 
