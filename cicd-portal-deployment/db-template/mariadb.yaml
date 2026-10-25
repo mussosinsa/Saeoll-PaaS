@@ -74,7 +74,7 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: {STORAGECLASS}
+        storageClassName: {STORAGECLASS}             # add-db.sh: removed when empty (cluster default)
         resources:
           requests:
             storage: {DB_SIZE}

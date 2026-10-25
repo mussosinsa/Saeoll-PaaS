@@ -242,7 +242,7 @@ unset DB_PW
 | `2002` / `2005` | DB 주소 오류, MariaDB 미기동 | `kubectl -n saeoll-dev get pod,svc`, `DB_HOST` 값 |
 | `1045` | 계정·비밀번호 불일치 | Secret 값과 DB 계정 확인 (MariaDB는 첫 기동 때 값만 사용) |
 | `1049` | DB 없음 | `DB_NAME` 확인, 방식 B는 `CREATE DATABASE` |
-| MariaDB Pod `Pending` | PVC 미생성, quota 초과 | `kubectl -n saeoll-dev describe pvc`, StorageClass(`cp-storageclass`), `describe resourcequota` |
+| MariaDB Pod·PVC `Pending`, 이벤트 `storageclass ... not found` | `mariadb.yaml`의 `storageClassName`이 클러스터에 없음 | `kubectl get storageclass`로 확인 → gitops `mariadb.yaml`의 `storageClassName` 줄 삭제(기본값 사용) 또는 실제 이름으로 수정 → push 후 `kubectl -n saeoll-dev delete sts php-service-mariadb` + `delete pvc data-php-service-mariadb-0` (볼륨 설정은 변경 불가라 재생성) |
 | MariaDB `ImagePullBackOff` | Docker Hub 접근 불가 | Harbor에 `mariadb:11.4` 미러 후 `image` 변경 |
 | 빌드 Build 단계 `composer validate` 실패 | `composer.json`을 덮어써 lock과 불일치 | 기존 `composer.json` 복원 |
 | `could not find driver` | Dockerfile에 `pdo_mysql` 없음 | `docker-php-ext-install pdo_mysql` 줄 확인 |

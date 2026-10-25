@@ -7,7 +7,8 @@
 # Usage: ./add-db.sh <vendor> <app> [dev|prod|all] [dedicated|shared|external]
 #   env (default dev) : prod is applied to gitops too, but deployed only by the Argo CD prod sync (cicd-admins)
 #   mode (default dedicated):
-#     dedicated : MariaDB StatefulSet <app>-mariadb in <vendor>-<env> (gitops, volume DB_SIZE=2Gi)
+#     dedicated : MariaDB StatefulSet <app>-mariadb in <vendor>-<env> (gitops, volume DB_SIZE=2Gi,
+#                 StorageClass DB_STORAGECLASS / K8S_STORAGECLASS / cluster default)
 #     shared    : database + user <vendor>_<app>_<env> on the K-PaaS MariaDB (namespace mariadb);
 #                 quick tests only, the platform databases share that server
 #     external  : an existing database: env DB_HOST DB_NAME DB_USER DB_PASSWORD [DB_PORT=3306]
@@ -44,6 +45,14 @@ if [[ "$MODE" == external ]]; then
 fi
 SECRET="$APP-db"
 ROOT_SECRET="$APP-mariadb-root"
+# Volume of a dedicated MariaDB: DB_STORAGECLASS, else K8S_STORAGECLASS if it exists, else the cluster default
+if [[ "$MODE" == dedicated ]]; then
+  DB_STORAGECLASS=${DB_STORAGECLASS:-$K8S_STORAGECLASS}
+  if [[ -n "$DB_STORAGECLASS" ]] && ! kubectl get storageclass "$DB_STORAGECLASS" >/dev/null 2>&1; then
+    warn "StorageClass $DB_STORAGECLASS not found - the MariaDB volume uses the cluster default StorageClass"
+    DB_STORAGECLASS=""
+  fi
+fi
 
 # Secret from environment variables (values never on a command line)
 apply_db_secret() { # namespace name  (values in env S_HOST S_PORT S_NAME S_USER S_PASSWORD)
@@ -143,7 +152,8 @@ for env in "${ENVS[@]}"; do
   [[ -f "$overlay/kustomization.yaml" ]] || die "gitops apps/$APP/overlays/$env not found (add-app.sh $VENDOR $APP <type>)."
   if [[ "$MODE" == dedicated && ! -f "$overlay/mariadb.yaml" ]]; then
     render_file ../db-template/mariadb.yaml "$overlay/mariadb.yaml" APP="$APP" MARIADB_IMAGE="$MARIADB_IMAGE" \
-      STORAGECLASS="$K8S_STORAGECLASS" DB_SIZE="$DB_SIZE"
+      STORAGECLASS="$DB_STORAGECLASS" DB_SIZE="$DB_SIZE"
+    [[ -n "$DB_STORAGECLASS" ]] || sed -i '/storageClassName: /d' "$overlay/mariadb.yaml"
   fi
   [[ "$MODE" != dedicated && -f "$overlay/mariadb.yaml" ]] && \
     warn "apps/$APP/overlays/$env still deploys the dedicated MariaDB (mariadb.yaml): remove it from the overlay once its data is migrated"
