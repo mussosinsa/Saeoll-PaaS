@@ -89,7 +89,7 @@ Jenkins `<앱>-dev` → 빌드 번호 → **Console Output**에서 로그를, **
 | `git clone` 401 / Authentication failed | 내정보 관리에서 git 비밀번호 설정, 로그인 비밀번호가 아닌 git 비밀번호 사용 |
 | `git clone` 403 / not found | 저장소 참여자 등록 요청 |
 | `warning: remote HEAD refers to nonexistent ref` | `-b develop`으로 clone |
-| Jenkins 빌드가 시작되지 않음 | 5분 대기. 계속되면 `<앱>-dev` → **Build Now**, 그래도 안 되면 운영 관리자 문의 |
+| Jenkins 빌드가 시작되지 않음 | 5분 대기. 계속되면 `<앱>-dev` → **Build Now**. 매번 자동 빌드가 안 되면 운영 관리자에게 Jenkinsfile 갱신(`REPLACE_CI=1`) 요청 |
 | Console에 `No such DSL method 'junit'` | 운영 관리자: `./deploy-cicd-portal.sh jenkins`(JUnit 플러그인 설치) 후 `REPLACE_CI=1 ./add-app.sh ...`로 Jenkinsfile 갱신 |
 | Console에 `detected dubious ownership` | 이전 Jenkinsfile. 운영 관리자에게 `REPLACE_CI=1` 갱신 요청(빌드 결과에는 영향 없음) |
 | Console에 `xz: Failed to enable the sandbox` (Image 단계) | Dockerfile의 `php:8.3-apache`를 `php:8.3-apache-bookworm`으로 변경(kaniko에서 trixie 이미지의 xz 오류) |

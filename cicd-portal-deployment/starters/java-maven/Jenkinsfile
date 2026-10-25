@@ -21,12 +21,18 @@ $MVN -B verify
 '''
 def junitReports = 'target/surefire-reports/TEST-*.xml'
 
-properties([
+// properties() replaces every job property, including the job's triggers: the -dev job keeps its
+// Poll SCM trigger here, otherwise its first build removes it and develop pushes are not built.
+def jobProperties = [
   disableConcurrentBuilds(),
   buildDiscarder(logRotator(numToKeepStr: '30')),
   parameters([string(name: 'RELEASE_TAG', defaultValue: '', trim: true,
                      description: 'Release job only: tag vX.Y.Z to build and deploy to prod (empty: develop build)')])
-])
+]
+if (!env.JOB_NAME.endsWith('-release')) {
+  jobProperties.add(pipelineTriggers([pollSCM('H/5 * * * *')]))
+}
+properties(jobProperties)
 
 podTemplate(yaml: """
 apiVersion: v1

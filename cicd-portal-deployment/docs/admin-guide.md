@@ -137,7 +137,7 @@ SCM_ADMIN_PASSWORD='...' SCM_CI_USER=saeoll SCM_CI_PASSWORD='<saeoll git 비밀�
 ```
 
 **기존 SCM 저장소 사용**: 이름이 `<팀>-<앱>` 형식이 아닌 저장소(예: `saeoll`)는 `SCM_REPO`로 지정한다. 예전 K-PaaS
-파이프라인용 `Jenkinsfile`이 있으면 `REPLACE_CI=1`로 포털용으로 바꾼다. `main`이 없고 `master`만 있으면 그 이력에서
+파이프라인용 `Jenkinsfile`이 있으면 `REPLACE_CI=1`로 포털용으로 바꾼다(`main`과 기존 `develop` 모두 교체, 다른 파일은 유지). `main`이 없고 `master`만 있으면 그 이력에서
 `main`·`develop`을 만든다(기존 `master`는 그대로 둔다).
 
 ```bash

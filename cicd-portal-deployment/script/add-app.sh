@@ -13,6 +13,7 @@
 #             gitlab: project <vendor>/<app> with protected tags v*). SKIP_STARTER=1 keeps your own source.
 #   existing SCM repository with another name : SCM_REPO=<repository> (default <vendor>-<app>)
 #   replace an old CI file (Jenkinsfile / .gitlab-ci.yml) with the portal one : REPLACE_CI=1
+#     (scm: on main and on an existing develop; your other changes on those branches are kept)
 #   gitops  : apps/<app>/base + overlays/dev,prod
 #   CI      : scm: Jenkins jobs <vendor>/<app>-dev (Poll SCM develop) and <vendor>/<app>-release (RELEASE_TAG)
 #             gitlab: .gitlab-ci.yml from the starter
@@ -64,20 +65,19 @@ if [[ "$SOURCE" == scm ]]; then
   $API scm-check "$SOURCE_REPO" --user "$CI_USER" --level READ || \
     die "Prepare '$SOURCE_REPO' in https://scm.$HOST_DOMAIN (Git, 참여자: $CI_USER 보기 권한, developers 쓰기 권한) and re-run."
   dir=$(scm_clone "$SOURCE_REPO")
-  if [[ "${REPLACE_CI:-0}" == 1 && -f "$dir/Jenkinsfile" ]]; then
-    git -C "$dir" rm -q Jenkinsfile
-    ci_only=$(mktemp -d)
-    cp "../starters/$TYPE/Jenkinsfile" "$ci_only/"
-    render_tree "$ci_only" "$dir" "${SUBST[@]}" >/dev/null
-    rm -rf "$ci_only"
-    info "SCM $SOURCE_REPO: Jenkinsfile replaced with the CI/CD portal version"
+  ci_file=""
+  if [[ "${REPLACE_CI:-0}" == 1 ]]; then   # portal Jenkinsfile on main and (below) develop
+    ci_file=$(mktemp)
+    render_file "../starters/$TYPE/Jenkinsfile" "$ci_file" "${SUBST[@]}"
+    cp "$ci_file" "$dir/Jenkinsfile"
   fi
-  if [[ "${SKIP_STARTER:-0}" != 1 ]]; then
-    added=$(render_tree "../starters/$TYPE" "$dir" --exclude .gitlab-ci.yml "${SUBST[@]}")
+  if [[ "${SKIP_STARTER:-0}" != 1 || -n "$ci_file" ]]; then
+    added=0
+    [[ "${SKIP_STARTER:-0}" != 1 ]] && added=$(render_tree "../starters/$TYPE" "$dir" --exclude .gitlab-ci.yml "${SUBST[@]}")
     if scm_commit_push "$dir" main "Add $TYPE starter (cicd-portal)"; then
-      ok "SCM $SOURCE_REPO: $added starter file(s) pushed to main"
+      ok "SCM $SOURCE_REPO: $added starter file(s)${ci_file:+, portal Jenkinsfile} pushed to main"
     else
-      info "SCM $SOURCE_REPO: starter files already present"
+      info "SCM $SOURCE_REPO: main already up to date"
     fi
   fi
   git -C "$dir" rev-parse -q --verify HEAD >/dev/null || die "SCM $SOURCE_REPO is empty (SKIP_STARTER=1): push your source to main first."
@@ -103,11 +103,22 @@ if [[ "$SOURCE" == scm ]]; then
   # develop last: it starts the first dev build, which needs the manifests and the job
   if GIT_TERMINAL_PROMPT=0 git -C "$dir" ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
     info "SCM $SOURCE_REPO: branch develop exists"
+    if [[ -n "$ci_file" ]]; then   # the -dev job builds develop: replace its Jenkinsfile too
+      GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch -q origin develop
+      git -C "$dir" checkout -q -B develop FETCH_HEAD
+      cp "$ci_file" "$dir/Jenkinsfile"
+      if scm_commit_push "$dir" develop "Replace Jenkinsfile (cicd-portal)"; then
+        ok "SCM $SOURCE_REPO: portal Jenkinsfile pushed to develop"
+      else
+        info "SCM $SOURCE_REPO: develop already has the portal Jenkinsfile"
+      fi
+    fi
   else
     GIT_TERMINAL_PROMPT=0 git -C "$dir" push -q origin HEAD:refs/heads/develop
     ok "SCM $SOURCE_REPO: branch develop created"
   fi
   scm_cleanup "$dir"
+  [[ -n "$ci_file" ]] && rm -f "$ci_file"
 else
   # 1. GitLab source project ----------------------------------------------------------------------
   PROJECT="$VENDOR/$APP"

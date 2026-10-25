@@ -694,7 +694,7 @@ SCM_REPO=<저장소> REPLACE_CI=1 ./add-app.sh <업체> <앱> <유형>
 | Image 단계 `manifest unknown` (베이스 이미지) | `CICD_BASE_REGISTRY`에 이미지 없음 | Harbor 미러에 이미지 등록 |
 | Deploy 단계 `overlays/... not found` | gitops에 앱 매니페스트 없음 | `./add-app.sh <업체> <앱> <유형>` 재실행 |
 | Deploy 단계 push 거부(403) | CI 계정에 gitops 쓰기 권한 없음 | SCM-Manager에서 `<업체>-gitops` 권한 확인, `onboard-vendor.sh` 재실행 |
-| develop push 후 빌드가 안 돎 | `master`에 push했거나 폴링 지연 | `git branch -vv`로 develop인지 확인. 잡 → **Polling Log** 확인, 급하면 **Build Now** |
+| develop push 후 빌드가 안 돎 | ① `master`에 push ② 예전 Jenkinsfile이 첫 빌드 때 Poll SCM 트리거를 지움 (잡 **Configure** → Build Triggers의 Poll SCM이 꺼져 있음) | ① `git branch -vv`로 develop 확인 ② `git pull` 후 `SCM_REPO=<저장소> REPLACE_CI=1 ./add-app.sh <업체> <앱> <유형>` (main·develop의 Jenkinsfile 교체) → 이후 빌드 1회 실행되면 폴링 복구. 급하면 **Build Now** |
 
 ### 12-4. 배포 (Argo CD)
 
