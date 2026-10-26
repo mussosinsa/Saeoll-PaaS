@@ -19,7 +19,7 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 > 솔루션별 적용 가이드: [SCM / GitLab](docs/guide-scm-gitlab.md) · [Harbor](docs/guide-harbor.md) · [Jenkins](docs/guide-jenkins.md) · [Argo CD](docs/guide-argocd.md)
 > 웹 화면 사용법: [Jenkins · Argo CD 웹 화면 가이드](docs/web-ui-guide.md)
 > 운영 절차: [운영 관리자 가이드](docs/admin-guide.md)
-> DB 연동 예제: [PHP + MariaDB 게시판 샘플](samples/php-board/README.md)
+> 테스트 샘플: [PHP · Java Spring · Node.js · Vue 게시판 (MariaDB 연동)과 배포 방법](samples/README.md)
 
 아래 1~9장은 `scm`(Jenkins) 구성, [11장](#11-gitlab-구성)은 `gitlab` 구성이다.
 

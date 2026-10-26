@@ -1,0 +1,34 @@
+# nginx for the Vue build (rendered by the nginx image at start: ${VAR} -> environment variable).
+#   /        Vue SPA (dist)
+#   /api/    proxied to ${API_UPSTREAM}: the board API (node-board or spring-board), set by 05-api-upstream.envsh
+#   /healthz Kubernetes probe
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # kube-dns from /etc/resolv.conf (NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1): the API host is resolved per
+  # request, so nginx also starts while the API service does not exist yet
+  resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 'ok';
+  }
+
+  location /api/ {
+    set $api_upstream ${API_UPSTREAM};
+    proxy_pass $api_upstream;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    client_max_body_size 1m;
+  }
+
+  # SPA: unknown paths fall back to index.html
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

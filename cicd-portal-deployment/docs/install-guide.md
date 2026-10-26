@@ -9,7 +9,7 @@ K-PaaS 컨테이너 플랫폼이 설치된 **새 서버(쿠버네티스 클러�
 | [SCM/GitLab](guide-scm-gitlab.md) · [Harbor](guide-harbor.md) · [Jenkins](guide-jenkins.md) · [Argo CD](guide-argocd.md) | 솔루션별 적용·운영 가이드 |
 | [웹 화면 가이드](web-ui-guide.md) | Jenkins·Argo CD 화면 사용법 |
 | [SCM 개발자 가이드](vendor-guide-scm.md) / [GitLab 개발자 가이드](vendor-guide.md) | 업체 개발자에게 전달 |
-| [PHP + MariaDB 게시판 샘플](../samples/php-board/README.md) | DB 연동 예제와 테스트 절차 |
+| [테스트 샘플 (PHP · Spring · Node.js · Vue)](../samples/README.md) | 언어별 게시판 샘플(MariaDB 연동)과 배포 절차 |
 | [README](../README.md) / [운영 관리자 가이드](admin-guide.md) | 구성 요약, GitLab 업체 운영 |
 
 ---

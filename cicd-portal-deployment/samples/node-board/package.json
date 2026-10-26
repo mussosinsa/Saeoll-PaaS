@@ -1,0 +1,17 @@
+{
+  "name": "node-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Board REST API on MariaDB (CI/CD portal sample)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mariadb": "^3.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
