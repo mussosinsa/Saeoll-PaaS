@@ -29,6 +29,32 @@ kubectl -n cp-pipeline get pods
 
 삭제는 `./uninstall-cp-pipeline.sh`.
 
+### 2-1. Jenkins 보안 (admin 비밀번호·접근 제한)
+
+설치 후 다음을 실행한다 (재실행 가능).
+
+```bash
+./secure-cp-pipeline-jenkins.sh          # apply + 접근 확인 (check / remove)
+```
+
+K-PaaS 파이프라인 Jenkins(`cp-pipeline-jenkins`)를 점검한 결과(chart 1.6.2, 이미지 v1.6.0):
+
+| 항목 | 결과 |
+| --- | --- |
+| admin 비밀번호 설정 | **배포 시 지정 불가.** chart·`cp-pipeline-vars.sh`·Secret·ConfigMap·config-server·DB에 Jenkins 계정 항목이 없다 |
+| 계정 | 로그인 필수(익명 403), 사용자 `admin` 하나, 로그인한 사용자는 전체 관리자. 비밀번호는 이미지에 미리 설정된 값(`secrets/initialAdminPassword` 값과 다름) |
+| API 토큰 | `admin`에 이미지 제작 시(2017) 만든 구형 API 토큰이 있다. 파이프라인 실행 중 admin 비밀번호 로그인 기록이 없어 API는 이 토큰을 쓰는 것으로 보인다 — 토큰은 지우지 않는다 |
+| 버전 | Jenkins **2.46.1**(2017), 특권(privileged) 컨테이너. 인증 없이 악용 가능한 공개 취약점이 있는 버전 |
+| 네트워크 | `cp-pipeline` 네임스페이스는 Kyverno 기본 NetworkPolicy 제외 대상 → 기본 상태에서는 모든 네임스페이스(업체 앱 포함)가 Jenkins에 접근 가능 |
+
+따라서 **접근 제한이 우선**이다. 스크립트는 Jenkins Pod로 들어오는 트래픽을 `cp-pipeline` 네임스페이스(파이프라인 API·UI)로
+제한한다. 관리자의 `kubectl port-forward`는 영향 없다. 적용 후 파이프라인 포털에서 파이프라인을 실행해 정상 동작을 확인한다.
+
+admin 비밀번호 변경은 Jenkins 화면에서 가능하다(PVC에 저장되어 유지). 파이프라인 API가 비밀번호를 쓰지 않는 것으로 보이지만
+확정되지 않았으므로 작업 시간에 다음 순서로 한다: `kubectl -n cp-pipeline cp <jenkins pod>:/var/jenkins_home/users ./jenkins-users-backup`
+→ 변경 → 파이프라인 실행 확인 → 문제 시 `kubectl cp`로 `users`를 되돌리고 `kubectl -n cp-pipeline rollout restart deploy/cp-pipeline-jenkins-deployment`.
+Jenkins 버전·토큰은 이미지에 고정되어 있어 근본 해결은 K-PaaS 이미지 갱신이 필요하다.
+
 ## 3. PHP 소스 배포
 
 포털 파이프라인 UI의 Build job은 Java(Gradle/Maven)만 지원한다. PHP 애플리케이션은
