@@ -1,6 +1,0 @@
----
-applications:
-- name: ap-pipline-broker
-  memory: 512M
-  instances: 1
-  path: build/libs/ap-pipeline-broker.war
