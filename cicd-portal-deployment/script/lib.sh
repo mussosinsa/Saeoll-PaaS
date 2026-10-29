@@ -155,6 +155,24 @@ vendor_source() { # vendor
   esac
   return 0
 }
+# Namespace layout recorded on the vendor's Argo CD project (onboard-vendor.sh --namespace):
+#   split  (default) : <vendor>-dev and <vendor>-prod
+#   single           : <vendor> for both environments; resources are named <app>-dev / <app>-prod
+vendor_ns_mode() { # vendor
+  local mode
+  mode=$(kubectl -n "$ARGOCD_NAMESPACE" get appproject "$1" \
+    -o jsonpath='{.metadata.labels.cicd\.k-paas\.org/ns-mode}' 2>/dev/null || true)
+  echo "${mode:-split}"
+}
+env_namespace() { # vendor env mode
+  if [[ "$3" == single ]]; then echo "$1"; else echo "$1-$2"; fi
+}
+# kustomize lines that make an overlay share the vendor namespace (single mode): name suffix and an
+# env label that is also added to the selectors, so dev and prod objects never select each other
+env_layout() { # env mode
+  [[ "$2" == single ]] || return 0
+  printf 'nameSuffix: -%s\nlabels:\n  - pairs:\n      cicd.k-paas.org/env: %s\n    includeSelectors: true\n' "$1" "$1"
+}
 random_string() { # length
   python3 -c 'import secrets,string,sys; a=string.ascii_letters+string.digits; print("".join(secrets.choice(a) for _ in range(int(sys.argv[1]))))' "$1"
 }

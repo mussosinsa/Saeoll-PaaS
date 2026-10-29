@@ -43,6 +43,12 @@ SOURCE=$(vendor_source "$VENDOR")
 has_source "$SOURCE" || die "Vendor $VENDOR uses '$SOURCE', which is not in CICD_SOURCES ($CICD_SOURCES)."
 info "Vendor $VENDOR uses $SOURCE"
 CI_USER=$(vendor_ci_user "$VENDOR")
+NS_MODE=$(vendor_ns_mode "$VENDOR")
+DEV_NS=$(env_namespace "$VENDOR" dev "$NS_MODE")
+PROD_NS=$(env_namespace "$VENDOR" prod "$NS_MODE")
+# kustomize layout lines for the overlays (keep the trailing newline that $(...) would strip)
+DEV_LAYOUT="$(env_layout dev "$NS_MODE"; echo .)"; DEV_LAYOUT=${DEV_LAYOUT%.}
+PROD_LAYOUT="$(env_layout prod "$NS_MODE"; echo .)"; PROD_LAYOUT=${PROD_LAYOUT%.}
 IMAGE_REPO="$HARBOR_HOST/$VENDOR/$APP"
 
 if [[ "$SOURCE" == scm ]]; then
@@ -58,7 +64,9 @@ else
 fi
 SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE_REPO" HEALTH_PATH="$HEALTH_PATH"
        TLS_SECRET="$TLS_SECRET" HARBOR_HOST="$HARBOR_HOST" GITOPS_REPO_URL="$GITOPS_URL"
-       BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB")
+       BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB"
+       DEV_NAMESPACE="$DEV_NS" PROD_NAMESPACE="$PROD_NS"
+       DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT")
 
 
 if [[ "$SOURCE" == scm ]]; then
@@ -97,7 +105,7 @@ if [[ "$SOURCE" == scm ]]; then
 
   # 3. Jenkins jobs ------------------------------------------------------------------------------
   $API jenkins-job "$VENDOR" "$APP-dev" --repo-url "$SCM_INTERNAL_GIT_URL/$SOURCE_REPO" --credentials "$VENDOR-scm" \
-    --description "$VENDOR/$APP: develop -> $VENDOR-dev (Argo CD auto sync). Source: https://scm.$HOST_DOMAIN ($SOURCE_REPO)"
+    --description "$VENDOR/$APP: develop -> $DEV_NS (Argo CD auto sync). Source: https://scm.$HOST_DOMAIN ($SOURCE_REPO)"
   $API jenkins-job "$VENDOR" "$APP-release" --release --repo-url "$SCM_INTERNAL_GIT_URL/$SOURCE_REPO" --credentials "$VENDOR-scm" \
     --description "$VENDOR/$APP: RELEASE_TAG vX.Y.Z -> image + gitops prod (Argo CD sync by cicd-admins)"
 
@@ -172,7 +180,7 @@ spec:
     path: apps/$APP/overlays/$env
   destination:
     server: https://kubernetes.default.svc
-    namespace: $VENDOR-$env
+    namespace: $(env_namespace "$VENDOR" "$env" "$NS_MODE")
 $sync
 EOF
   ok "Argo CD application $VENDOR-$APP-$env"

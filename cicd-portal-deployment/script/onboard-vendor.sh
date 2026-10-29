@@ -1,12 +1,15 @@
 #!/bin/bash
 # Onboard a vendor (team) to the CI/CD portal.
 #
-# Usage: ./onboard-vendor.sh [--source scm|gitlab] <vendor> [user1,user2,...]
+# Usage: ./onboard-vendor.sh [--source scm|gitlab] [--namespace split|single] <vendor> [user1,user2,...]
 #   --source : where the vendor's repositories and CI live. Required when both sources are
 #              installed; fixed after the first onboarding (recorded on the Argo CD project).
 #              Use migrate-vendor.sh to move a vendor from scm to gitlab.
 #              scm = trusted/internal teams only (the SCM web UI shows all repositories to everyone)
-#   vendor   : lowercase id, e.g. saeoll -> Harbor project, namespaces <vendor>-dev/prod, Argo CD project
+#   --namespace : split (default) = namespaces <vendor>-dev and <vendor>-prod
+#              single = one namespace <vendor> for dev and prod (resources <app>-dev / <app>-prod,
+#              shared quota: default 8 CPU / 16Gi / 60 pods). Fixed after the first onboarding.
+#   vendor   : lowercase id, e.g. saeoll -> Harbor project, namespace(s), Argo CD project
 #   users    : Keycloak usernames of the vendor developers (Keycloak group cicd-<vendor>;
 #              gitlab: also GitLab group members (Developer) after their first GitLab sign-in)
 #   env PM_USERS=pm1,pm2 : vendor PMs, GitLab Maintainer (merge to main, create release tags v*)
@@ -32,18 +35,21 @@ cd "$SCRIPT_DIR"
 source ./lib.sh
 
 SOURCE=""
+NS_MODE=""
 ARGS=()
 while (($#)); do
   case "$1" in
     --source) SOURCE=${2:-}; shift 2 ;;
     --source=*) SOURCE=${1#--source=}; shift ;;
+    --namespace) NS_MODE=${2:-}; shift 2 ;;
+    --namespace=*) NS_MODE=${1#--namespace=}; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
 VENDOR=${ARGS[0]:-}
 USERS=${ARGS[1]:-}
 [[ "$VENDOR" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]] || {
-  echo "Usage: $0 [--source scm|gitlab] <vendor: lowercase letters, digits, '-'> [user1,user2,...]" >&2; exit 2; }
+  echo "Usage: $0 [--source scm|gitlab] [--namespace split|single] <vendor: lowercase letters, digits, '-'> [user1,user2,...]" >&2; exit 2; }
 [[ "$VENDOR" != "$TEMPLATES_GROUP" ]] || die "'$TEMPLATES_GROUP' is reserved for the CI templates."
 load_portal_vars
 require_cmds kubectl python3
@@ -61,8 +67,23 @@ if [[ -z "$SOURCE" ]]; then
 fi
 [[ "$SOURCE" == scm || "$SOURCE" == gitlab ]] || die "--source must be scm or gitlab (got '$SOURCE')."
 has_source "$SOURCE" || die "Source '$SOURCE' is not installed (CICD_SOURCES=$CICD_SOURCES)."
-info "Vendor $VENDOR -> source $SOURCE"
+# Namespace layout: fixed once onboarded (moving running apps and data is a manual migration)
+[[ -z "$NS_MODE" || "$NS_MODE" == split || "$NS_MODE" == single ]] || die "--namespace must be split or single (got '$NS_MODE')."
+if [[ -n "$CURRENT" ]]; then
+  CURRENT_NS_MODE=$(vendor_ns_mode "$VENDOR")
+  [[ -z "$NS_MODE" || "$NS_MODE" == "$CURRENT_NS_MODE" ]] || \
+    die "Vendor $VENDOR already uses the '$CURRENT_NS_MODE' namespace layout; changing it needs a manual migration of its apps and data."
+  NS_MODE=$CURRENT_NS_MODE
+fi
+NS_MODE=${NS_MODE:-split}
+info "Vendor $VENDOR -> source $SOURCE, namespace layout $NS_MODE"
 ENVS=(dev prod)
+if [[ "$NS_MODE" == single ]]; then
+  NAMESPACES=("$VENDOR")
+  QUOTA_CPU=${QUOTA_CPU:-8} QUOTA_MEMORY=${QUOTA_MEMORY:-16Gi} QUOTA_PODS=${QUOTA_PODS:-60} QUOTA_PVCS=${QUOTA_PVCS:-20}
+else
+  NAMESPACES=("$VENDOR-dev" "$VENDOR-prod")
+fi
 PULL_SECRET=harbor-cicd
 CI_USER=${SCM_CI_USER:-}
 [[ -n "$CI_USER" ]] || CI_USER=$(vendor_ci_user "$VENDOR")
@@ -89,9 +110,17 @@ mapfile -t robot < <($API harbor-robot "$VENDOR" cicd)
 ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account for $VENDOR."
 
 # 3. Namespaces --------------------------------------------------------------------------
-for env in "${ENVS[@]}"; do
-  ns="$VENDOR-$env"
-  ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" cp.k-paas.org/env="$env" app.kubernetes.io/managed-by=cicd-portal
+for ns in "${NAMESPACES[@]}"; do
+  # never take over a namespace created for something else (e.g. a CP-Portal user namespace)
+  owner=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+  if kubectl get namespace "$ns" >/dev/null 2>&1 && [[ "$owner" != cicd-portal && "${ALLOW_EXISTING_NAMESPACE:-0}" != 1 ]]; then
+    die "Namespace $ns already exists and is not managed by the CI/CD portal. Choose another vendor id, or ALLOW_EXISTING_NAMESPACE=1 to use it."
+  fi
+  if [[ "$NS_MODE" == single ]]; then
+    ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" app.kubernetes.io/managed-by=cicd-portal
+  else
+    ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" cp.k-paas.org/env="${ns##*-}" app.kubernetes.io/managed-by=cicd-portal
+  fi
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: ResourceQuota
@@ -104,7 +133,7 @@ spec:
     requests.memory: ${QUOTA_MEMORY:-8Gi}
     limits.memory: ${QUOTA_MEMORY:-8Gi}
     pods: "${QUOTA_PODS:-30}"
-    persistentvolumeclaims: "10"
+    persistentvolumeclaims: "${QUOTA_PVCS:-10}"
 ---
 apiVersion: v1
 kind: LimitRange
@@ -164,8 +193,8 @@ if [[ "$SOURCE" == scm ]]; then
 Kubernetes manifests of $VENDOR services, deployed by Argo CD (CI/CD portal).
 
 - \`apps/<app>/base\`: Deployment, Service, Ingress
-- \`apps/<app>/overlays/dev\`: namespace $VENDOR-dev, image tag updated by Jenkins \`<app>-dev\`
-- \`apps/<app>/overlays/prod\`: namespace $VENDOR-prod, image tag updated by Jenkins \`<app>-release\`
+- \`apps/<app>/overlays/dev\`: namespace $(env_namespace "$VENDOR" dev "$NS_MODE"), image tag updated by Jenkins \`<app>-dev\`
+- \`apps/<app>/overlays/prod\`: namespace $(env_namespace "$VENDOR" prod "$NS_MODE"), image tag updated by Jenkins \`<app>-release\`
 
 Do not edit \`newTag\` by hand except for a rollback.
 EOF
@@ -226,6 +255,7 @@ metadata:
   namespace: $ARGOCD_NAMESPACE
   labels:
     cicd.k-paas.org/source: $SOURCE
+    cicd.k-paas.org/ns-mode: $NS_MODE
   annotations:
     cicd.k-paas.org/scm-ci-user: "$([[ "$SOURCE" == scm ]] && echo "$CI_USER")"
 spec:
@@ -233,10 +263,7 @@ spec:
   sourceRepos:
     - $GITOPS_URL
   destinations:
-    - server: https://kubernetes.default.svc
-      namespace: $VENDOR-dev
-    - server: https://kubernetes.default.svc
-      namespace: $VENDOR-prod
+$(for ns in "${NAMESPACES[@]}"; do printf '    - server: https://kubernetes.default.svc\n      namespace: %s\n' "$ns"; done)
   clusterResourceWhitelist: []
   namespaceResourceBlacklist:
     - group: ""
@@ -269,6 +296,6 @@ else
   echo "  GitLab group : $GITLAB_URL/$VENDOR   (gitops repo: $GITLAB_URL/$VENDOR/gitops)"
 fi
 echo "  Harbor       : $HARBOR_URL/harbor/projects  (project $VENDOR, robot ${robot[0]})"
-echo "  Namespaces   : $VENDOR-dev, $VENDOR-prod"
+echo "  Namespaces   : ${NAMESPACES[*]} (layout $NS_MODE)"
 echo "  Argo CD      : https://$ARGOCD_HOST  (project $VENDOR, Keycloak group cicd-$VENDOR)"
 echo "Next: ./add-app.sh $VENDOR <app> <java-gradle|java-maven|php|node|vue>"

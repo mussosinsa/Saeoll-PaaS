@@ -115,6 +115,9 @@ PM_USERS=saeoll-pm ./onboard-vendor.sh --source gitlab saeoll saeoll-hong,saeoll
 
 자원 한도 변경: `QUOTA_CPU=8 QUOTA_MEMORY=16Gi QUOTA_PODS=50 ./onboard-vendor.sh saeoll ...`
 
+네임스페이스 하나에 dev·prod를 함께 두려면 첫 등록 때 `--namespace single` (네임스페이스 `<업체>`, 리소스 `<앱>-dev`/`-prod`).
+격리·quota 공유 등 차이: [설치 가이드 5-4](install-guide.md#5-4-onboard-vendorsh--업체-등록).
+
 ### 4-3. SCM 업체 등록
 
 내부 팀만 `scm`으로 등록한다. `SCM_ADMIN_PASSWORD`(scmadmin)가 필요하다.

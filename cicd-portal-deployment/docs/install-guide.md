@@ -293,7 +293,25 @@ SCM_ADMIN_PASSWORD=... ./check-cicd-portal.sh  # SCM 로그인까지
 | `SCM_CI_USER` | (scm) CI 계정. 생략 시 `jenkins-<업체>`를 Keycloak에 자동 생성. 기존 계정 사용 가능(예: `saeoll`, 이후 기억됨) |
 | `SCM_CI_PASSWORD` | (scm) CI 계정의 **git 비밀번호** |
 | `SCM_CREATE_GITOPS=0` | (scm) gitops 저장소 자동 생성 안 함 |
-| `QUOTA_CPU` `QUOTA_MEMORY` `QUOTA_PODS` | 업체 네임스페이스 한도 (기본 4 / 8Gi / 30) |
+| `--namespace split\|single` | 네임스페이스 구성. `split`(기본): `<업체>-dev`, `<업체>-prod` / `single`: `<업체>` 하나에 dev·prod (아래 표) |
+| `QUOTA_CPU` `QUOTA_MEMORY` `QUOTA_PODS` | 업체 네임스페이스 한도 (기본 split 4 / 8Gi / 30, single 8 / 16Gi / 60) |
+
+**네임스페이스 구성 (`--namespace`)**
+
+| 항목 | `split` (기본) | `single` |
+| --- | --- | --- |
+| 네임스페이스 | `<업체>-dev`, `<업체>-prod` | **`<업체>` 하나** |
+| 리소스 이름 | `<앱>` | `<앱>-dev`, `<앱>-prod` (kustomize `nameSuffix`) |
+| Pod 선택자 | `app` | `app` + `cicd.k-paas.org/env` (dev Service가 prod Pod를 고르지 않음) |
+| DB Secret / MariaDB | `<앱>-db`, `<앱>-mariadb` | `<앱>-<환경>-db`, `<앱>-mariadb-<환경>` |
+| quota 기본값 | 환경별 CPU 4 / 8Gi / Pod 30 / PVC 10 | 업체 전체 CPU 8 / 16Gi / Pod 60 / PVC 20 (공유) |
+| 주소·Argo CD 앱·Jenkins | 같음 | 같음 (`<앱>-<업체>-dev.<도메인>`, `<업체>-<앱>-dev/prod`) |
+
+- 첫 등록 때 정하며 이후 변경은 거부된다(운영 중인 앱·데이터 이전이 필요하므로 수동 작업). 옵션 없이 재실행하면 기록된 값을 쓴다.
+- `single`은 관리가 단순한 대신 **dev·prod가 같은 네임스페이스**다. K-PaaS 기본 NetworkPolicy가 같은 네임스페이스 통신을 모두
+  허용하므로 dev Pod에서 prod 서비스로의 네트워크 접근을 막을 수 없고(환경별 DB 비밀번호로만 분리), quota도 공유한다.
+  네임스페이스 단위 권한(kubectl, K-PaaS 포털)으로 dev만 주는 구분도 할 수 없다. 격리가 중요하면 `split`을 쓴다.
+- 이미 있는 네임스페이스(예: CP-Portal 사용자 네임스페이스)와 이름이 같으면 등록을 거부한다(`ALLOW_EXISTING_NAMESPACE=1`로 허용).
 
 **내부 동작 (scm)**
 
@@ -463,6 +481,9 @@ Keycloak 관리 콘솔(`https://keycloak.<도메인>/admin`) → realm **cp-real
 
 `cp-realm` → **Users** → **Add user**: Username, **Email(필수)**, Email verified 켬 → **Credentials**에서 임시 비밀번호.
 CP-Portal에서 만든 사용자를 그대로 써도 된다.
+
+> 업체 하나에 네임스페이스 하나(dev·prod 함께)를 원하면 첫 등록 명령에 `--namespace single`을 붙인다
+> (예: `./onboard-vendor.sh --source scm --namespace single saeoll saeoll`). 차이는 [5-4](#5-4-onboard-vendorsh--업체-등록) 표.
 
 ### STEP 2. 등록 실행 — 방법 A: 전용 CI 계정 (권장)
 
@@ -876,7 +897,7 @@ cd ~/Saeoll-PaaS && git pull && cd cicd-portal-deployment/script && ./deploy-cic
 | Harbor | 프로젝트 `saeoll`, 이미지 `saeoll/php-service:dev-<커밋>-<빌드>` / `:v1.0.0`, robot `robot$saeoll+cicd` |
 | Jenkins | 폴더 `saeoll`, 잡 `php-service-dev`, `php-service-release`, credential `saeoll-harbor`, `saeoll-scm` |
 | Argo CD | 프로젝트 `saeoll`, 앱 `saeoll-php-service-dev`, `saeoll-php-service-prod` |
-| 네임스페이스 | `saeoll-dev`, `saeoll-prod` |
+| 네임스페이스 | `saeoll-dev`, `saeoll-prod` (`--namespace single`: `saeoll` 하나, 리소스 `php-service-dev`/`-prod`, Secret `php-service-dev-db`) |
 | DB | Secret `php-service-db`, `php-service-mariadb-root`, StatefulSet `php-service-mariadb`, PVC `data-php-service-mariadb-0` |
 | URL | `https://php-service-saeoll-dev.<도메인>`, `https://php-service-saeoll.<도메인>` |
 

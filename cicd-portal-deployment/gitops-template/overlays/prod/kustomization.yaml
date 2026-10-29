@@ -1,8 +1,8 @@
 # {VENDOR}/{APP} prod. CI updates images[0].newTag; Argo CD application {VENDOR}-{APP}-prod.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: {VENDOR}-prod
-resources:
+namespace: {PROD_NAMESPACE}
+{PROD_LAYOUT}resources:
   - ../../base
 images:
   - name: app

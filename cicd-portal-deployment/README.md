@@ -118,6 +118,9 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' ./deploy-cicd-portal.sh preflight
 
 ### 5-2. 실행
 
+네임스페이스 구성은 첫 등록 때 `--namespace split|single`로 정한다(기본 `split`). `single`은 업체 네임스페이스 하나에 dev·prod를
+함께 두고 리소스 이름을 `<앱>-dev`/`<앱>-prod`로 구분한다. 차이와 주의점: [설치 가이드 5-4](docs/install-guide.md#5-4-onboard-vendorsh--업체-등록).
+
 ```bash
 export SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>'
 ./onboard-vendor.sh --source scm saeoll saeoll,vendor-dev1   # 1차: Keycloak 사용자 jenkins-saeoll 생성 + 남은 할 일 출력
@@ -130,7 +133,7 @@ SCM 준비가 덜 됐으면 할 일 목록을 출력하고 종료 코드 3으로
 | --- | --- |
 | Keycloak | 그룹 `cicd-saeoll`(+ 개발자), 사용자 `jenkins-saeoll` |
 | Harbor | 프로젝트 `saeoll`, robot `robot$saeoll+cicd` |
-| namespace | `saeoll-dev`, `saeoll-prod` (quota CPU 4 / 메모리 8Gi / Pod 30, pull secret `harbor-cicd`, TLS) |
+| namespace | `saeoll-dev`, `saeoll-prod` (quota CPU 4 / 메모리 8Gi / Pod 30, pull secret `harbor-cicd`, TLS). `--namespace single`이면 `saeoll` 하나(dev·prod 공용, quota 8 / 16Gi / 60) |
 | SCM | `saeoll-gitops` 초기화(README, main) |
 | Jenkins | 폴더 `saeoll`(그룹 `cicd-saeoll` 조회·빌드), 폴더 credential `saeoll-harbor`, `saeoll-scm` |
 | Argo CD | 프로젝트 `saeoll`(dev만 업체 Sync, prod는 `cicd-admins`), gitops 저장소 인증 |

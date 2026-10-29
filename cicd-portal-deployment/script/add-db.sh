@@ -43,8 +43,18 @@ if [[ "$MODE" == external ]]; then
     [[ -n "${!v:-}" ]] || die "external mode needs env DB_HOST DB_NAME DB_USER DB_PASSWORD (missing $v)"
   done
 fi
-SECRET="$APP-db"
-ROOT_SECRET="$APP-mariadb-root"
+NS_MODE=$(vendor_ns_mode "$VENDOR")
+# Names per environment. Single namespace layout (dev and prod share <vendor>): the names carry the env,
+# and kustomize's -<env> suffix makes the dedicated MariaDB <app>-mariadb-<env>.
+env_names() { # env -> NS SECRET ROOT_SECRET DB_SERVICE DB_POD
+  NS=$(env_namespace "$VENDOR" "$1" "$NS_MODE")
+  if [[ "$NS_MODE" == single ]]; then
+    SECRET="$APP-$1-db" ROOT_SECRET="$APP-$1-mariadb-root" DB_SERVICE="$APP-mariadb-$1"
+  else
+    SECRET="$APP-db" ROOT_SECRET="$APP-mariadb-root" DB_SERVICE="$APP-mariadb"
+  fi
+  DB_POD="$DB_SERVICE-0"
+}
 # Volume of a dedicated MariaDB: DB_STORAGECLASS, else K8S_STORAGECLASS if it exists, else the cluster default
 if [[ "$MODE" == dedicated ]]; then
   DB_STORAGECLASS=${DB_STORAGECLASS:-$K8S_STORAGECLASS}
@@ -91,7 +101,8 @@ platform_sql() { # sql on stdin
 
 # 1. Secrets per environment ----------------------------------------------------------------------
 for env in "${ENVS[@]}"; do
-  ns="$VENDOR-$env"
+  env_names "$env"
+  ns=$NS
   kubectl get namespace "$ns" >/dev/null 2>&1 || die "Namespace $ns not found (onboard-vendor.sh $VENDOR)."
   if kubectl -n "$ns" get secret "$SECRET" >/dev/null 2>&1 && [[ "${DB_SECRET_UPDATE:-0}" != 1 || "$MODE" == dedicated ]]; then
     info "Secret $ns/$SECRET exists - kept"
@@ -100,14 +111,14 @@ for env in "${ENVS[@]}"; do
   case "$MODE" in
     dedicated)
       # A MariaDB volume keeps the password it was initialised with: a new Secret would not match
-      if kubectl -n "$ns" get pvc "data-$APP-mariadb-0" >/dev/null 2>&1; then
-        die "$ns has volume data-$APP-mariadb-0 but no Secret $SECRET: restore the old Secret, or delete the volume (DATA LOSS): kubectl -n $ns delete pvc data-$APP-mariadb-0"
+      if kubectl -n "$ns" get pvc "data-$DB_POD" >/dev/null 2>&1; then
+        die "$ns has volume data-$DB_POD but no Secret $SECRET: restore the old Secret, or delete the volume (DATA LOSS): kubectl -n $ns delete pvc data-$DB_POD"
       fi
-      S_HOST="$APP-mariadb" S_PORT=3306 S_NAME=$(db_ident "$APP") S_USER=$(db_ident "$APP") \
+      S_HOST="$DB_SERVICE" S_PORT=3306 S_NAME=$(db_ident "$APP") S_USER=$(db_ident "$APP") \
         S_PASSWORD=$(random_string 24) apply_db_secret "$ns" "$SECRET"
       kubectl -n "$ns" get secret "$ROOT_SECRET" >/dev/null 2>&1 || \
         S_PASSWORD=$(random_string 24) apply_password_secret "$ns" "$ROOT_SECRET"
-      ok "Secrets $ns/$SECRET, $ns/$ROOT_SECRET (dedicated MariaDB $APP-mariadb)"
+      ok "Secrets $ns/$SECRET, $ns/$ROOT_SECRET (dedicated MariaDB $DB_SERVICE)"
       ;;
     shared)
       name=$(db_ident "${VENDOR}_${APP}_${env}")
@@ -148,18 +159,20 @@ else
   git -C "$gdir" config user.email "cicd-portal@${HOST_DOMAIN}"
 fi
 for env in "${ENVS[@]}"; do
+  env_names "$env"
   overlay="$gdir/apps/$APP/overlays/$env"
   [[ -f "$overlay/kustomization.yaml" ]] || die "gitops apps/$APP/overlays/$env not found (add-app.sh $VENDOR $APP <type>)."
   if [[ "$MODE" == dedicated && ! -f "$overlay/mariadb.yaml" ]]; then
     render_file ../db-template/mariadb.yaml "$overlay/mariadb.yaml" APP="$APP" MARIADB_IMAGE="$MARIADB_IMAGE" \
+      DB_SECRET="$SECRET" ROOT_SECRET="$ROOT_SECRET" \
       STORAGECLASS="$DB_STORAGECLASS" DB_SIZE="$DB_SIZE"
     [[ -n "$DB_STORAGECLASS" ]] || sed -i '/storageClassName: /d' "$overlay/mariadb.yaml"
   fi
   [[ "$MODE" != dedicated && -f "$overlay/mariadb.yaml" ]] && \
     warn "apps/$APP/overlays/$env still deploys the dedicated MariaDB (mariadb.yaml): remove it from the overlay once its data is migrated"
-  python3 - "$overlay/kustomization.yaml" "$APP" "$([[ "$MODE" == dedicated ]] && echo 1 || echo 0)" <<'PY'
+  python3 - "$overlay/kustomization.yaml" "$APP" "$([[ "$MODE" == dedicated ]] && echo 1 || echo 0)" "$SECRET" <<'PY'
 import re, sys
-path, app, dedicated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+path, app, dedicated, secret = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4]
 lines = open(path, encoding="utf-8").read().splitlines()
 text = "\n".join(lines)
 if dedicated and not re.search(r"^\s*-\s*mariadb\.yaml\s*(#.*)?$", text, re.M):
@@ -168,7 +181,7 @@ if dedicated and not re.search(r"^\s*-\s*mariadb\.yaml\s*(#.*)?$", text, re.M):
         sys.exit("resources entry '../../base' not found in " + path)
     indent = re.match(r"^(\s*)", lines[i]).group(1)
     lines.insert(i + 1, f"{indent}- mariadb.yaml")
-if f"name: {app}-db" not in text:
+if f"name: {secret}" not in text:
     block = f"""  - target:
       kind: Deployment
       name: {app}
@@ -177,7 +190,7 @@ if f"name: {app}-db" not in text:
         path: /spec/template/spec/containers/0/envFrom
         value:
           - secretRef:
-              name: {app}-db""".splitlines()
+              name: {secret}""".splitlines()
     p = next((n for n, l in enumerate(lines) if re.match(r"^patches:\s*$", l)), None)
     if p is None:
         lines += ["patches:"] + block
@@ -192,7 +205,7 @@ PY
 done
 envs_text="${ENVS[*]}"
 if scm_commit_push "$gdir" main "Connect $APP ($envs_text) to MariaDB: $MODE (cicd-portal)"; then
-  ok "gitops apps/$APP/overlays/{${envs_text// /,}}: $([[ "$MODE" == dedicated ]] && echo "MariaDB $APP-mariadb + ")envFrom $SECRET"
+  ok "gitops apps/$APP/overlays/{${envs_text// /,}}: $([[ "$MODE" == dedicated ]] && echo "dedicated MariaDB + ")envFrom DB Secret"
 else
   info "gitops apps/$APP already connected to $SECRET"
 fi
@@ -207,8 +220,9 @@ for env in "${ENVS[@]}"; do
     echo "  prod : Argo CD $VENDOR-$APP-prod -> APP DIFF -> SYNC (cicd-admins)"
   fi
 done
-echo "  App environment: DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD (Secret $SECRET)"
-echo "  Read a value   : kubectl -n $VENDOR-${ENVS[0]} get secret $SECRET -o jsonpath='{.data.DB_PASSWORD}' | base64 -d"
+env_names "${ENVS[0]}"
+echo "  App environment: DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD (Secret $SECRET in $NS)"
+echo "  Read a value   : kubectl -n $NS get secret $SECRET -o jsonpath='{.data.DB_PASSWORD}' | base64 -d"
 [[ "$MODE" == dedicated ]] && \
-  echo "  Database shell : kubectl -n $VENDOR-${ENVS[0]} exec -it $APP-mariadb-0 -- sh -c 'mariadb -u\"\$MARIADB_USER\" -p\"\$MARIADB_PASSWORD\" \"\$MARIADB_DATABASE\"'"
+  echo "  Database shell : kubectl -n $NS exec -it $DB_POD -- sh -c 'mariadb -u\"\$MARIADB_USER\" -p\"\$MARIADB_PASSWORD\" \"\$MARIADB_DATABASE\"'"
 exit 0

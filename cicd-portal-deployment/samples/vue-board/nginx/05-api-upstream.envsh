@@ -1,10 +1,21 @@
 #!/bin/sh
 # Sourced by the nginx image entrypoint before the templates are rendered.
 # API_UPSTREAM (if not set): http://<API_SERVICE>.<this pod's namespace>.svc.cluster.local
-# so the same image works in <vendor>-dev and <vendor>-prod. API_SERVICE default: node-board.
+# so the same image works in every environment. API_SERVICE default: node-board.
+# Single namespace layout (onboard-vendor.sh --namespace single): dev and prod share the namespace and
+# the objects are named <app>-dev / <app>-prod, so the env suffix of this pod's Deployment is added.
 if [ -z "${API_UPSTREAM:-}" ]; then
   ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo default)
-  API_UPSTREAM="http://${API_SERVICE:-node-board}.${ns}.svc.cluster.local"
+  svc=${API_SERVICE:-node-board}
+  deploy=${HOSTNAME%-*}; deploy=${deploy%-*}          # <deployment>-<replicaset hash>-<pod id>
+  case "$ns" in
+    *-dev|*-prod) ;;                                   # split layout: names have no env suffix
+    *) case "$deploy" in
+         *-dev)  case "$svc" in *-dev) ;; *) svc="$svc-dev" ;; esac ;;
+         *-prod) case "$svc" in *-prod) ;; *) svc="$svc-prod" ;; esac ;;
+       esac ;;
+  esac
+  API_UPSTREAM="http://$svc.$ns.svc.cluster.local"
   export API_UPSTREAM
 fi
 echo "05-api-upstream.envsh: /api/ -> $API_UPSTREAM"

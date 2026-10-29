@@ -19,6 +19,9 @@ CI/CD 포털의 빌드·배포와 **MariaDB 연동**을 언어별로 확인하�
 
 - 모든 앱: **8080 포트**, `/healthz` 200(DB 사용 안 함 → DB 장애가 Pod 재시작으로 번지지 않음).
 - DB 접속 정보는 Secret `<앱>-db`의 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (`add-db.sh`가 생성). 소스·Git에 비밀번호 없음.
+- 업체가 `--namespace single`(네임스페이스 하나)이면: 네임스페이스 `saeoll`, 리소스 `<앱>-dev`/`-prod`, Secret `<앱>-<환경>-db`,
+  MariaDB `<앱>-mariadb-<환경>`. 아래 `kubectl -n saeoll-dev`는 `kubectl -n saeoll`로, 리소스 이름에 `-dev`를 붙여 읽는다.
+  vue-board는 이 경우 `node-board-dev`/`-prod`를 자동으로 찾는다.
 - 테이블은 첫 접속 때 자동 생성 → 빈 DB에서 바로 동작.
 - API 응답 규칙(Node·Spring 공통): 아래 [부록](#부록-rest-api-규칙).
 

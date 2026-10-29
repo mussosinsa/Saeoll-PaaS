@@ -1,6 +1,7 @@
 # Dedicated MariaDB for {APP} (add-db.sh <vendor> {APP} <env> dedicated).
 # Rendered into <vendor>-gitops apps/{APP}/overlays/<env>/mariadb.yaml; the namespace comes from that
-# overlay. Credentials: Secrets {APP}-db and {APP}-mariadb-root created by add-db.sh (not in Git).
+# overlay (single namespace mode: kustomize adds the -<env> name suffix). Credentials: Secrets {DB_SECRET} and
+# {ROOT_SECRET} created by add-db.sh (not in Git).
 # MariaDB creates the database and user from them on its first start (empty volume) only.
 apiVersion: v1
 kind: Service
@@ -43,13 +44,13 @@ spec:
           env:
             # The official image creates the database and user on the first start (empty volume)
             - name: MARIADB_DATABASE
-              valueFrom: {secretKeyRef: {name: {APP}-db, key: DB_NAME}}
+              valueFrom: {secretKeyRef: {name: {DB_SECRET}, key: DB_NAME}}
             - name: MARIADB_USER
-              valueFrom: {secretKeyRef: {name: {APP}-db, key: DB_USER}}
+              valueFrom: {secretKeyRef: {name: {DB_SECRET}, key: DB_USER}}
             - name: MARIADB_PASSWORD
-              valueFrom: {secretKeyRef: {name: {APP}-db, key: DB_PASSWORD}}
+              valueFrom: {secretKeyRef: {name: {DB_SECRET}, key: DB_PASSWORD}}
             - name: MARIADB_ROOT_PASSWORD
-              valueFrom: {secretKeyRef: {name: {APP}-mariadb-root, key: password}}
+              valueFrom: {secretKeyRef: {name: {ROOT_SECRET}, key: password}}
           resources:
             requests:
               cpu: 100m
