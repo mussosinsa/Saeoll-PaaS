@@ -1,0 +1,66 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: delivery-pipeline-service-broker
+  datasource:
+    url: jdbc:mysql://localhost:3306/broker?autoReconnect=true&useUnicode=true&characterEncoding=utf8
+    username: root
+    password: "!k_paas202"
+  jpa:
+    hibernate:
+      ddl-auto: none
+      database: mysql
+      show-sql: true
+
+
+logging:
+  level:
+    ROOT:
+      org:
+        openpaas:
+          servicebroker:
+            controller: INFO
+        ap:
+          servicebroker:
+            deliverypipeline:
+              service: INFO
+
+service:
+  dashboard:
+    url: http://115.68.46.214:8080/dashboard/[SUID]/
+
+
+ap:
+  delivery:
+    pipeline:
+      api:
+        url: http://10.30.110.42:8080
+        username:
+        password:
+
+
+ci:
+  server:
+    shared:
+      urls: '["10.10.10.1","10.10.10.2","10.10.10.2"]'
+    dedicated:
+      urls: '["10.10.10.1","10.10.10.2","10.10.10.2"]'
+
+serviceDefinition:
+  id: YOUR_PLAN_ID #ex) abcdefgh-abcd-abcd-abcd-abcdefghijkl
+  name: delivery-pipeline-v2
+  desc: "A application platform source control service for application development.provision parameters : parameters {owner : owner}"
+  bindable: false
+  planupdatable: false
+  plan1:
+    id: YOUR_PLAN1_ID #ex) abcdefgh-abcd-abcd-abcd-abcdefghijkl
+    name: delivery-pipeline-shared
+    desc: "This is a shared service plan. All services are created equally."
+    type: A
+  plan2:
+    id: YOUR_PLAN2_ID #ex) abcdefgh-abcd-abcd-abcd-abcdefghijkl
+    name: delivery-pipeline-dedicated
+    desc: "This is a dedicated service plan. All services are created equally."
+    type: B
