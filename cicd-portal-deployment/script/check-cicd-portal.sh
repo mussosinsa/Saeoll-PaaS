@@ -26,6 +26,12 @@ if has_source gitlab; then
 fi
 NAMESPACES+=("$ARGOCD_NAMESPACE")
 CLIENTS+=("$KEYCLOAK_ARGOCD_CLIENT_ID")
+CONSOLE=0
+if kubectl -n "$CONSOLE_NAMESPACE" get deployment cicd-console >/dev/null 2>&1; then   # optional web console
+  CONSOLE=1
+  NAMESPACES+=("$CONSOLE_NAMESPACE")
+  CLIENTS+=("$KEYCLOAK_CONSOLE_CLIENT_ID")
+fi
 
 section "1. Pods (sources: $CICD_SOURCES)"
 for ns in "${NAMESPACES[@]}"; do
@@ -52,6 +58,10 @@ if has_source gitlab; then
 fi
 code=$(http_code "https://$ARGOCD_HOST/healthz")
 [[ "$code" == 200 ]] && pass "Argo CD https://$ARGOCD_HOST -> 200" || fail "Argo CD https://$ARGOCD_HOST/healthz -> $code"
+if ((CONSOLE)); then
+  code=$(http_code "https://$CONSOLE_HOST/healthz")
+  [[ "$code" == 200 ]] && pass "Console https://$CONSOLE_HOST -> 200" || fail "Console https://$CONSOLE_HOST/healthz -> $code"
+fi
 code=$(http_code "$KEYCLOAK_ISSUER/.well-known/openid-configuration")
 [[ "$code" == 200 ]] && pass "Keycloak issuer $KEYCLOAK_ISSUER" || fail "Keycloak issuer -> $code"
 
@@ -124,5 +134,6 @@ if has_source scm; then
 fi
 has_source gitlab && echo "GitLab : $GITLAB_URL"
 echo "Argo CD: https://$ARGOCD_HOST"
+((CONSOLE)) && echo "Console: https://$CONSOLE_HOST"
 ((FAILED)) && { echo "[RESULT] FAIL"; exit 1; }
 echo "[RESULT] OK"

@@ -9,6 +9,8 @@
 # Usage: [CICD_SOURCES="scm gitlab"] ./deploy-cicd-portal.sh [step ...]
 #   steps: preflight keycloak [jenkins] [gitlab bootstrap templates runner] argocd   (default: all installed)
 #          jenkins-token (scm, once after the first Jenkins login)
+#          console-image console   (optional web console https://cicd.<domain>: image build with podman
+#                                   + push to Harbor, then deploy; env SCM_ADMIN_PASSWORD for scm vendors)
 # Re-runnable; each step can be run on its own.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -278,16 +280,100 @@ step_argocd() {
   ok "Argo CD: https://$ARGOCD_HOST"
 }
 
+# CI/CD console image: the console plus the scripts it runs, pushed to Harbor
+step_console-image() {
+  require_cmds podman
+  local image="$HARBOR_HOST/$CONSOLE_HARBOR_PROJECT/cicd-console:$CONSOLE_IMAGE_TAG" ctx podman=(podman)
+  ((EUID == 0)) || podman=(sudo podman)   # same podman storage/trust as the CP-Portal image builds
+  info "CI/CD console image $image"
+  ctx=$(mktemp -d)
+  cp -r ../console ../script ../starters ../gitops-template ../db-template ../ci-templates "$ctx/"
+  rm -rf "$ctx/console/tests" "$ctx/script/"*.log
+  find "$ctx" -name __pycache__ -prune -exec rm -rf {} +
+  cp "$(command -v kubectl)" "$ctx/kubectl"
+  $API harbor-project "$CONSOLE_HARBOR_PROJECT"
+  printf '%s' "$REPOSITORY_PASSWORD" | "${podman[@]}" login "$HARBOR_HOST" --username "$REPOSITORY_USERNAME" --password-stdin >/dev/null
+  "${podman[@]}" build -f "$ctx/console/Dockerfile" -t "$image" \
+    --build-arg BASE_IMAGE="$CONSOLE_BASE_IMAGE" --build-arg PIP_INDEX_URL="$CONSOLE_PIP_INDEX_URL" \
+    --build-arg APT_MIRROR="$CONSOLE_APT_MIRROR" "$ctx" || { rm -rf "$ctx"; die "Console image build failed."; }
+  rm -rf "$ctx"
+  "${podman[@]}" push "$image" || die "Console image push failed ($image)."
+  ok "Console image pushed: $image"
+}
+
+step_console() {
+  info "CI/CD console https://$CONSOLE_HOST in $CONSOLE_NAMESPACE"
+  local image="$HARBOR_HOST/$CONSOLE_HARBOR_PROJECT/cicd-console:$CONSOLE_IMAGE_TAG" dir oidc_secret session_key scm_password
+  ensure_namespace "$CONSOLE_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  copy_tls_secret "$CONSOLE_NAMESPACE"
+  ensure_ca_secret "$CONSOLE_NAMESPACE"
+  oidc_secret=$($API kc-client "$KEYCLOAK_CONSOLE_CLIENT_ID" --groups-mapper \
+    --redirect "https://$CONSOLE_HOST/oauth/callback" --origin "https://$CONSOLE_HOST")
+  # pull secret: robot account of the console's Harbor project (pull only is enough, push is harmless)
+  mapfile -t robot < <($API harbor-robot "$CONSOLE_HARBOR_PROJECT" console)
+  ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account (run: $0 console-image first)."
+  kubectl -n "$CONSOLE_NAMESPACE" create secret docker-registry cicd-console-pull \
+    --docker-server="$HARBOR_HOST" --docker-username="${robot[0]}" --docker-password="${robot[1]}" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # keep the session key and the SCM password across re-runs
+  session_key=$(kubectl -n "$CONSOLE_NAMESPACE" get secret cicd-console-secrets -o 'jsonpath={.data.session-key}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  [[ -n "$session_key" ]] || session_key=$(random_string 48)
+  scm_password=${SCM_ADMIN_PASSWORD:-$(kubectl -n "$CONSOLE_NAMESPACE" get secret cicd-console-secrets -o 'jsonpath={.data.scm-admin-password}' 2>/dev/null | base64 -d 2>/dev/null || true)}
+  if has_source scm && [[ -z "$scm_password" ]]; then
+    warn "SCM_ADMIN_PASSWORD not set: scm vendors cannot be onboarded from the console (re-run with SCM_ADMIN_PASSWORD=...)"
+  fi
+  # values the scripts read from cp-portal-vars.sh, in a private temp dir (never on a command line)
+  dir=$(mktemp -d)
+  chmod 700 "$dir"
+  {
+    printf 'HOST_DOMAIN=%q\n' "$HOST_DOMAIN"
+    printf 'K8S_STORAGECLASS=%q\n' "$K8S_STORAGECLASS"
+    printf 'KEYCLOAK_URL=%q\n' "$KEYCLOAK_URL"
+    printf 'KEYCLOAK_ADMIN_USERNAME=%q\n' "$KEYCLOAK_ADMIN_USERNAME"
+    printf 'KEYCLOAK_ADMIN_PASSWORD=%q\n' "$KEYCLOAK_ADMIN_PASSWORD"
+    printf 'KEYCLOAK_CP_REALM=%q\n' "$KEYCLOAK_CP_REALM"
+    printf 'REPOSITORY_URL=%q\n' "$HARBOR_URL"
+    printf 'REPOSITORY_USERNAME=%q\n' "$REPOSITORY_USERNAME"
+    printf 'REPOSITORY_PASSWORD=%q\n' "$REPOSITORY_PASSWORD"
+    printf 'DATABASE_URL=%q\n' "$PLATFORM_DB_URL"
+    printf 'DATABASE_USER_PASSWORD=%q\n' "$DATABASE_USER_PASSWORD"
+  } >"$dir/cp-portal-vars.sh"
+  printf '%s' "$oidc_secret" >"$dir/oidc-client-secret"
+  printf '%s' "$session_key" >"$dir/session-key"
+  local from=(--from-file="$dir/cp-portal-vars.sh" --from-file="$dir/oidc-client-secret" --from-file="$dir/session-key")
+  if [[ -n "$scm_password" ]]; then
+    printf '%s' "$scm_password" >"$dir/scm-admin-password"
+    from+=(--from-file="$dir/scm-admin-password")
+  fi
+  kubectl -n "$CONSOLE_NAMESPACE" create secret generic cicd-console-secrets "${from[@]}" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -rf "$dir"
+  kubectl -n "$CONSOLE_NAMESPACE" create configmap cicd-console-vars --from-file=cicd-vars.sh=./cicd-vars.sh \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  mkdir -p "$VALUES_DIR"
+  render_file ../manifests/console.yaml "$VALUES_DIR/console.yaml" \
+    NAMESPACE="$CONSOLE_NAMESPACE" IMAGE="$image" CONSOLE_HOST="$CONSOLE_HOST" \
+    OIDC_CLIENT_ID="$KEYCLOAK_CONSOLE_CLIENT_ID" CA_SECRET_NAME="$CA_SECRET_NAME" TLS_SECRET="$TLS_SECRET" \
+    INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME" JENKINS_API_URL="$CONSOLE_JENKINS_API_URL" \
+    GITLAB_API_URL="$CONSOLE_GITLAB_API_URL" SCM_API_URL="$CONSOLE_SCM_API_URL"
+  kubectl apply -f "$VALUES_DIR/console.yaml"
+  # secrets, config map and image tag may have changed: start a new pod
+  kubectl -n "$CONSOLE_NAMESPACE" rollout restart deployment/cicd-console >/dev/null
+  kubectl -n "$CONSOLE_NAMESPACE" rollout status deployment/cicd-console --timeout=300s || \
+    die "Console is not ready. Check: kubectl -n $CONSOLE_NAMESPACE logs deploy/cicd-console"
+  ok "CI/CD console: https://$CONSOLE_HOST (K-PaaS SSO; '$KEYCLOAK_ADMIN_GROUP' = operators, cicd-<vendor> = vendors)"
+}
+
 for step in "${STEPS[@]}"; do
   case "$step" in
-    preflight|keycloak|argocd) "step_$step" ;;
+    preflight|keycloak|argocd|console-image|console) "step_$step" ;;
     jenkins|jenkins-token)
       has_source scm || die "Step $step needs scm in CICD_SOURCES (now: $CICD_SOURCES)"
       "step_$step" ;;
     gitlab|bootstrap|templates|runner)
       has_source gitlab || die "Step $step needs gitlab in CICD_SOURCES (now: $CICD_SOURCES)"
       "step_$step" ;;
-    *) die "Unknown step: $step (preflight keycloak jenkins jenkins-token gitlab bootstrap templates runner argocd)" ;;
+    *) die "Unknown step: $step (preflight keycloak jenkins jenkins-token gitlab bootstrap templates runner argocd console-image console)" ;;
   esac
 done
 
@@ -304,6 +390,11 @@ echo "Argo CD: https://$ARGOCD_HOST   (K-PaaS SSO, admin group '$KEYCLOAK_ADMIN_
 echo "Next   : ./onboard-vendor.sh --source <$(echo $CICD_SOURCES | tr ' ' '|')> <vendor> [users]  ->  ./add-app.sh <vendor> <app> <java-gradle|java-maven|php|node|vue>"
 if has_source scm; then
   echo "         (scm vendors: create the repositories and accounts in scm.$HOST_DOMAIN first - see README)"
+fi
+if kubectl -n "$CONSOLE_NAMESPACE" get deployment cicd-console >/dev/null 2>&1; then
+  echo "Console: https://$CONSOLE_HOST   (K-PaaS SSO; web UI for vendors, applications, builds and deployments)"
+else
+  echo "Console: (optional) $0 console-image console  ->  https://$CONSOLE_HOST"
 fi
 echo "Check  : ./check-cicd-portal.sh"
 echo "-----------------------------------------------------------------------------"

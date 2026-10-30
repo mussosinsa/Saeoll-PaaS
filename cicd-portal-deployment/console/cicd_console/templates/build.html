@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}빌드 로그{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › <a href="{{ url_for('main.app_page', vendor=v.name, app=app) }}">{{ app }}</a> › 빌드 #{{ build_id }}</div>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>빌드 로그 <span class="dim">{{ job if v.source == 'scm' else 'pipeline' }} #{{ build_id }}</span></h1>
+  <div class="actions"><a class="btn" href="{{ url }}" target="_blank" rel="noopener">{{ 'Jenkins' if v.source == 'scm' else 'GitLab' }}에서 보기 ↗</a></div>
+</div>
+{% if err %}<div class="alert error">{{ err }}</div>{% endif %}
+<section class="panel">
+  {% if v.source == 'gitlab' %}
+  <div class="steps" id="gl-jobs">
+    {% for j in gl_jobs %}<button class="step" data-job="{{ j.id }}">{{ j.stage }} · {{ j.name }} {{ badge(j.status) }}</button>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="log-head"><span id="log-state" class="dim">불러오는 중…</span>
+    <label class="dim"><input type="checkbox" id="log-follow" checked> 자동 스크롤</label></div>
+  <pre class="log" id="log"
+       data-url="{{ url_for('main.build_log', vendor=v.name, app=app, job=job, build_id=build_id) }}"></pre>
+</section>
+{% endblock %}
+{% block scripts %}<script>CicdConsole.buildLog(document.getElementById('log'));</script>{% endblock %}

@@ -18,6 +18,7 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 > 처음 설치: [설치·설정·운영 전체 가이드](docs/install-guide.md) (초보자용, 신규 클러스터 기준)
 > 솔루션별 적용 가이드: [SCM / GitLab](docs/guide-scm-gitlab.md) · [Harbor](docs/guide-harbor.md) · [Jenkins](docs/guide-jenkins.md) · [Argo CD](docs/guide-argocd.md)
 > 웹 화면 사용법: [Jenkins · Argo CD 웹 화면 가이드](docs/web-ui-guide.md)
+> 통합 웹 콘솔(선택): [CI/CD 콘솔 가이드](docs/console-guide.md) — 업체·앱·빌드·배포를 한 화면에서 (`ap-pipeline-ui` 화면 참고)
 > 운영 절차: [운영 관리자 가이드](docs/admin-guide.md)
 > 테스트 샘플: [PHP · Java Spring · Node.js · Vue 게시판 (MariaDB 연동)과 배포 방법](samples/README.md)
 
@@ -197,6 +198,16 @@ Jenkinsfile은 저장소에 있으므로 빌드 명령·이미지를 서비스�
 ```bash
 SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh   # Pod, SCM·Jenkins·Argo CD·Keycloak, API 로그인, Argo CD 앱 상태
 ./uninstall-cicd-portal.sh scm|gitlab|all         # 구성별 삭제 (사용 중인 업체가 있으면 거부, SCM 저장소·업체 namespace·Harbor 유지)
+./uninstall-cicd-portal.sh console                # CI/CD 콘솔만 삭제
+```
+
+### 8-1. CI/CD 콘솔 (선택)
+
+업체 등록·앱 추가·DB 연결 스크립트와 빌드·배포 상태를 웹 화면 `https://cicd.<도메인>`에서 다룬다(K-PaaS SSO,
+`cicd-admins`=운영 관리자, `cicd-<업체>`=자기 업체만). 자세한 내용: [CI/CD 콘솔 가이드](docs/console-guide.md).
+
+```bash
+SCM_ADMIN_PASSWORD='...' ./deploy-cicd-portal.sh console-image console   # 이미지 빌드(podman) → Harbor push → 배포
 ```
 
 ## 9. 운영 참고

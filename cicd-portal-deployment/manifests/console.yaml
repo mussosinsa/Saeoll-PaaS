@@ -1,0 +1,230 @@
+# CI/CD console (deploy-cicd-portal.sh console). Placeholders {KEY} are filled by the script.
+# The console runs the portal scripts (onboard-vendor.sh, add-app.sh, add-db.sh) for cicd-admins, so its
+# service account has the rights those scripts use on the master node: vendor namespaces, quotas,
+# secrets, Argo CD projects/applications and exec into the K-PaaS MariaDB (add-db.sh shared mode).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cicd-console
+  namespace: {NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cicd-console
+  labels:
+    app.kubernetes.io/part-of: cicd-portal
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, patch, update]
+  - apiGroups: [""]
+    resources: [secrets, resourcequotas, limitranges, persistentvolumeclaims]
+    verbs: [get, list, create, patch, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list]
+  - apiGroups: [argoproj.io]
+    resources: [appprojects, applications]
+    verbs: [get, list, watch, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cicd-console
+  labels:
+    app.kubernetes.io/part-of: cicd-portal
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cicd-console
+subjects:
+  - kind: ServiceAccount
+    name: cicd-console
+    namespace: {NAMESPACE}
+---
+# add-db.sh shared mode creates the database with kubectl exec into the K-PaaS MariaDB pod
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cicd-console-mariadb
+  namespace: mariadb
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cicd-console-mariadb
+  namespace: mariadb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cicd-console-mariadb
+subjects:
+  - kind: ServiceAccount
+    name: cicd-console
+    namespace: {NAMESPACE}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cicd-console
+  namespace: {NAMESPACE}
+  labels:
+    app: cicd-console
+spec:
+  replicas: 1                 # script jobs and their logs live in memory
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cicd-console
+  template:
+    metadata:
+      labels:
+        app: cicd-console
+    spec:
+      serviceAccountName: cicd-console
+      imagePullSecrets:
+        - name: cicd-console-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: console
+          image: {IMAGE}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORTAL_VARS
+              value: /etc/cicd-console/cp-portal-vars.sh
+            - name: CA_FILE
+              value: /etc/cicd-ca/ca.crt
+            - name: CONSOLE_HOST
+              value: {CONSOLE_HOST}
+            - name: CONSOLE_NAMESPACE
+              value: {NAMESPACE}
+            - name: OIDC_CLIENT_ID
+              value: {OIDC_CLIENT_ID}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cicd-console-secrets
+                  key: oidc-client-secret
+            - name: CONSOLE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cicd-console-secrets
+                  key: session-key
+            - name: SCM_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cicd-console-secrets
+                  key: scm-admin-password
+                  optional: true
+            # API addresses (empty: the public https://<name>.<domain> addresses, like the scripts)
+            - name: CICD_JENKINS_URL
+              value: "{JENKINS_API_URL}"
+            - name: CICD_GITLAB_URL
+              value: "{GITLAB_API_URL}"
+            - name: CICD_SCM_URL
+              value: "{SCM_API_URL}"
+          volumeMounts:
+            - name: portal-vars
+              mountPath: /etc/cicd-console
+              readOnly: true
+            - name: cicd-vars
+              mountPath: /opt/cicd/script/cicd-vars.sh
+              subPath: cicd-vars.sh
+              readOnly: true
+            - name: ca
+              mountPath: /etc/cicd-ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: portal-vars
+          secret:
+            secretName: cicd-console-secrets
+            items:
+              - key: cp-portal-vars.sh
+                path: cp-portal-vars.sh
+        - name: cicd-vars
+          configMap:
+            name: cicd-console-vars
+        - name: ca
+          secret:
+            secretName: {CA_SECRET_NAME}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cicd-console
+  namespace: {NAMESPACE}
+spec:
+  selector:
+    app: cicd-console
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cicd-console
+  namespace: {NAMESPACE}
+spec:
+  ingressClassName: {INGRESS_CLASS_NAME}
+  tls:
+    - hosts:
+        - {CONSOLE_HOST}
+      secretName: {TLS_SECRET}
+  rules:
+    - host: {CONSOLE_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cicd-console
+                port:
+                  name: http

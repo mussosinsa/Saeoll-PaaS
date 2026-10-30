@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}DB 연결 · {{ v.name }}/{{ a.app }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › <a href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">{{ a.app }}</a> › DB 연결</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>DB 연결 <span class="dim">{{ v.name }}/{{ a.app }}</span></h1></div>
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+<form class="panel form" method="post" data-db-form>
+  {{ csrf() }}
+  <p class="hint"><code>add-db.sh</code>를 실행합니다. 네임스페이스에 Secret <code>{{ a.app }}-db</code>(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)를 만들고
+    gitops Deployment가 이를 읽도록 합니다. 비밀번호는 Secret에만 저장되며 화면과 Git에는 남지 않습니다.</p>
+  <fieldset>
+    <legend>환경</legend>
+    {% for value, label in (('dev', 'dev'), ('prod', 'prod (운영 관리자 prod Sync 때 배포)'), ('all', 'dev + prod')) %}
+    <label class="radio"><input type="radio" name="env" value="{{ value }}" {{ 'checked' if form.get('env', 'dev') == value }}> {{ label }}</label>
+    {% endfor %}
+  </fieldset>
+  <fieldset>
+    <legend>방식</legend>
+    <label class="radio"><input type="radio" name="mode" value="dedicated" {{ 'checked' if form.get('mode', 'dedicated') == 'dedicated' }}> <b>전용</b> — 앱 네임스페이스에 MariaDB StatefulSet (gitops로 관리)</label>
+    <label class="radio"><input type="radio" name="mode" value="shared" {{ 'checked' if form.get('mode') == 'shared' }}> <b>공용</b> — K-PaaS MariaDB에 DB·사용자 생성 (빠른 테스트용)</label>
+    <label class="radio"><input type="radio" name="mode" value="external" {{ 'checked' if form.get('mode') == 'external' }}> <b>외부</b> — 이미 있는 DB 접속 정보 등록</label>
+  </fieldset>
+  <fieldset data-for-mode="external">
+    <legend>외부 DB 접속 정보</legend>
+    <label>DB_HOST <input name="db_host" value="{{ form.get('db_host', '') }}"></label>
+    <label>DB_PORT <input name="db_port" value="{{ form.get('db_port', '') }}" placeholder="3306"></label>
+    <label>DB_NAME <input name="db_name" value="{{ form.get('db_name', '') }}"></label>
+    <label>DB_USER <input name="db_user" value="{{ form.get('db_user', '') }}"></label>
+    <label>DB_PASSWORD <input type="password" name="db_password" autocomplete="new-password"></label>
+  </fieldset>
+  <label class="check"><input type="checkbox" name="secret_update"> 기존 Secret 교체 (공용: 새 비밀번호, 외부: 새 값. 전용 MariaDB는 처음 비밀번호 유지)</label>
+  <div class="form-actions"><a class="btn" href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">취소</a><button class="btn primary">실행</button></div>
+</form>
+{% endblock %}

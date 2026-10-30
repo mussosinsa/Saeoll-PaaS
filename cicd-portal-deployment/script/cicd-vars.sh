@@ -59,6 +59,21 @@ CICD_DOCKERHUB="docker.io/library"              # CI tool images (gradle, maven,
 CICD_BASE_REGISTRY="docker.io/library"          # Dockerfile BASE_REGISTRY (e.g. harbor.<domain>/base-images)
 KANIKO_IMAGE="gcr.io/kaniko-project/executor:v1.23.2-debug"
 
+# CI/CD CONSOLE (web UI, optional: ./deploy-cicd-portal.sh console-image console)
+CONSOLE_NAMESPACE="cicd-console"
+CONSOLE_HOST_PREFIX="cicd"                      # https://cicd.<domain>
+KEYCLOAK_CONSOLE_CLIENT_ID="cicd-console"
+CONSOLE_HARBOR_PROJECT="cicd-portal"            # Harbor project of the console image
+CONSOLE_IMAGE_TAG="1.0.0"
+CONSOLE_BASE_IMAGE="${CICD_DOCKERHUB}/python:3.12-slim"
+CONSOLE_PIP_INDEX_URL=""                        # closed network: PyPI mirror (e.g. Nexus) for the image build
+CONSOLE_APT_MIRROR=""                           # closed network: Debian mirror, e.g. http://mirror.example/debian
+# API addresses used by the console pod (empty: https://jenkins|gitlab|scm-manager.<domain> like the scripts).
+# The K-PaaS default NetworkPolicy blocks pod-to-pod traffic into cicd-jenkins, so keep Jenkins on the ingress.
+CONSOLE_JENKINS_API_URL=""
+CONSOLE_GITLAB_API_URL=""                       # e.g. http://gitlab.cicd-gitlab.svc.cluster.local (cp-role: shared)
+CONSOLE_SCM_API_URL=""                          # e.g. http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm
+
 # Application databases (add-db.sh)
 MARIADB_IMAGE="docker.io/library/mariadb:11.4"  # dedicated MariaDB per app/env (LTS); Harbor mirror in a closed network
 DB_SIZE=${DB_SIZE:-2Gi}                          # dedicated MariaDB volume

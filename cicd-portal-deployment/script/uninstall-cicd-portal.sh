@@ -2,7 +2,8 @@
 # Remove CI/CD portal components and their Keycloak clients.
 #   ./uninstall-cicd-portal.sh scm      Jenkins (jobs, credentials, build history)
 #   ./uninstall-cicd-portal.sh gitlab   GitLab CE (all repositories and data) + Runner
-#   ./uninstall-cicd-portal.sh all      both sources + Argo CD (all applications)
+#   ./uninstall-cicd-portal.sh console  CI/CD web console only (vendors, applications and data are kept)
+#   ./uninstall-cicd-portal.sh all      both sources + Argo CD (all applications) + console
 # A source still used by a vendor is refused unless FORCE=1. Vendor namespaces (<vendor>-dev/prod),
 # Harbor projects, SCM repositories and the K-PaaS components are kept.
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -15,8 +16,9 @@ TARGET=${1:-}
 case "$TARGET" in
   scm) REMOVE=(scm) ;;
   gitlab) REMOVE=(gitlab) ;;
-  all) REMOVE=(scm gitlab argocd) ;;
-  *) echo "Usage: $0 <scm|gitlab|all>" >&2; exit 2 ;;
+  console) REMOVE=(console) ;;
+  all) REMOVE=(scm gitlab argocd console) ;;
+  *) echo "Usage: $0 <scm|gitlab|console|all>" >&2; exit 2 ;;
 esac
 
 # Vendors that would lose their CI/source
@@ -36,6 +38,7 @@ echo "This deletes:"
 [[ " ${REMOVE[*]} " == *" scm "* ]] && echo "  - Jenkins (jobs, credentials, build history), Keycloak client $KEYCLOAK_JENKINS_CLIENT_ID"
 [[ " ${REMOVE[*]} " == *" gitlab "* ]] && echo "  - GitLab (ALL repositories and data PVCs), runner, Keycloak client $KEYCLOAK_GITLAB_CLIENT_ID"
 [[ " ${REMOVE[*]} " == *" argocd "* ]] && echo "  - Argo CD (all applications), Keycloak client $KEYCLOAK_ARGOCD_CLIENT_ID"
+[[ " ${REMOVE[*]} " == *" console "* ]] && echo "  - CI/CD console (namespace $CONSOLE_NAMESPACE), Keycloak client $KEYCLOAK_CONSOLE_CLIENT_ID"
 [[ -n "$users" ]] && echo "  Vendors affected:$users"
 read -r -p "Type '$TARGET' to confirm: " answer
 [[ "$answer" == "$TARGET" ]] || { echo "Cancelled."; exit 0; }
@@ -47,6 +50,12 @@ remove_namespace() {
   [[ -n "$pvs" ]] && kubectl delete pv $pvs --ignore-not-found
 }
 
+if [[ " ${REMOVE[*]} " == *" console "* ]]; then
+  kubectl delete namespace "$CONSOLE_NAMESPACE" --ignore-not-found
+  kubectl delete clusterrolebinding,clusterrole cicd-console --ignore-not-found
+  kubectl -n mariadb delete rolebinding,role cicd-console-mariadb --ignore-not-found 2>/dev/null
+  $API kc-delete-client "$KEYCLOAK_CONSOLE_CLIENT_ID"
+fi
 if [[ " ${REMOVE[*]} " == *" argocd "* ]]; then
   # Applications first so their finalizers do not block the namespace
   kubectl -n "$ARGOCD_NAMESPACE" delete applications.argoproj.io --all --wait=false 2>/dev/null
@@ -68,5 +77,5 @@ fi
 [[ "$TARGET" == all ]] && rm -rf ../values
 echo
 echo "Removed: ${REMOVE[*]}. Kept: Keycloak groups and users, vendor namespaces, Harbor projects, SCM repositories."
-echo "Remove '${TARGET/all/scm gitlab}' from CICD_SOURCES in cicd-vars.sh (or the environment)."
+[[ "$TARGET" != console ]] && echo "Remove '${TARGET/all/scm gitlab}' from CICD_SOURCES in cicd-vars.sh (or the environment)."
 echo "With an NFS StorageClass (Retain) clean the deleted volumes on the NFS server manually."

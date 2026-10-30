@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.jobs_page') }}">작업 이력</a> › #{{ job.id }}</div>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ job.title }} <span id="job-status">{{ badge(job.status) }}</span></h1>
+</div>
+<section class="panel">
+  <dl class="kv">
+    <dt>명령</dt><dd><code>{{ job.command }}</code></dd>
+    <dt>실행자</dt><dd>{{ job.user }}</dd>
+    <dt>요청</dt><dd>{{ job.created|dt }}</dd>
+  </dl>
+  <div class="alert warn" id="job-manual" {{ '' if job.status == 'manual' else 'hidden' }}>
+    추가 작업이 필요합니다(종료 코드 3). 로그 마지막의 할 일 목록을 완료한 뒤 같은 값으로 다시 실행하세요.</div>
+  <div class="log-head"><span id="log-state" class="dim"></span>
+    <label class="dim"><input type="checkbox" id="log-follow" checked> 자동 스크롤</label></div>
+  <pre class="log" id="log" data-url="{{ url_for('main.job_log', job_id=job.id) }}"></pre>
+</section>
+{% endblock %}
+{% block scripts %}<script>CicdConsole.jobLog(document.getElementById('log'));</script>{% endblock %}

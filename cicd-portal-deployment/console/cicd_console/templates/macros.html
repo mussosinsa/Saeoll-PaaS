@@ -1,0 +1,18 @@
+{% macro badge(status) -%}
+<span class="badge s-{{ (status or 'unknown')|lower }}">{{ status_label(status) }}</span>
+{%- endmacro %}
+
+{% macro env_cell(e) -%}
+{% if e %}
+  {{ badge(e.health) }} {{ badge(e.sync) }}
+  {% if e.tag %}<code class="dim">{{ e.tag }}</code>{% endif %}
+{% else %}<span class="dim">-</span>{% endif %}
+{%- endmacro %}
+
+{% macro source_label(source) -%}
+{% if source == 'scm' %}<span class="src scm">SCM + Jenkins</span>{% elif source == 'gitlab' %}<span class="src gitlab">GitLab</span>{% else %}<span class="dim">-</span>{% endif %}
+{%- endmacro %}
+
+{% macro csrf() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{%- endmacro %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}작업 이력{% endblock %}
+{% block content %}
+<div class="page-head"><h1>작업 이력</h1></div>
+<section class="panel">
+  <p class="hint">콘솔에서 실행한 스크립트(업체 등록, 앱 추가, DB 연결, 시스템 점검)입니다. 한 번에 하나씩 실행되며, 콘솔 Pod가 재시작되면 이력은 지워집니다.</p>
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>#</th><th>작업</th><th>명령</th><th>상태</th><th>실행자</th><th>요청</th><th>소요</th></tr></thead>
+    <tbody>
+    {% for j in jobs %}
+      <tr>
+        <td><a href="{{ url_for('main.job_page', job_id=j.id) }}">{{ j.id }}</a></td>
+        <td><a href="{{ url_for('main.job_page', job_id=j.id) }}">{{ j.title }}</a></td>
+        <td><code>{{ j.command }}</code></td>
+        <td>{{ badge(j.status) }}</td>
+        <td>{{ j.user }}</td>
+        <td title="{{ j.created|dt }}">{{ j.created|ago }}</td>
+        <td>{{ ((j.ended - j.started).total_seconds() if j.ended and j.started else 0)|dur }}</td>
+      </tr>
+    {% else %}<tr><td colspan="7" class="dim">실행한 작업이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "macros.html" import env_cell, source_label with context %}
+{% block title %}대시보드{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>대시보드</h1>
+  {% if is_admin %}
+  <div class="actions">
+    <form method="post" action="{{ url_for('main.run_check') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn">시스템 점검</button>
+    </form>
+    <a class="btn primary" href="{{ url_for('main.vendor_new') }}">+ 업체 등록</a>
+  </div>
+  {% endif %}
+</div>
+
+{% if no_access %}
+<div class="panel empty">
+  <p>접근할 수 있는 업체가 없습니다.</p>
+  <p class="dim">업체 구성원은 Keycloak 그룹 <code>cicd-&lt;업체&gt;</code>, 운영 관리자는 <code>{{ admin_group }}</code>에 속해야 합니다.
+    그룹이 바뀌었다면 로그아웃 후 다시 로그인하세요.</p>
+</div>
+{% else %}
+<section class="stats">
+  <div class="stat"><b>{{ stats.vendors }}</b><span>업체</span></div>
+  <div class="stat"><b>{{ stats.apps }}</b><span>애플리케이션</span></div>
+  <div class="stat"><b>{{ stats.dev_healthy }}</b><span>dev 정상</span></div>
+  <div class="stat {{ 'warn' if stats.prod_outofsync }}"><b>{{ stats.prod_outofsync }}</b><span>prod 배포 대기</span></div>
+  <div class="stat {{ 'bad' if stats.degraded }}"><b>{{ stats.degraded }}</b><span>오류 환경</span></div>
+</section>
+
+{% for v in vendors %}
+<section class="panel">
+  <div class="panel-head">
+    <h2><a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a></h2>
+    {{ source_label(v.source) }}
+    <span class="dim">네임스페이스 {{ v.namespaces|join(', ') }}</span>
+    <a class="more" href="{{ url_for('main.vendor_page', vendor=v.name) }}">상세 ›</a>
+  </div>
+  {% set vapps = by_vendor[v.name] %}
+  {% if vapps %}
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>애플리케이션</th><th>유형</th><th>dev</th><th>prod</th></tr></thead>
+    <tbody>
+    {% for a in vapps %}
+      <tr>
+        <td><a href="{{ url_for('main.app_page', vendor=a.vendor, app=a.app) }}">{{ a.app }}</a></td>
+        <td>{{ a.type }}</td>
+        <td>{{ env_cell(a.envs.get('dev')) }}</td>
+        <td>{{ env_cell(a.envs.get('prod')) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="dim pad">등록된 애플리케이션이 없습니다.
+    {% if is_admin %}<a href="{{ url_for('main.app_new', vendor=v.name) }}">앱 추가</a>{% endif %}</p>
+  {% endif %}
+</section>
+{% else %}
+<div class="panel empty">
+  <p>등록된 업체가 없습니다.</p>
+  {% if is_admin %}<p><a class="btn primary" href="{{ url_for('main.vendor_new') }}">+ 업체 등록</a></p>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

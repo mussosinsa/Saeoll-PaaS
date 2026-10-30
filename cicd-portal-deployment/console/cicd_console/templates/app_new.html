@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}앱 추가 · {{ v.name }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › 앱 추가</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>앱 추가 <span class="dim">{{ v.name }}</span></h1></div>
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+<form class="panel form" method="post">
+  {{ csrf() }}
+  <p class="hint"><code>add-app.sh</code>를 실행합니다. 소스 저장소(시작 소스), gitops 매니페스트, CI 작업, Argo CD 애플리케이션(dev 자동 / prod 수동)을 만듭니다.
+    기존 파일은 덮어쓰지 않으며 다시 실행해도 안전합니다.</p>
+  {% if v.source == 'scm' %}
+  <div class="alert warn">K-PaaS SCM 업체: 먼저 <code>scm.{{ host_domain }}</code>에서 Git 저장소 <code>{{ v.name }}-&lt;앱&gt;</code>을 만들고
+    참여자로 <code>{{ v.ci_user or 'jenkins-' ~ v.name }}</code>(보기)와 개발자(쓰기)를 지정하세요.</div>
+  {% endif %}
+
+  <label>앱 ID <input name="app" required pattern="[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?" value="{{ form.get('app', '') }}" placeholder="homepage">
+    <small>접속 주소: https://&lt;앱&gt;-{{ v.name }}-dev.{{ host_domain }} (dev), https://&lt;앱&gt;-{{ v.name }}.{{ host_domain }} (prod)</small></label>
+  <label>언어 · 빌드 유형
+    <select name="type" required>
+      <option value="">선택</option>
+      {% for t in types %}<option value="{{ t }}" {{ 'selected' if form.get('type') == t }}>{{ t }}</option>{% endfor %}
+    </select></label>
+  <label>헬스 체크 경로 <input name="health" value="{{ form.get('health', '') }}" placeholder="/healthz (php: /healthz.php)"></label>
+
+  <fieldset>
+    <legend>선택 사항</legend>
+    <label class="check"><input type="checkbox" name="skip_starter" {{ 'checked' if form.get('skip_starter') }}> 시작 소스를 넣지 않음 (기존 소스 사용, Dockerfile·CI 파일 필요)</label>
+    <label class="check"><input type="checkbox" name="replace_ci" {{ 'checked' if form.get('replace_ci') }}> 기존 CI 파일(Jenkinsfile / .gitlab-ci.yml)을 포털 버전으로 교체</label>
+    {% if v.source == 'scm' %}
+    <label>기존 SCM 저장소 이름 <input name="scm_repo" value="{{ form.get('scm_repo', '') }}" placeholder="{{ v.name }}-&lt;앱&gt; (기본)"></label>
+    {% endif %}
+    <label>dev DB
+      <select name="db">
+        <option value="">연결 안 함 (나중에 DB 연결 화면에서)</option>
+        <option value="dedicated" {{ 'selected' if form.get('db') == 'dedicated' }}>전용 MariaDB (앱 네임스페이스에 StatefulSet)</option>
+        <option value="shared" {{ 'selected' if form.get('db') == 'shared' }}>K-PaaS 공용 MariaDB (빠른 테스트용)</option>
+      </select></label>
+  </fieldset>
+  <div class="form-actions"><a class="btn" href="{{ url_for('main.vendor_page', vendor=v.name) }}">취소</a><button class="btn primary">실행</button></div>
+</form>
+{% endblock %}

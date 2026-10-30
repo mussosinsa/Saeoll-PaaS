@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, env_cell, source_label, csrf with context %}
+{% block title %}{{ v.name }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › {{ v.name }}</div>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ v.name }} {{ source_label(v.source) }}</h1>
+  <div class="actions">
+    {% for name, url in links.items() %}<a class="btn" href="{{ url }}" target="_blank" rel="noopener">{{ {'argocd': 'Argo CD', 'harbor': 'Harbor', 'jenkins': 'Jenkins', 'scm': 'SCM', 'gitlab': 'GitLab'}[name] }} ↗</a>{% endfor %}
+    {% if is_admin %}<a class="btn primary" href="{{ url_for('main.app_new', vendor=v.name) }}">+ 앱 추가</a>{% endif %}
+  </div>
+</div>
+
+<div class="tabs" data-tabs>
+  <a href="#apps" class="on">애플리케이션 ({{ apps|length }})</a>
+  <a href="#members">구성원 ({{ members|length }})</a>
+  <a href="#info">업체 정보</a>
+</div>
+
+<section id="apps" class="tab-body">
+  {% if apps %}
+  <div class="cards">
+  {% for a in apps %}
+    {% set lb, lerr = last.get(a.app, (None, None)) %}
+    <a class="card" href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">
+      <div class="card-head"><b>{{ a.app }}</b><span class="dim">{{ a.type }}</span></div>
+      <ol class="flow mini">
+        <li><span class="k">빌드</span>{% if lb %}{{ badge(lb.status) }}<small class="dim">{{ lb.ref }} · {{ lb.started|ago }}</small>{% elif lerr %}<span class="dim" title="{{ lerr }}">조회 실패</span>{% else %}<span class="dim">없음</span>{% endif %}</li>
+        <li><span class="k">dev</span>{{ env_cell(a.envs.get('dev')) }}</li>
+        <li><span class="k">prod</span>{{ env_cell(a.envs.get('prod')) }}</li>
+      </ol>
+    </a>
+  {% endfor %}
+  </div>
+  {% else %}
+  <div class="panel empty"><p>등록된 애플리케이션이 없습니다.</p>
+    {% if is_admin %}<p><a class="btn primary" href="{{ url_for('main.app_new', vendor=v.name) }}">+ 앱 추가</a></p>{% endif %}</div>
+  {% endif %}
+</section>
+
+<section id="members" class="tab-body" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>구성원</h2><span class="dim">Keycloak 그룹 <code>cicd-{{ v.name }}</code>{% if v.source == 'gitlab' %} · GitLab 그룹 <code>{{ v.name }}</code> (Developer){% endif %}</span></div>
+    {% if members_err %}<div class="alert error">구성원 조회 실패: {{ members_err }}</div>{% endif %}
+    <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th>사용자 ID</th><th>이름</th><th>이메일</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for username, email, name in members %}
+        <tr><td>{{ username }}</td><td>{{ name }}</td><td>{{ email }}</td>
+          {% if is_admin %}<td class="r">
+            <form method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}" data-confirm="{{ username }}을(를) 구성원에서 제외할까요?">
+              {{ csrf() }}<input type="hidden" name="action" value="remove"><input type="hidden" name="username" value="{{ username }}">
+              <button class="btn small danger">제외</button>
+            </form></td>{% endif %}
+        </tr>
+      {% else %}<tr><td colspan="4" class="dim">구성원이 없습니다.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if is_admin %}
+    <form class="inline-form" method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}">
+      {{ csrf() }}<input type="hidden" name="action" value="add">
+      <label>사용자 추가 <input name="username" required pattern="[A-Za-z0-9._@-]+" placeholder="Keycloak 사용자 ID"></label>
+      <button class="btn primary">추가</button>
+    </form>
+    <p class="hint">추가된 사용자는 Jenkins·Argo CD·이 콘솔에서 업체 앱을 조회하고 dev 빌드·배포를 할 수 있습니다. 그룹 변경 후에는 각 화면에서 다시 로그인해야 반영됩니다.
+      {% if v.source == 'scm' %}SCM 저장소 쓰기 권한은 <code>scm.{{ host_domain }}</code>에서 참여자로 따로 지정합니다.{% endif %}</p>
+    {% endif %}
+  </div>
+</section>
+
+<section id="info" class="tab-body" hidden>
+  <div class="panel">
+    <dl class="kv">
+      <dt>소스</dt><dd>{{ source_label(v.source) }}</dd>
+      <dt>네임스페이스</dt><dd>{{ v.namespaces|join(', ') }} ({{ '단일' if v.ns_mode == 'single' else 'dev/prod 분리' }})</dd>
+      <dt>Harbor 프로젝트</dt><dd><code>{{ v.name }}</code> (robot <code>robot${{ v.name }}+cicd</code>)</dd>
+      {% if v.source == 'scm' %}<dt>CI 계정</dt><dd><code>{{ v.ci_user or 'jenkins-' ~ v.name }}</code></dd>{% endif %}
+      <dt>gitops 저장소</dt><dd>{% for r in v.repos %}<code>{{ r }}</code>{% endfor %}</dd>
+      <dt>등록일</dt><dd>{{ v.created|dt }}</dd>
+    </dl>
+  </div>
+  {% for ns, quota in quotas.items() %}{% if quota %}
+  <div class="panel">
+    <div class="panel-head"><h2>리소스 쿼터 · {{ ns }}</h2></div>
+    <div class="quota">
+    {% for item in quota %}<div><span class="k">{{ item.name }}</span><b>{{ item.used }}</b> / {{ item.hard }}</div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}{% endfor %}
+  {% if is_admin %}
+  <p class="hint">업체 설정 재실행(구성원 일괄 추가, SCM CI 비밀번호 등록 등): <a href="{{ url_for('main.vendor_new', vendor=v.name, source=v.source, ns_mode=v.ns_mode) }}">업체 등록 화면</a>에서 같은 업체 ID로 다시 실행합니다.</p>
+  {% endif %}
+</section>
+{% endblock %}
