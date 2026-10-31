@@ -51,6 +51,7 @@ load_portal_vars() {
   HARBOR_URL=${P_REPOSITORY_URL:-"https://harbor.${HOST_DOMAIN}"}
   HARBOR_URL=${HARBOR_URL//\{host domain\}/$HOST_DOMAIN}
   HARBOR_HOST=$(echo "$HARBOR_URL" | awk -F[/:] '{print $4}')
+  SECURITY_IMAGE="$HARBOR_HOST/${CONSOLE_HARBOR_PROJECT:-cicd-portal}/security-scanner:${SECURITY_IMAGE_TAG:-1.0.0}"
 
   JENKINS_HOST="jenkins.${HOST_DOMAIN}"
   JENKINS_URL=${CICD_JENKINS_URL:-"https://${JENKINS_HOST}"}
@@ -289,4 +290,13 @@ for p in pairs:
     text = text.replace("{" + k + "}", v)
 open(dst, "w").write(text)
 PY
+}
+
+# Security scan installed (./deploy-cicd-portal.sh security): policy ConfigMap in a CI namespace
+security_installed() {
+  local ns
+  for ns in "$JENKINS_NAMESPACE" "$RUNNER_NAMESPACE"; do
+    kubectl -n "$ns" get configmap cicd-security-policy >/dev/null 2>&1 && return 0
+  done
+  return 1
 }

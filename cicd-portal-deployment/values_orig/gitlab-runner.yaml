@@ -20,10 +20,10 @@ runners:
         memory_limit = "{RUNNER_BUILD_MEMORY_LIMIT}"
         helper_memory_limit = "512Mi"
         service_memory_limit = "1Gi"
-        poll_timeout = 600
+        poll_timeout = 600{SECURITY_PULL_SECRETS}
         [runners.kubernetes.pod_labels]
           "app.kubernetes.io/part-of" = "cicd-portal"
         [[runners.kubernetes.volumes.secret]]
           name = "{CA_SECRET_NAME}"
           mount_path = "/etc/cicd-ca"
-          read_only = true
+          read_only = true{SECURITY_VOLUMES}

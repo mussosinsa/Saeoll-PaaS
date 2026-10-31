@@ -1,0 +1,87 @@
+# CI/CD portal - Java / Spring rules
+rules:
+  - id: java-sql-concat
+    languages: [java]
+    severity: ERROR
+    message: 문자열을 이어 붙여 SQL을 실행합니다. PreparedStatement 바인딩 변수나 JPA 파라미터를 쓰세요.
+    pattern-either:
+      - pattern: $S.executeQuery("..." + $X, ...)
+      - pattern: $S.executeQuery("..." + $X + "...", ...)
+      - pattern: $S.executeUpdate("..." + $X, ...)
+      - pattern: $S.executeUpdate("..." + $X + "...", ...)
+      - pattern: $S.addBatch("..." + $X, ...)
+      - pattern: $S.addBatch("..." + $X + "...", ...)
+      - pattern: $C.prepareStatement("..." + $X, ...)
+      - pattern: $C.prepareStatement("..." + $X + "...", ...)
+      - pattern: $JDBC.queryForList("..." + $X, ...)
+      - pattern: $JDBC.queryForList("..." + $X + "...", ...)
+      - pattern: $JDBC.queryForObject("..." + $X, ...)
+      - pattern: $JDBC.queryForObject("..." + $X + "...", ...)
+      - pattern: $JDBC.queryForMap("..." + $X, ...)
+      - pattern: $JDBC.queryForMap("..." + $X + "...", ...)
+      - pattern: $JDBC.update("..." + $X, ...)
+      - pattern: $JDBC.update("..." + $X + "...", ...)
+      - pattern: $EM.createQuery("..." + $X, ...)
+      - pattern: $EM.createQuery("..." + $X + "...", ...)
+      - pattern: $EM.createNativeQuery("..." + $X, ...)
+      - pattern: $EM.createNativeQuery("..." + $X + "...", ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-89: SQL Injection"
+      description: SQL 주입
+  - id: java-command-injection
+    languages: [java]
+    severity: ERROR
+    message: 외부 명령을 변수로 실행합니다. 사용자 입력이 들어가지 않도록 하세요.
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($CMD, ...)
+          - pattern: new ProcessBuilder($CMD, ...)
+      - pattern-not: Runtime.getRuntime().exec("...", ...)
+      - pattern-not: new ProcessBuilder("...", ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-78: OS Command Injection"
+      description: OS 명령 주입
+  - id: java-weak-hash
+    languages: [java]
+    severity: WARNING
+    message: MD5/SHA-1은 안전하지 않습니다. SHA-256 이상이나 비밀번호는 BCrypt를 쓰세요.
+    pattern-either:
+      - pattern: java.security.MessageDigest.getInstance("MD5")
+      - pattern: java.security.MessageDigest.getInstance("SHA-1")
+      - pattern: java.security.MessageDigest.getInstance("SHA1")
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-328: Use of Weak Hash"
+      description: 약한 해시 함수
+  - id: java-object-deserialization
+    languages: [java]
+    severity: WARNING
+    message: ObjectInputStream 역직렬화는 신뢰할 수 없는 데이터에 쓰면 위험합니다.
+    pattern: new java.io.ObjectInputStream(...)
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      description: 안전하지 않은 역직렬화
+  - id: spring-csrf-disabled
+    languages: [java]
+    severity: WARNING
+    message: Spring Security CSRF 보호를 끄고 있습니다. 세션(쿠키) 로그인을 쓰면 켜 두세요.
+    pattern-either:
+      - pattern: $H.csrf().disable()
+      - pattern: $H.csrf($C -> $C.disable())
+      - pattern: $H.csrf(AbstractHttpConfigurer::disable)
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-352: Cross-Site Request Forgery"
+      description: CSRF 보호 비활성화
+  - id: java-insecure-random-token
+    languages: [java]
+    severity: INFO
+    message: java.util.Random은 보안 토큰에 쓰면 안 됩니다. SecureRandom을 쓰세요.
+    pattern: new java.util.Random(...)
+    metadata:
+      cicd-severity: low
+      cwe: "CWE-330: Insufficiently Random Values"
+      description: 예측 가능한 난수

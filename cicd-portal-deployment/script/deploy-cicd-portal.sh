@@ -11,6 +11,9 @@
 #          jenkins-token (scm, once after the first Jenkins login)
 #          console-image console   (optional web console https://cicd.<domain>: image build with podman
 #                                   + push to Harbor, then deploy; env SCM_ADMIN_PASSWORD for scm vendors)
+#          security-image security (optional security scan in the pipelines + console 품질 관리: scanner image,
+#                                   policy/rules ConfigMaps, Harbor scan on push; SECURITY_PRESIDIO=true adds
+#                                   Presidio, DEFECTDOJO_URL + DEFECTDOJO_TOKEN send the reports to DefectDojo)
 # Re-runnable; each step can be run on its own.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -179,10 +182,18 @@ step_runner() {
     --from-file=runner-token=/dev/stdin --from-literal=runner-registration-token="" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   mkdir -p "$VALUES_DIR"
+  # security scan installed: policy/rules ConfigMaps and the scanner pull secret in the job pods
+  local sec_pull="" sec_volumes=""
+  if kubectl -n "$RUNNER_NAMESPACE" get configmap cicd-security-policy >/dev/null 2>&1; then
+    sec_pull=$'\n        image_pull_secrets = ["cicd-security-pull"]'
+    sec_volumes=$'\n        [[runners.kubernetes.volumes.config_map]]\n          name = "cicd-security-policy"\n          mount_path = "/etc/cicd-security/policy"\n          read_only = true'
+    sec_volumes+=$'\n        [[runners.kubernetes.volumes.config_map]]\n          name = "cicd-security-rules"\n          mount_path = "/etc/cicd-security/rules"\n          read_only = true'
+  fi
   render_file ../values_orig/gitlab-runner.yaml "$VALUES_DIR/gitlab-runner.yaml" \
     GITLAB_INTERNAL_URL="$GITLAB_INTERNAL_URL" RUNNER_CONCURRENT="$RUNNER_CONCURRENT" \
     RUNNER_NAMESPACE="$RUNNER_NAMESPACE" CICD_DOCKERHUB="$CICD_DOCKERHUB" \
-    RUNNER_BUILD_MEMORY_LIMIT="$RUNNER_BUILD_MEMORY_LIMIT" CA_SECRET_NAME="$CA_SECRET_NAME"
+    RUNNER_BUILD_MEMORY_LIMIT="$RUNNER_BUILD_MEMORY_LIMIT" CA_SECRET_NAME="$CA_SECRET_NAME" \
+    SECURITY_PULL_SECRETS="$sec_pull" SECURITY_VOLUMES="$sec_volumes"
   helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
   helm repo update gitlab >/dev/null
   helm upgrade --install gitlab-runner gitlab/gitlab-runner --version "$GITLAB_RUNNER_CHART_VERSION" \
@@ -367,16 +378,125 @@ step_console() {
   ok "CI/CD console: https://$CONSOLE_HOST (K-PaaS SSO; '$KEYCLOAK_ADMIN_GROUP' = operators, cicd-<vendor> = vendors)"
 }
 
+# Security scanner image (Semgrep, Gitleaks, Trivy + DB, cicd-scan, rules) pushed to Harbor
+step_security-image() {
+  require_cmds podman
+  local podman=(podman) ctx
+  ((EUID == 0)) || podman=(sudo podman)
+  info "Security scanner image $SECURITY_IMAGE"
+  ctx=$(mktemp -d)
+  cp -r ../security/scanner ../security/rules ../security/policy "$ctx/"
+  $API harbor-project "$CONSOLE_HARBOR_PROJECT"
+  printf '%s' "$REPOSITORY_PASSWORD" | "${podman[@]}" login "$HARBOR_HOST" --username "$REPOSITORY_USERNAME" --password-stdin >/dev/null
+  "${podman[@]}" build -f "$ctx/scanner/Dockerfile" -t "$SECURITY_IMAGE" \
+    --build-arg BASE_IMAGE="$SECURITY_BASE_IMAGE" --build-arg GITLEAKS_IMAGE="$SECURITY_GITLEAKS_IMAGE" \
+    --build-arg TRIVY_IMAGE="$SECURITY_TRIVY_IMAGE" --build-arg SEMGREP_VERSION="$SECURITY_SEMGREP_VERSION" \
+    --build-arg PIP_INDEX_URL="$CONSOLE_PIP_INDEX_URL" --build-arg APT_MIRROR="$CONSOLE_APT_MIRROR" \
+    --build-arg TRIVY_DB_REPOSITORY="$SECURITY_TRIVY_DB_REPOSITORY" \
+    --build-arg TRIVY_JAVA_DB_REPOSITORY="$SECURITY_TRIVY_JAVA_DB_REPOSITORY" "$ctx" || {
+      rm -rf "$ctx"; die "Security scanner image build failed."; }
+  rm -rf "$ctx"
+  "${podman[@]}" push "$SECURITY_IMAGE" || die "Security scanner image push failed ($SECURITY_IMAGE)."
+  ok "Security scanner image pushed: $SECURITY_IMAGE (rebuild regularly to refresh the Trivy DB)"
+}
+
+# Security scan in the pipelines: ConfigMaps (policy edited in the console, rules/settings from this repo),
+# scanner pull secret, Harbor scan on push, optional Presidio and DefectDojo, GitLab templates/runner.
+step_security() {
+  local namespaces=() ns dir presidio_url="" policy_src="" robot v
+  has_source scm && namespaces+=("$JENKINS_NAMESPACE")
+  has_source gitlab && namespaces+=("$RUNNER_NAMESPACE")
+  info "Security scan for ${namespaces[*]} (image $SECURITY_IMAGE)"
+
+  if [[ "$SECURITY_PRESIDIO" == true ]]; then
+    ensure_namespace "$SECURITY_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+    mkdir -p "$VALUES_DIR"
+    render_file ../manifests/presidio.yaml "$VALUES_DIR/presidio.yaml" NAMESPACE="$SECURITY_NAMESPACE" PRESIDIO_IMAGE="$PRESIDIO_IMAGE"
+    kubectl apply -f "$VALUES_DIR/presidio.yaml" >/dev/null
+    kubectl -n "$SECURITY_NAMESPACE" rollout status deployment/presidio-analyzer --timeout=600s || \
+      warn "Presidio is not ready yet: kubectl -n $SECURITY_NAMESPACE logs deploy/presidio-analyzer"
+    presidio_url="http://presidio-analyzer.$SECURITY_NAMESPACE.svc.cluster.local:3000"
+    ok "Presidio analyzer: $presidio_url"
+  fi
+
+  # rules + settings (always refreshed from the repository)
+  dir=$(mktemp -d)
+  cp ../security/rules/* "$dir/"
+  python3 - "$dir/settings.json" "$SECURITY_TRIVY_DB_REPOSITORY" "$SECURITY_TRIVY_JAVA_DB_REPOSITORY" "$presidio_url" <<'PY'
+import json, sys
+path, db, java_db, presidio = sys.argv[1:]
+s = json.load(open(path))
+s["trivy"].update(db_repository=db, java_db_repository=java_db)
+s["presidio"]["url"] = presidio
+json.dump(s, open(path, "w"), ensure_ascii=False, indent=1)
+PY
+  # policy: kept once created (edited in the console); SECURITY_POLICY_RESET=1 restores the default
+  for ns in "${namespaces[@]}"; do
+    if kubectl -n "$ns" get configmap cicd-security-policy >/dev/null 2>&1; then
+      kubectl -n "$ns" get configmap cicd-security-policy -o 'jsonpath={.data.policy\.json}' >"$dir/policy.current"
+      [[ -s "$dir/policy.current" ]] && { policy_src="$dir/policy.current"; break; }
+    fi
+  done
+  if [[ -z "$policy_src" || "${SECURITY_POLICY_RESET:-0}" == 1 ]]; then
+    policy_src=../security/policy/policy.json
+    info "Security policy: default (report mode - switch to enforce in the console 품질 관리 > 보안 게이트)"
+  fi
+  mapfile -t robot < <($API harbor-robot "$CONSOLE_HARBOR_PROJECT" security)
+  ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account (run: $0 security-image first)."
+  for ns in "${namespaces[@]}"; do
+    ensure_namespace "$ns" app.kubernetes.io/part-of=cicd-portal
+    kubectl -n "$ns" create configmap cicd-security-rules --from-file="$dir" --dry-run=client -o yaml | \
+      kubectl label --local -f - app.kubernetes.io/part-of=cicd-portal -o yaml | kubectl apply -f - >/dev/null
+    kubectl -n "$ns" create configmap cicd-security-policy --from-file=policy.json="$policy_src" --dry-run=client -o yaml | \
+      kubectl label --local -f - app.kubernetes.io/part-of=cicd-portal -o yaml | kubectl apply -f - >/dev/null
+    kubectl -n "$ns" create secret docker-registry cicd-security-pull \
+      --docker-server="$HARBOR_HOST" --docker-username="${robot[0]}" --docker-password="${robot[1]}" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    if [[ -n "${DEFECTDOJO_URL:-}" && -n "${DEFECTDOJO_TOKEN:-}" ]]; then
+      printf '%s' "$DEFECTDOJO_TOKEN" | kubectl -n "$ns" create secret generic cicd-security-defectdojo \
+        --from-literal=DEFECTDOJO_URL="$DEFECTDOJO_URL" --from-file=DEFECTDOJO_TOKEN=/dev/stdin \
+        --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+      ok "DefectDojo upload enabled in $ns ($DEFECTDOJO_URL)"
+    fi
+    ok "$ns: ConfigMaps cicd-security-policy, cicd-security-rules, pull secret cicd-security-pull"
+  done
+  rm -rf "$dir"
+
+  # Harbor: scan every pushed image (Trivy in Harbor) for all onboarded vendors
+  for v in $(kubectl -n "$ARGOCD_NAMESPACE" get appprojects.argoproj.io -o name 2>/dev/null | sed 's|.*/||'); do
+    [[ "$v" == default ]] && continue
+    $API harbor-security "$v" ${SECURITY_HARBOR_PREVENT:+--prevent "$SECURITY_HARBOR_PREVENT"} || \
+      warn "Harbor project $v: scan settings not changed"
+  done
+
+  if has_source gitlab; then
+    load_gitlab_token
+    $API gl-instance-var CICD_SECURITY_IMAGE="$SECURITY_IMAGE"
+    if [[ -n "${DEFECTDOJO_URL:-}" && -n "${DEFECTDOJO_TOKEN:-}" ]]; then
+      $API gl-instance-var DEFECTDOJO_URL="$DEFECTDOJO_URL"
+      printf '%s' "$DEFECTDOJO_TOKEN" | $API gl-instance-secret DEFECTDOJO_TOKEN
+    fi
+    step_templates
+    step_runner
+  fi
+  echo "       Jenkins (scm) apps get the security stages with a new Jenkinsfile: console 앱 추가 with"
+  echo "       '기존 CI 파일 교체' (REPLACE_CI=1 ./add-app.sh <vendor> <app> <type>). GitLab apps use the templates now."
+  if kubectl -n "$CONSOLE_NAMESPACE" get deployment cicd-console >/dev/null 2>&1; then
+    echo "       Console: re-run '$0 console' once so it may read and edit the security ConfigMaps."
+  fi
+  ok "Security scan installed (policy: console 품질 관리)"
+}
+
 for step in "${STEPS[@]}"; do
   case "$step" in
-    preflight|keycloak|argocd|console-image|console) "step_$step" ;;
+    preflight|keycloak|argocd|console-image|console|security-image|security) "step_$step" ;;
     jenkins|jenkins-token)
       has_source scm || die "Step $step needs scm in CICD_SOURCES (now: $CICD_SOURCES)"
       "step_$step" ;;
     gitlab|bootstrap|templates|runner)
       has_source gitlab || die "Step $step needs gitlab in CICD_SOURCES (now: $CICD_SOURCES)"
       "step_$step" ;;
-    *) die "Unknown step: $step (preflight keycloak jenkins jenkins-token gitlab bootstrap templates runner argocd console-image console)" ;;
+    *) die "Unknown step: $step (preflight keycloak jenkins jenkins-token gitlab bootstrap templates runner argocd console-image console security-image security)" ;;
   esac
 done
 

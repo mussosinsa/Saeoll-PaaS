@@ -2,3 +2,4 @@ values/
 *.log
 __pycache__/
 .venv/
+security/tests/out/

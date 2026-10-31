@@ -1,0 +1,32 @@
+# CI/CD portal - common rules (all languages). Offline rule set: no registry download (closed network).
+# metadata.cicd-severity: critical | high | medium | low  (gate counts), cwe, description (Korean, shown in the console)
+rules:
+  - id: hardcoded-password-assignment
+    languages: [regex]
+    severity: WARNING
+    message: 비밀번호로 보이는 값이 소스에 직접 들어 있습니다. 환경 변수나 Secret으로 옮기세요.
+    pattern-regex: (?i)\b(password|passwd|pwd|db_pass(word)?)\b\s*[:=]>?\s*["'][^"'\s$]{6,}["']
+    paths:
+      exclude: ["*.md", "*.lock", "*-lock.json", "*test*", "*Test*", "*.example", "*.sample"]
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      description: 소스에 하드코딩된 비밀번호
+  - id: private-key-file-content
+    languages: [regex]
+    severity: ERROR
+    message: 개인 키(PRIVATE KEY)가 소스에 들어 있습니다. 저장소에서 제거하고 키를 교체하세요.
+    pattern-regex: "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+    metadata:
+      cicd-severity: critical
+      cwe: "CWE-321: Use of Hard-coded Cryptographic Key"
+      description: 저장소에 포함된 개인 키
+  - id: tls-verification-disabled
+    languages: [regex]
+    severity: WARNING
+    message: TLS 인증서 검증을 끄고 있습니다. K-PaaS CA를 신뢰하도록 설정하세요.
+    pattern-regex: (?i)(CURLOPT_SSL_VERIFYPEER\s*,\s*(false|0)|rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*["']?0|verify\s*=\s*False|InsecureSkipVerify\s*:\s*true)
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-295: Improper Certificate Validation"
+      description: TLS 인증서 검증 비활성화

@@ -104,6 +104,24 @@ if has_source gitlab; then
   fi
 fi
 
+if security_installed; then
+  section "4c. Security scan"
+  for ns in "$JENKINS_NAMESPACE" "$RUNNER_NAMESPACE"; do
+    [[ "$ns" == "$JENKINS_NAMESPACE" ]] && ! has_source scm && continue
+    [[ "$ns" == "$RUNNER_NAMESPACE" ]] && ! has_source gitlab && continue
+    for obj in configmap/cicd-security-policy configmap/cicd-security-rules secret/cicd-security-pull; do
+      kubectl -n "$ns" get "$obj" >/dev/null 2>&1 && pass "$ns $obj" || fail "$ns $obj missing (./deploy-cicd-portal.sh security)"
+    done
+  done
+  modes=$(kubectl -n "$JENKINS_NAMESPACE" get configmap cicd-security-policy -o 'jsonpath={.data.policy\.json}' 2>/dev/null || \
+          kubectl -n "$RUNNER_NAMESPACE" get configmap cicd-security-policy -o 'jsonpath={.data.policy\.json}' 2>/dev/null)
+  echo "       gate modes: $(printf '%s' "$modes" | python3 -c 'import json,sys; g=json.load(sys.stdin).get("gates",{}); print(", ".join(k + "=" + str(v.get("mode")) for k, v in g.items()))' 2>/dev/null)"
+  if [[ "$SECURITY_PRESIDIO" == true ]]; then
+    [[ "$(kubectl -n "$SECURITY_NAMESPACE" get pods -l app=presidio-analyzer --no-headers 2>/dev/null)" == *Running* ]] && \
+      pass "Presidio analyzer running" || fail "Presidio analyzer not running in $SECURITY_NAMESPACE"
+  fi
+fi
+
 section "5. Vendors and Argo CD applications"
 vendors=$(kubectl -n "$ARGOCD_NAMESPACE" get appprojects.argoproj.io --no-headers \
   -o custom-columns=NAME:.metadata.name,SOURCE:.metadata.labels.cicd\\.k-paas\\.org/source 2>/dev/null | grep -v '^default ' || true)

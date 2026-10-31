@@ -74,6 +74,21 @@ CONSOLE_JENKINS_API_URL=""
 CONSOLE_GITLAB_API_URL=""                       # e.g. http://gitlab.cicd-gitlab.svc.cluster.local (cp-role: shared)
 CONSOLE_SCM_API_URL=""                          # e.g. http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm
 
+# SECURITY SCAN + 품질 관리 (optional: ./deploy-cicd-portal.sh security-image security)
+# Pipelines run Semgrep, Gitleaks, Trivy and the personal information check; the gate policy is edited in the console.
+SECURITY_IMAGE_TAG="1.0.0"                      # Harbor <CONSOLE_HARBOR_PROJECT>/security-scanner:<tag>
+SECURITY_BASE_IMAGE="${CICD_DOCKERHUB}/python:3.12-slim"
+SECURITY_GITLEAKS_IMAGE="docker.io/zricethezav/gitleaks:v8.21.2"
+SECURITY_TRIVY_IMAGE="docker.io/aquasec/trivy:0.57.1"
+SECURITY_SEMGREP_VERSION="1.183.0"              # pip package (CONSOLE_PIP_INDEX_URL / CONSOLE_APT_MIRROR also apply)
+SECURITY_TRIVY_DB_REPOSITORY=""                 # closed network: OCI mirror of the Trivy DB, e.g. harbor.<domain>/mirror/trivy-db
+SECURITY_TRIVY_JAVA_DB_REPOSITORY=""            #   and of the Java DB, e.g. harbor.<domain>/mirror/trivy-java-db
+SECURITY_HARBOR_PREVENT=""                      # e.g. critical: Harbor refuses pulls of images with critical CVEs
+                                                #   (also restarts of running pods - enable after a review)
+SECURITY_NAMESPACE="cicd-security"              # Presidio analyzer (phase 4)
+SECURITY_PRESIDIO=${SECURITY_PRESIDIO:-false}   # true: deploy Presidio and use it for personal information
+PRESIDIO_IMAGE="mcr.microsoft.com/presidio-analyzer:2.2.355"
+
 # Application databases (add-db.sh)
 MARIADB_IMAGE="docker.io/library/mariadb:11.4"  # dedicated MariaDB per app/env (LTS); Harbor mirror in a closed network
 DB_SIZE=${DB_SIZE:-2Gi}                          # dedicated MariaDB volume

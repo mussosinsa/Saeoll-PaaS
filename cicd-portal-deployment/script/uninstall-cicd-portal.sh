@@ -3,6 +3,8 @@
 #   ./uninstall-cicd-portal.sh scm      Jenkins (jobs, credentials, build history)
 #   ./uninstall-cicd-portal.sh gitlab   GitLab CE (all repositories and data) + Runner
 #   ./uninstall-cicd-portal.sh console  CI/CD web console only (vendors, applications and data are kept)
+#   ./uninstall-cicd-portal.sh security security policy/rules, Presidio, DefectDojo settings (pipelines keep
+#                                       scanning in report mode with the defaults built into the scanner image)
 #   ./uninstall-cicd-portal.sh all      both sources + Argo CD (all applications) + console
 # A source still used by a vendor is refused unless FORCE=1. Vendor namespaces (<vendor>-dev/prod),
 # Harbor projects, SCM repositories and the K-PaaS components are kept.
@@ -17,8 +19,9 @@ case "$TARGET" in
   scm) REMOVE=(scm) ;;
   gitlab) REMOVE=(gitlab) ;;
   console) REMOVE=(console) ;;
-  all) REMOVE=(scm gitlab argocd console) ;;
-  *) echo "Usage: $0 <scm|gitlab|console|all>" >&2; exit 2 ;;
+  security) REMOVE=(security) ;;
+  all) REMOVE=(scm gitlab argocd console security) ;;
+  *) echo "Usage: $0 <scm|gitlab|console|security|all>" >&2; exit 2 ;;
 esac
 
 # Vendors that would lose their CI/source
@@ -39,6 +42,7 @@ echo "This deletes:"
 [[ " ${REMOVE[*]} " == *" gitlab "* ]] && echo "  - GitLab (ALL repositories and data PVCs), runner, Keycloak client $KEYCLOAK_GITLAB_CLIENT_ID"
 [[ " ${REMOVE[*]} " == *" argocd "* ]] && echo "  - Argo CD (all applications), Keycloak client $KEYCLOAK_ARGOCD_CLIENT_ID"
 [[ " ${REMOVE[*]} " == *" console "* ]] && echo "  - CI/CD console (namespace $CONSOLE_NAMESPACE), Keycloak client $KEYCLOAK_CONSOLE_CLIENT_ID"
+[[ " ${REMOVE[*]} " == *" security "* ]] && echo "  - Security policy/rules ConfigMaps (exceptions included), Presidio (namespace $SECURITY_NAMESPACE)"
 [[ -n "$users" ]] && echo "  Vendors affected:$users"
 read -r -p "Type '$TARGET' to confirm: " answer
 [[ "$answer" == "$TARGET" ]] || { echo "Cancelled."; exit 0; }
@@ -50,6 +54,14 @@ remove_namespace() {
   [[ -n "$pvs" ]] && kubectl delete pv $pvs --ignore-not-found
 }
 
+if [[ " ${REMOVE[*]} " == *" security "* ]]; then
+  for ns in "$JENKINS_NAMESPACE" "$RUNNER_NAMESPACE"; do
+    # the pull secret stays: existing Jenkinsfiles still start the scanner container
+    kubectl -n "$ns" delete configmap cicd-security-policy cicd-security-rules --ignore-not-found 2>/dev/null
+    kubectl -n "$ns" delete secret cicd-security-defectdojo --ignore-not-found 2>/dev/null
+  done
+  kubectl delete namespace "$SECURITY_NAMESPACE" --ignore-not-found
+fi
 if [[ " ${REMOVE[*]} " == *" console "* ]]; then
   kubectl delete namespace "$CONSOLE_NAMESPACE" --ignore-not-found
   kubectl delete clusterrolebinding,clusterrole cicd-console --ignore-not-found
@@ -77,5 +89,5 @@ fi
 [[ "$TARGET" == all ]] && rm -rf ../values
 echo
 echo "Removed: ${REMOVE[*]}. Kept: Keycloak groups and users, vendor namespaces, Harbor projects, SCM repositories."
-[[ "$TARGET" != console ]] && echo "Remove '${TARGET/all/scm gitlab}' from CICD_SOURCES in cicd-vars.sh (or the environment)."
+[[ "$TARGET" != console && "$TARGET" != security ]] && echo "Remove '${TARGET/all/scm gitlab}' from CICD_SOURCES in cicd-vars.sh (or the environment)."
 echo "With an NFS StorageClass (Retain) clean the deleted volumes on the NFS server manually."

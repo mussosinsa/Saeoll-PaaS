@@ -50,6 +50,9 @@ PROD_NS=$(env_namespace "$VENDOR" prod "$NS_MODE")
 DEV_LAYOUT="$(env_layout dev "$NS_MODE"; echo .)"; DEV_LAYOUT=${DEV_LAYOUT%.}
 PROD_LAYOUT="$(env_layout prod "$NS_MODE"; echo .)"; PROD_LAYOUT=${PROD_LAYOUT%.}
 IMAGE_REPO="$HARBOR_HOST/$VENDOR/$APP"
+# Jenkinsfile security stages use the scanner image once security is installed (empty: stages skipped)
+SCAN_IMAGE=""
+security_installed && SCAN_IMAGE=$SECURITY_IMAGE
 
 if [[ "$SOURCE" == scm ]]; then
   require_cmds git
@@ -66,7 +69,8 @@ SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE
        TLS_SECRET="$TLS_SECRET" HARBOR_HOST="$HARBOR_HOST" GITOPS_REPO_URL="$GITOPS_URL"
        BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB"
        DEV_NAMESPACE="$DEV_NS" PROD_NAMESPACE="$PROD_NS"
-       DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT")
+       DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT"
+       SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE")
 
 
 if [[ "$SOURCE" == scm ]]; then

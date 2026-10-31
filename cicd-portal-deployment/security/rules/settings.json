@@ -1,0 +1,4 @@
+{
+  "trivy": {"db_repository": "", "java_db_repository": ""},
+  "presidio": {"url": "", "score_threshold": 0.5, "entities": ["CREDIT_CARD", "EMAIL_ADDRESS", "IBAN_CODE", "IP_ADDRESS"]}
+}

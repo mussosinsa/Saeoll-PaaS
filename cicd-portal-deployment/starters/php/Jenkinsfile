@@ -2,6 +2,7 @@
 //   job {APP}-dev     : develop (Poll SCM, 5 min) -> image dev-<sha>-<build> -> gitops overlays/dev  -> Argo CD auto sync
 //   job {APP}-release : RELEASE_TAG=vX.Y.Z        -> image vX.Y.Z           -> gitops overlays/prod -> Argo CD sync by cicd-admins
 // Folder credentials (onboard-vendor.sh): {VENDOR}-harbor (Harbor robot), {VENDOR}-scm (SCM account jenkins-{VENDOR})
+// Stages: Checkout, Build, Test, Security (source scan), Image, Security Gate (image scan + policy), Deploy
 // Language: PHP / Composer
 def vendor = '{VENDOR}'
 def app = '{APP}'
@@ -24,6 +25,34 @@ else
 fi
 '''
 def junitReports = 'phpunit-report.xml'
+
+// Security scan (./deploy-cicd-portal.sh security-image security): Semgrep, Gitleaks, Trivy, personal information.
+// Policy and rules come from ConfigMaps cicd-security-policy / cicd-security-rules (CI/CD console > 품질 관리).
+// add-app.sh fills in the scanner image once security is installed; until then the stages are skipped.
+def securityImage = '{SECURITY_IMAGE}'
+def appType = '{CICD_APP_TYPE}'
+def securityEnabled = securityImage && !securityImage.startsWith('{')
+def securityContainer = !securityEnabled ? '' : """
+    - name: security
+      image: ${securityImage}
+      command: ["sleep"]
+      args: ["infinity"]
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {memory: 2Gi}
+      envFrom:
+        - secretRef: {name: cicd-security-defectdojo, optional: true}
+      volumeMounts:
+        - {name: cicd-ca, mountPath: /etc/cicd-ca, readOnly: true}
+        - {name: security-policy, mountPath: /etc/cicd-security/policy, readOnly: true}
+        - {name: security-rules, mountPath: /etc/cicd-security/rules, readOnly: true}"""
+def securityVolumes = !securityEnabled ? '' : """
+    - name: security-policy
+      configMap: {name: cicd-security-policy, optional: true}
+    - name: security-rules
+      configMap: {name: cicd-security-rules, optional: true}
+  imagePullSecrets:
+    - name: cicd-security-pull"""
 
 // properties() replaces every job property, including the job's triggers: the -dev job keeps its
 // Poll SCM trigger here, otherwise its first build removes it and develop pushes are not built.
@@ -58,15 +87,17 @@ spec:
         requests: {cpu: 250m, memory: 512Mi}
         limits: {memory: 3Gi}
       volumeMounts:
-        - {name: cicd-ca, mountPath: /etc/cicd-ca, readOnly: true}
+        - {name: cicd-ca, mountPath: /etc/cicd-ca, readOnly: true}${securityContainer}
   volumes:
     - name: cicd-ca
-      secret: {secretName: cicd-ca}
+      secret: {secretName: cicd-ca}${securityVolumes}
 """) {
   node(POD_LABEL) {
     def releaseTag = (params.RELEASE_TAG ?: '').trim()
     def deployEnv = releaseTag ? 'prod' : 'dev'
     def imageTag = ''
+    def imageRef = ''
+    def scanEnv = []
     // build image runs as root, workspace belongs to the agent user: let git (composer, gradle...) read it
     def gitSafeDir = ['GIT_CONFIG_COUNT=1', 'GIT_CONFIG_KEY_0=safe.directory', 'GIT_CONFIG_VALUE_0=*']
 
@@ -85,6 +116,9 @@ spec:
         imageTag = "dev-${commit}-${env.BUILD_NUMBER}"
       }
       currentBuild.displayName = "#${env.BUILD_NUMBER} ${deployEnv} ${imageTag}"
+      scanEnv = gitSafeDir + ["CICD_APP=${vendor}/${app}", "CICD_ENV=${deployEnv}", "CICD_APP_TYPE=${appType}",
+                              "CICD_REF=${releaseTag ?: 'develop'}", "CICD_COMMIT=${commit}",
+                              "CICD_BUILD_URL=${env.BUILD_URL}", "CICD_CA_FILE=/etc/cicd-ca/ca.crt"]
     }
 
     stage('Build') {
@@ -105,8 +139,17 @@ spec:
       }
     }
 
+    stage('Security') {
+      if (!securityEnabled) {
+        echo 'Security scan is not set up (./deploy-cicd-portal.sh security-image security, then REPLACE_CI=1 ./add-app.sh)'
+        return
+      }
+      container('security') { withEnv(scanEnv) { sh 'cicd-scan source --dir . --out security' } }
+    }
+
     stage('Image') {
       def image = "${harborHost}/${vendor}/${app}:${imageTag}"
+      imageRef = image
       container('kaniko') {
         withCredentials([usernamePassword(credentialsId: "${vendor}-harbor",
                                           usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASSWORD')]) {
@@ -123,6 +166,33 @@ spec:
         }
       }
       echo "Pushed ${image}"
+    }
+
+    // Gate: exit 0 pass, 10 limits exceeded in report mode (build UNSTABLE), else fail = no deployment
+    stage('Security Gate') {
+      if (!securityEnabled) {
+        return
+      }
+      def gate = 0
+      try {
+        container('security') {
+          withCredentials([usernamePassword(credentialsId: "${vendor}-harbor",
+                                            usernameVariable: 'TRIVY_USERNAME', passwordVariable: 'TRIVY_PASSWORD')]) {
+            withEnv(scanEnv + ["CICD_IMAGE=${imageRef}"]) {
+              sh 'cicd-scan image --image "$CICD_IMAGE" --out security'
+              gate = sh(script: 'cicd-scan gate --out security', returnStatus: true)
+              sh 'cicd-scan upload --out security'
+            }
+          }
+        }
+      } finally {
+        archiveArtifacts artifacts: 'security/**', allowEmptyArchive: true
+      }
+      if (gate == 10) {
+        unstable('Security limits exceeded (report mode) - CI/CD console > 품질 관리 > 보안 이슈')
+      } else if (gate != 0) {
+        error('Security gate failed: deployment blocked - CI/CD console > 품질 관리 > 보안 이슈')
+      }
     }
 
     stage('Deploy') {

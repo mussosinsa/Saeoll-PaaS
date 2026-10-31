@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "gates": {
+    "dev": {"mode": "report", "fail_on_tool_error": false,
+            "max": {"critical": 0, "high": -1, "medium": -1, "secret": 0, "pii": 0}},
+    "prod": {"mode": "report", "fail_on_tool_error": false, "console_block": true,
+             "max": {"critical": 0, "high": 0, "medium": -1, "secret": 0, "pii": 0}},
+    "branch": {"mode": "report", "max": {"critical": 0, "secret": 0}}
+  },
+  "profiles": {
+    "default": {"description": "모든 언어 공통", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+                "semgrep_rules": ["common"]},
+    "php": {"description": "PHP / Composer", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+            "semgrep_rules": ["common", "php"]},
+    "java-gradle": {"description": "Java / Gradle", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+                    "semgrep_rules": ["common", "java"]},
+    "java-maven": {"description": "Java / Maven", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+                   "semgrep_rules": ["common", "java"]},
+    "node": {"description": "Node.js", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+             "semgrep_rules": ["common", "javascript"]},
+    "vue": {"description": "Vue / Vite", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
+            "semgrep_rules": ["common", "javascript"]}
+  },
+  "apps": {},
+  "exceptions": []
+}

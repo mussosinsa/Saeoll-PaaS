@@ -4,6 +4,7 @@ include:
   - local: /templates/common.yml
 
 variables:
+  CICD_APP_TYPE: java-gradle                 # security profile (CI/CD console > 품질 관리)
   JAVA_BUILD_IMAGE: $CICD_DOCKERHUB/gradle:8.10-jdk17
   GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle
   GRADLE_OPTS: -Dorg.gradle.daemon=false

@@ -1,0 +1,73 @@
+# CI/CD portal - JavaScript / TypeScript (Node.js, Vue scripts) rules
+rules:
+  - id: js-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: eval()/new Function()은 임의 코드 실행으로 이어질 수 있습니다.
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function(...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-95: Eval Injection"
+      description: eval 사용
+  - id: js-child-process-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: 셸 명령을 변수로 실행합니다. execFile()과 인자 배열을 쓰세요.
+    patterns:
+      - pattern-either:
+          - pattern: require("child_process").exec($CMD, ...)
+          - pattern: require("child_process").execSync($CMD, ...)
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: $CP.execSync($CMD, ...)
+      - metavariable-regex:
+          metavariable: $CP
+          regex: ^(child_process|childProcess|cp)$
+      - pattern-not: $F.exec("...", ...)
+      - pattern-not: $F.execSync("...", ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-78: OS Command Injection"
+      description: OS 명령 주입
+  - id: js-sql-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: 문자열을 이어 붙여 SQL을 실행합니다. 바인딩 변수(?)를 쓰세요.
+    pattern-either:
+      - pattern: $DB.query("..." + $X, ...)
+      - pattern: $DB.execute("..." + $X, ...)
+      - pattern: $DB.query(`...${$X}...`, ...)
+      - pattern: $DB.execute(`...${$X}...`, ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-89: SQL Injection"
+      description: SQL 주입
+  - id: js-inner-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: innerHTML/document.write에 변수를 넣으면 XSS가 생길 수 있습니다. textContent를 쓰세요.
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $X
+          - pattern: $EL.outerHTML = $X
+          - pattern: document.write($X)
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.outerHTML = "..."
+      - pattern-not: document.write("...")
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-79: Cross-site Scripting"
+      description: DOM XSS
+  - id: js-cors-any-origin
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: 모든 출처(*)의 요청을 허용합니다. 허용할 도메인만 지정하세요.
+    pattern-either:
+      - pattern: 'cors({..., origin: "*", ...})'
+      - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
+      - pattern: $RES.header("Access-Control-Allow-Origin", "*")
+    metadata:
+      cicd-severity: low
+      cwe: "CWE-942: Permissive Cross-domain Policy"
+      description: 과도한 CORS 허용

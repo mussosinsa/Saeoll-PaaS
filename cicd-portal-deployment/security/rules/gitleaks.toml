@@ -1,0 +1,35 @@
+# CI/CD portal - Gitleaks rules: the built-in rules plus K-PaaS specific ones.
+title = "cicd-portal"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "harbor-robot-secret"
+description = "Harbor robot 계정 비밀번호"
+regex = '''(?i)robot\$[a-z0-9_.-]+\+[a-z0-9_.-]+["'\s:=,]+([A-Za-z0-9]{32})'''
+secretGroup = 1
+keywords = ["robot$"]
+
+[[rules]]
+id = "jdbc-url-password"
+description = "JDBC/DB 접속 URL 안의 비밀번호"
+regex = '''(?i)(jdbc:[a-z]+|mysql|mariadb|postgres(ql)?|mongodb(\+srv)?)://[^:/\s"']+:([^@/\s"']{4,})@'''
+secretGroup = 3
+keywords = ["://"]
+
+[[rules]]
+id = "env-db-password"
+description = "DB 비밀번호 설정값"
+regex = '''(?i)\b(DB_PASSWORD|DATABASE_PASSWORD|MYSQL_PASSWORD|MARIADB_PASSWORD|SPRING_DATASOURCE_PASSWORD)\s*[=:]\s*["']?([^\s"'${}]{6,})'''
+secretGroup = 2
+keywords = ["password"]
+
+[allowlist]
+description = "documentation, samples and generated files"
+paths = [
+  '''(^|/)(vendor|node_modules|\.git)/''',
+  '''\.(md|lock)$''',
+  '''(^|/)package-lock\.json$''',
+]
+regexes = ['''(?i)(changeme|example|dummy|sample|placeholder|xxxx|\$\{[A-Z_]+\})''']

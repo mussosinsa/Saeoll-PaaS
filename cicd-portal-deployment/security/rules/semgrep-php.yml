@@ -1,0 +1,97 @@
+# CI/CD portal - PHP rules
+rules:
+  - id: php-command-injection
+    languages: [php]
+    severity: ERROR
+    message: 외부 명령 실행 함수에 변수가 들어갑니다. 사용자 입력이면 명령 주입이 가능합니다. escapeshellarg()를 쓰거나 실행을 없애세요.
+    patterns:
+      - pattern-either:
+          - pattern: exec($CMD, ...)
+          - pattern: shell_exec($CMD)
+          - pattern: system($CMD, ...)
+          - pattern: passthru($CMD, ...)
+          - pattern: popen($CMD, ...)
+          - pattern: proc_open($CMD, ...)
+      - pattern-not: $F("...", ...)
+      - pattern-not: $F(escapeshellarg(...), ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-78: OS Command Injection"
+      description: OS 명령 주입
+  - id: php-eval
+    languages: [php]
+    severity: ERROR
+    message: eval()은 임의 코드 실행으로 이어질 수 있습니다. 사용하지 마세요.
+    pattern: eval(...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-95: Eval Injection"
+      description: eval 사용
+  - id: php-sql-concat
+    languages: [php]
+    severity: ERROR
+    message: 문자열을 이어 붙여 SQL을 만듭니다. SQL 주입을 막으려면 prepare()와 바인딩 변수를 쓰세요.
+    pattern-either:
+      - pattern: $DB->query("..." . $X, ...)
+      - pattern: $DB->query("..." . $X . "...", ...)
+      - pattern: $DB->prepare("..." . $X, ...)
+      - pattern: $DB->prepare("..." . $X . "...", ...)
+      - pattern: $DB->exec("..." . $X)
+      - pattern: $DB->exec("..." . $X . "...")
+      - pattern: mysqli_query($C, "..." . $X . "...", ...)
+      - pattern: mysqli_query($C, "..." . $X, ...)
+      - pattern: $DB->query("...$X...", ...)
+      - pattern: mysqli_query($C, "...$X...", ...)
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-89: SQL Injection"
+      description: SQL 주입
+  - id: php-request-in-sql-or-output
+    languages: [php]
+    severity: WARNING
+    message: 요청 값($_GET/$_POST/$_REQUEST)을 그대로 출력합니다. htmlspecialchars()로 이스케이프하세요.
+    pattern-either:
+      - pattern: echo $_GET[...];
+      - pattern: echo $_POST[...];
+      - pattern: echo $_REQUEST[...];
+      - pattern: print($_GET[...]);
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-79: Cross-site Scripting"
+      description: 반사형 XSS
+  - id: php-include-from-request
+    languages: [php]
+    severity: ERROR
+    message: 요청 값으로 파일을 include 합니다. 허용 목록으로 제한하세요.
+    pattern-either:
+      - pattern: include $_GET[...];
+      - pattern: include $_POST[...];
+      - pattern: require $_GET[...];
+      - pattern: include_once $_GET[...];
+      - pattern: require_once $_GET[...];
+    metadata:
+      cicd-severity: high
+      cwe: "CWE-98: PHP Remote File Inclusion"
+      description: 파일 포함 취약점
+  - id: php-unserialize
+    languages: [php]
+    severity: WARNING
+    message: unserialize()에 외부 값이 들어가면 객체 주입이 가능합니다. json_decode()를 쓰세요.
+    patterns:
+      - pattern: unserialize($X, ...)
+      - pattern-not: unserialize("...", ...)
+    metadata:
+      cicd-severity: medium
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      description: 안전하지 않은 역직렬화
+  - id: php-weak-password-hash
+    languages: [php]
+    severity: WARNING
+    message: md5/sha1은 비밀번호 저장에 쓰면 안 됩니다. password_hash()를 쓰세요.
+    pattern-either:
+      - pattern: md5($PASSWORD)
+      - pattern: sha1($PASSWORD)
+    metadata:
+      cicd-severity: low
+      cwe: "CWE-328: Use of Weak Hash"
+      description: 약한 해시 함수

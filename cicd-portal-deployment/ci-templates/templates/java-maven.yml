@@ -4,6 +4,7 @@ include:
   - local: /templates/common.yml
 
 variables:
+  CICD_APP_TYPE: java-maven                 # security profile (CI/CD console > 품질 관리)
   JAVA_BUILD_IMAGE: $CICD_DOCKERHUB/maven:3.9-eclipse-temurin-17
   MAVEN_OPTS: -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository
 

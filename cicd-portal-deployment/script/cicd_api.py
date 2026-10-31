@@ -310,6 +310,14 @@ class Harbor:
             if e.code != 409:
                 raise
 
+    def security(self, name, prevent):
+        """Scan on push; prevent (e.g. 'critical') refuses pulls of images with vulnerabilities of that severity."""
+        meta = {"auto_scan": "true", "prevent_vul": "true" if prevent else "false"}
+        if prevent:
+            meta["severity"] = prevent
+        self.call("PUT", f"/projects/{self.project_id(name)}", {"metadata": meta})
+        log(f"[OK]   Harbor project {name}: scan on push" + (f", pulls blocked from severity {prevent}" if prevent else ""))
+
     def project_id(self, project):
         for p in self.call("GET", f"/projects?name={q(project)}&page_size=100") or []:
             if p.get("name") == project:
@@ -536,6 +544,7 @@ def main():
     p = sub.add_parser("gl-wait"); p.add_argument("--timeout", type=int, default=900)
     sub.add_parser("gl-settings")
     p = sub.add_parser("gl-instance-var"); p.add_argument("pairs", nargs="+")
+    p = sub.add_parser("gl-instance-secret"); p.add_argument("key")
     p = sub.add_parser("gl-group"); p.add_argument("path"); p.add_argument("--visibility", default="private")
     p = sub.add_parser("gl-project"); p.add_argument("namespace"); p.add_argument("path")
     p.add_argument("--visibility", default="private"); p.add_argument("--empty", action="store_true")
@@ -568,6 +577,8 @@ def main():
     p = sub.add_parser("jenkins-disable"); p.add_argument("folder"); p.add_argument("name")
     p = sub.add_parser("harbor-project"); p.add_argument("name"); p.add_argument("--public", action="store_true")
     p = sub.add_parser("harbor-robot"); p.add_argument("project"); p.add_argument("name")
+    p = sub.add_parser("harbor-security"); p.add_argument("project")
+    p.add_argument("--prevent", default="", choices=["", "negligible", "low", "medium", "high", "critical"])
     a = ap.parse_args()
 
     try:
@@ -601,6 +612,9 @@ def main():
                 k, v = pair.split("=", 1)
                 gl.set_variable("/admin/ci", k, v, False)
                 log(f"[OK]   instance CI variable {k}")
+        elif a.cmd == "gl-instance-secret":
+            GitLab().set_variable("/admin/ci", a.key, sys.stdin.read().rstrip("\n"), True)
+            log(f"[OK]   instance CI variable {a.key} (masked)")
         elif a.cmd == "gl-group":
             print(GitLab().ensure_group(a.path, a.visibility))
         elif a.cmd == "gl-project":
@@ -663,6 +677,8 @@ def main():
             print("ok")
         elif a.cmd == "harbor-project":
             Harbor().ensure_project(a.name, a.public)
+        elif a.cmd == "harbor-security":
+            Harbor().security(a.project, a.prevent)
         elif a.cmd == "harbor-robot":
             name, secret = Harbor().robot(a.project, a.name)
             print(name)

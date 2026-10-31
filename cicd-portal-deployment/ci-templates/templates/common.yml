@@ -9,7 +9,13 @@
 #   instance : HARBOR_HOST CICD_DOCKERHUB CICD_BASE_REGISTRY KANIKO_IMAGE CICD_CA_FILE GITOPS_HOST
 #   group    : HARBOR_USER HARBOR_PASSWORD GITOPS_TOKEN   (onboard-vendor.sh)
 #   project  : APP_NAME (default: project name), DOCKERFILE, DOCKER_CONTEXT
-stages: [build, test, package, deploy]
+#   security : CICD_SECURITY_IMAGE (instance, ./deploy-cicd-portal.sh security), CICD_APP_TYPE (<language>.yml),
+#              DEFECTDOJO_URL / DEFECTDOJO_TOKEN (instance, optional)
+#
+# Security (when CICD_SECURITY_IMAGE is set): Semgrep, Gitleaks, Trivy (dependencies + image), personal
+# information. Policy and rules: ConfigMaps mounted by the runner (CI/CD console > 품질 관리).
+#   gate pass -> deploy / limits exceeded in report mode -> warning (exit 10, allowed) / enforce mode -> no deploy
+stages: [build, test, package, security, deploy]
 
 variables:
   APP_NAME: $CI_PROJECT_NAME
@@ -59,11 +65,50 @@ image:
     reports:
       dotenv: image.env
 
+security:
+  stage: security
+  image: $CICD_SECURITY_IMAGE
+  needs:
+    - job: image
+      optional: true
+  rules:
+    - if: $CICD_SECURITY_IMAGE
+  variables:
+    CICD_APP: $CI_PROJECT_ROOT_NAMESPACE/$CI_PROJECT_NAME
+    CICD_REF: $CI_COMMIT_REF_NAME
+    CICD_COMMIT: $CI_COMMIT_SHA
+    CICD_BUILD_URL: $CI_PIPELINE_URL
+    TRIVY_USERNAME: $HARBOR_USER
+    TRIVY_PASSWORD: $HARBOR_PASSWORD
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then export CICD_ENV=prod
+      elif [ "$CI_COMMIT_BRANCH" = develop ]; then export CICD_ENV=dev
+      else export CICD_ENV=branch; fi
+      cicd-scan source --dir "$CI_PROJECT_DIR" --out security
+      if [ -n "${IMAGE_TAG:-}" ]; then
+        export CICD_IMAGE="$IMAGE_REPO:$IMAGE_TAG"
+        cicd-scan image --image "$CICD_IMAGE" --out security
+      fi
+      rc=0
+      cicd-scan gate --out security || rc=$?
+      cicd-scan upload --out security || true
+      exit $rc
+  allow_failure:
+    exit_codes: [10]
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths: [security/]
+
 deploy:
   stage: deploy
   extends: .release-rules
   image: $CICD_DOCKERHUB/alpine:3.20
-  needs: [image]
+  needs:
+    - image
+    - job: security
+      optional: true
   resource_group: gitops-$CI_PROJECT_ROOT_NAMESPACE
   environment:
     name: $DEPLOY_ENV

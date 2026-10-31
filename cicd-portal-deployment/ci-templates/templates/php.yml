@@ -4,6 +4,7 @@ include:
   - local: /templates/common.yml
 
 variables:
+  CICD_APP_TYPE: php                 # security profile (CI/CD console > 품질 관리)
   PHP_BUILD_IMAGE: $CICD_DOCKERHUB/composer:2
   COMPOSER_CACHE_DIR: $CI_PROJECT_DIR/.composer-cache
 

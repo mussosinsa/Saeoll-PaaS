@@ -108,6 +108,9 @@ $API kc-group "cicd-$VENDOR" --members "$ALL_USERS"
 $API harbor-project "$VENDOR"
 mapfile -t robot < <($API harbor-robot "$VENDOR" cicd)
 ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account for $VENDOR."
+# Harbor vulnerability scan (Trivy) on every push; SECURITY_HARBOR_PREVENT blocks pulls of vulnerable images
+$API harbor-security "$VENDOR" ${SECURITY_HARBOR_PREVENT:+--prevent "$SECURITY_HARBOR_PREVENT"} || \
+  warn "Harbor scan settings of project $VENDOR not changed"
 
 # 3. Namespaces --------------------------------------------------------------------------
 for ns in "${NAMESPACES[@]}"; do
