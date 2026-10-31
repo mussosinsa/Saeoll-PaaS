@@ -175,7 +175,7 @@ def application(vendor_name, app):
     return next((a for a in applications(vendor_name) if a["app"] == app), None)
 
 
-def sync(app_name, user, revision=None):
+def sync(app_name, user, revision=None, reason=""):
     """Start an Argo CD sync by setting .operation on the Application (what 'argocd app sync' does).
     revision: a gitops commit of the application's history (rollback); default: the target revision."""
     obj = get_json("-n", _ns(), "applications.argoproj.io", app_name)
@@ -186,7 +186,7 @@ def sync(app_name, user, revision=None):
     target = revision or (obj["spec"].get("source") or {}).get("targetRevision") or "HEAD"
     patch = {"operation": {
         "initiatedBy": {"username": f"{user} (cicd-console)"},
-        "info": [{"name": "Reason", "value": "rollback" if revision else "sync"}],
+        "info": [{"name": "Reason", "value": ("rollback" if revision else "sync") + (f": {reason}" if reason else "")}],
         "sync": {"revision": target, "prune": True, "syncStrategy": {"hook": {}}},
     }}
     try:

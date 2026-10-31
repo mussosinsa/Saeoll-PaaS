@@ -26,7 +26,7 @@ os.environ.update({
     "CICD_SCRIPT_DIR": str(HERE.parent.parent / "script"),
 })
 
-from cicd_console import auth, create_app, jobs, services  # noqa: E402
+from cicd_console import auth, create_app, jobs, quality, services  # noqa: E402
 
 NOW = datetime.datetime.now(datetime.timezone.utc)
 
@@ -59,7 +59,8 @@ BUILDS = [{"id": "7", "number": 7, "job": "homepage-dev", "pipeline": "dev", "st
            "ref": "v1.0.0", "started": NOW, "duration": 95, "cause": "admin", "url": "https://jenkins/y/3/"}]
 
 
-class ConsoleTest(unittest.TestCase):
+class ConsoleBase(unittest.TestCase):
+    """Console with fake backends (no tests of its own)."""
     def setUp(self):
         self.app = create_app()
         self.app.config["TESTING"] = True
@@ -74,6 +75,9 @@ class ConsoleTest(unittest.TestCase):
             "members": lambda v: [("dev1", "dev1@x", "Dev One")],
             "namespace_quota": lambda ns: [{"name": "pods", "used": "3", "hard": "30"}],
         }
+        p = mock.patch.object(quality, "installed", return_value=False)   # 품질 관리: test_quality.py
+        p.start()
+        self.addCleanup(p.stop)
         for name, fake in patches.items():
             p = mock.patch.object(services, name, side_effect=fake)
             p.start()
@@ -86,6 +90,9 @@ class ConsoleTest(unittest.TestCase):
 
     def post(self, url, data=None):
         return self.client.post(url, data={"csrf_token": "tok", **(data or {})})
+
+
+class ConsoleTest(ConsoleBase):
 
     # ---------------------------------------------------------------- auth ---
     def test_login_redirect(self):
@@ -163,12 +170,12 @@ class ConsoleTest(unittest.TestCase):
         with mock.patch.object(services, "sync") as sync:
             r = self.post("/vendors/saeoll/apps/homepage/sync", {"env": "dev"})
             self.assertEqual(r.status_code, 302)
-            sync.assert_called_once_with("saeoll-homepage-dev", "dev1", None)
+            sync.assert_called_once_with("saeoll-homepage-dev", "dev1", None, "")
             self.assertEqual(self.post("/vendors/saeoll/apps/homepage/sync", {"env": "prod"}).status_code, 403)
         self.login("admin", ["cicd-admins"])
         with mock.patch.object(services, "sync") as sync:
             self.post("/vendors/saeoll/apps/homepage/sync", {"env": "prod", "revision": "c" * 40})
-            sync.assert_called_once_with("saeoll-homepage-prod", "admin", "c" * 40)
+            sync.assert_called_once_with("saeoll-homepage-prod", "admin", "c" * 40, "")
             self.post("/vendors/saeoll/apps/homepage/sync", {"env": "dev", "revision": "c" * 40})
             self.assertEqual(sync.call_count, 1)        # no rollback of an auto-sync environment
 

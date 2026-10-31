@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import env_cell, source_label with context %}
+{% from "macros.html" import badge, env_cell, source_label with context %}
 {% block title %}대시보드{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -28,6 +28,7 @@
   <div class="stat"><b>{{ stats.dev_healthy }}</b><span>dev 정상</span></div>
   <div class="stat {{ 'warn' if stats.prod_outofsync }}"><b>{{ stats.prod_outofsync }}</b><span>prod 배포 대기</span></div>
   <div class="stat {{ 'bad' if stats.degraded }}"><b>{{ stats.degraded }}</b><span>오류 환경</span></div>
+  {% if stats.security_bad is defined %}<a class="stat {{ 'warn' if stats.security_bad }}" href="{{ url_for('quality.issues') }}"><b>{{ stats.security_bad }}</b><span>보안 게이트 미통과</span></a>{% endif %}
 </section>
 
 {% for v in vendors %}
@@ -42,7 +43,7 @@
   {% if vapps %}
   <div class="table-wrap">
   <table class="grid">
-    <thead><tr><th>애플리케이션</th><th>유형</th><th>dev</th><th>prod</th></tr></thead>
+    <thead><tr><th>애플리케이션</th><th>유형</th><th>dev</th><th>prod</th>{% if security %}<th>보안</th>{% endif %}</tr></thead>
     <tbody>
     {% for a in vapps %}
       <tr>
@@ -50,6 +51,7 @@
         <td>{{ a.type }}</td>
         <td>{{ env_cell(a.envs.get('dev')) }}</td>
         <td>{{ env_cell(a.envs.get('prod')) }}</td>
+        {% if security %}<td><a href="{{ url_for('quality.issues', vendor=a.vendor, app=a.app) }}">{{ badge(security.get((a.vendor, a.app), 'none')) }}</a></td>{% endif %}
       </tr>
     {% endfor %}
     </tbody>

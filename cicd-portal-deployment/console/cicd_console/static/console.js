@@ -8,6 +8,22 @@
     if (msg && !window.confirm(msg)) e.preventDefault();
   });
 
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-confirm-click]');
+    if (btn && !window.confirm(btn.getAttribute('data-confirm-click'))) e.preventDefault();
+  });
+
+  // 품질 관리 dropdown (click for touch screens; hover/focus in CSS)
+  document.querySelectorAll('.drop-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      btn.parentNode.classList.toggle('open');
+    });
+  });
+  document.addEventListener('click', function () {
+    document.querySelectorAll('.drop.open').forEach(function (d) { d.classList.remove('open'); });
+  });
+
   // Dialogs
   document.querySelectorAll('[data-open]').forEach(function (btn) {
     btn.addEventListener('click', function () {

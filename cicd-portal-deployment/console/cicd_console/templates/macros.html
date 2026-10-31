@@ -16,3 +16,8 @@
 {% macro csrf() -%}
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 {%- endmacro %}
+
+{% macro gate_badge(summary, prefix='') -%}
+{% set r = (summary.gate.result if summary and summary.gate else 'none') %}
+<span class="badge s-{{ r }}" title="{{ status_label(summary.gate.mode) if summary and summary.gate else '보안 검사 결과 없음' }}">{{ prefix }}{{ status_label(r) }}</span>
+{%- endmacro %}

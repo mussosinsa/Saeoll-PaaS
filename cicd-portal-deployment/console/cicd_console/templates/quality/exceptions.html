@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf with context %}
+{% block title %}예외 관리{% endblock %}
+{% block content %}
+<div class="page-head"><h1>품질 관리 <span class="dim">예외 관리</span></h1></div>
+{% include "quality/_nav.html" %}
+<p class="hint">오탐이나 조치 계획이 있는 항목을 게이트에서 제외합니다. 업체 구성원이 요청하고 운영 관리자가 승인하면 <b>다음 빌드부터</b> 적용되며,
+  만료일이 지나면 다시 집계됩니다. 지문(fingerprint)이 있으면 그 항목 하나만, 없으면 규칙·경로가 맞는 모든 항목이 제외됩니다.</p>
+
+<section class="panel">
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>상태</th><th>업체/앱</th><th>규칙</th><th>경로</th><th>사유</th><th>요청</th><th>승인/반려</th><th>만료</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for e in items %}
+      <tr>
+        <td>{% if e.expired %}{{ badge('skipped') }} <small class="dim">만료</small>{% else %}{{ badge({'approved': 'pass', 'requested': 'pending', 'rejected': 'fail'}.get(e.status, e.status)) }} <small>{{ {'approved': '승인', 'requested': '요청', 'rejected': '반려'}.get(e.status, e.status) }}</small>{% endif %}</td>
+        <td>{{ e.app }}</td><td><code>{{ e.rule }}</code>{% if e.fingerprint %}<br><small class="dim">지문 {{ e.fingerprint }}</small>{% endif %}</td>
+        <td><code>{{ e.path }}</code></td><td class="wrap">{{ e.reason }}{% if e.note %}<br><small class="dim">의견: {{ e.note }}</small>{% endif %}</td>
+        <td>{{ e.requested_by }}<br><small class="dim">{{ (e.requested_at or '')[:10] }}</small></td>
+        <td>{{ e.approved_by or '-' }}<br><small class="dim">{{ (e.approved_at or '')[:10] }}</small></td>
+        <td>{{ e.expires or '-' }}</td>
+        {% if is_admin %}<td class="actions-cell">
+          <form class="stack" method="post" action="{{ url_for('quality.exceptions_save') }}">{{ csrf() }}<input type="hidden" name="id" value="{{ e.id }}">
+            {% if e.status == 'requested' %}<input name="note" placeholder="의견(선택)">
+            <button class="btn small primary" name="action" value="approve">승인</button>
+            <button class="btn small" name="action" value="reject">반려</button>{% endif %}
+            <button class="btn small danger" name="action" value="delete" data-confirm-click="예외 {{ e.id }}을(를) 삭제할까요?">삭제</button>
+          </form></td>{% endif %}
+      </tr>
+    {% else %}<tr><td colspan="9" class="dim">예외가 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<form class="panel form wide" id="new" method="post" action="{{ url_for('quality.exceptions_save') }}">
+  {{ csrf() }}<input type="hidden" name="action" value="request">
+  <div class="panel-head"><h2>예외 {{ '등록' if is_admin else '요청' }}</h2><span class="dim">보안 이슈·보고서의 '예외 요청' 버튼을 누르면 값이 채워집니다</span></div>
+  <div class="row-fields">
+    <label>업체/앱 <input name="app" required pattern="[a-z0-9-]+/[a-z0-9-]+" value="{{ form.get('app', '') }}" placeholder="saeoll/homepage 또는 saeoll/*"></label>
+    <label>규칙 <input name="rule" required value="{{ form.get('rule', '') }}" placeholder="semgrep:java-sql-concat"></label>
+    <label>경로 <input name="path" value="{{ form.get('path', '*') }}" placeholder="* 또는 src/test/*"></label>
+    <label>만료일 <input type="date" name="expires" required value="{{ form.get('expires', default_expiry) }}" max="{{ max_expiry }}"></label>
+  </div>
+  {% if form.get('fingerprint') %}<label class="check"><input type="checkbox" name="fingerprint" value="{{ form.get('fingerprint') }}" checked> 이 항목 하나만 (지문 {{ form.get('fingerprint') }}) — 끄면 규칙·경로가 맞는 모든 항목</label>{% endif %}
+  <label>사유 <input name="reason" required minlength="10" value="{{ form.get('reason', '') }}" placeholder="예: WHERE 절은 바인딩 변수로만 만들어져 SQL 주입 불가 (PostRepository.where)"></label>
+  {% if is_admin %}<label class="check"><input type="checkbox" name="approve_now" checked> 바로 승인</label>{% endif %}
+  <div class="form-actions"><button class="btn primary">{{ '등록' if is_admin else '요청' }}</button></div>
+</form>
+{% endblock %}

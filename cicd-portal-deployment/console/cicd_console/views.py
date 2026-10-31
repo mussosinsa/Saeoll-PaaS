@@ -7,7 +7,7 @@ import re
 from flask import (Blueprint, abort, flash, g, jsonify, redirect, render_template, request, session,
                    url_for)
 
-from . import auth, config, jobs, services
+from . import auth, config, jobs, quality, services
 from .kube import KubeError
 
 bp = Blueprint("main", __name__)
@@ -99,8 +99,15 @@ def dashboard():
         "degraded": sum(1 for a in apps for e in a["envs"].values() if e["health"] in ("Degraded", "Missing")),
     }
     by_vendor = {v["name"]: [a for a in apps if a["vendor"] == v["name"]] for v in vendors}
+    security = {}
+    if apps and quality.installed():
+        # worst gate result of the newest develop / release builds per application
+        for a, state, err in quality.app_states(vendors, apps):
+            results = [] if err else [quality.gate_of(summary)["result"] for _, summary in state.values()]
+            security[(a["vendor"], a["app"])] = max(results or ["none"], key=lambda r: quality.RESULT_RANK[r])
+        stats["security_bad"] = sum(1 for r in security.values() if r in ("warn", "fail"))
     return render_template("dashboard.html", vendors=vendors, apps=apps, by_vendor=by_vendor, stats=stats,
-                           no_access=allowed == [])
+                           no_access=allowed == [], security=security)
 
 
 # ------------------------------------------------------------------ vendor ---
@@ -154,9 +161,19 @@ def app_page(vendor, app):
         tags, tags_err = _try(services.release_tags, v, app)
     running = any(e["running"] for e in a["envs"].values()) or \
         any(b["status"] in ("running", "pending") for b in build_list or [])
+    security, prod_gate = None, {"checked": False, "ok": True}
+    if build_list is not None and quality.installed():
+        security, sec_err = _try(quality.latest, v, app, build_list)
+        if sec_err:
+            flash(f"보안 검사 결과 조회 실패: {sec_err}", "warn")
+        else:
+            prod_gate, _ = _try(quality.prod_gate, v, app, build_list)
+            prod_gate = prod_gate or {"checked": False, "ok": True}
     return render_template("app.html", v=v, a=a, builds=build_list or [], builds_err=builds_err,
                            tags=tags or [], tags_err=tags_err, running=running,
-                           can_release=can_release(v), links=services.links(v, app))
+                           can_release=can_release(v), links=services.links(v, app),
+                           security=security, prod_gate=prod_gate,
+                           security_installed=quality.installed())
 
 
 @bp.route("/vendors/<vendor>/apps/<app>/build", methods=["POST"])
@@ -237,7 +254,18 @@ def app_sync(vendor, app):
     if revision and a["envs"][env]["auto"]:
         flash("자동 Sync 환경(dev)은 롤백해도 다시 최신으로 돌아갑니다. gitops 저장소에서 이미지 태그를 되돌리세요.", "error")
         return redirect(url_for("main.app_page", vendor=vendor, app=app))
-    _, err = _try(services.sync, a["envs"][env]["name"], g.user["username"], revision)
+    reason = ""
+    if env == "prod" and not revision:
+        # 보안 게이트: the newest release build must pass, or the operator records why it is deployed anyway
+        gate, gate_err = _try(quality.prod_gate, v, app)
+        if gate_err or (gate and not gate["ok"]):
+            reason = request.form.get("override_reason", "").strip()
+            if len(reason) < 5:
+                flash("최근 릴리스 빌드가 보안 게이트를 통과하지 않았습니다"
+                      + (f" ({gate_err})" if gate_err else "") + ". 배포하려면 사유를 5자 이상 입력하세요.", "error")
+                return redirect(url_for("main.app_page", vendor=vendor, app=app))
+            _audit("security-override", f"{a['envs'][env]['name']}: {reason}")
+    _, err = _try(services.sync, a["envs"][env]["name"], g.user["username"], revision, reason)
     _audit("rollback" if revision else "sync", f"{a['envs'][env]['name']}@{revision or 'target'}")
     flash(err or (f"{env} 롤백(Sync {revision[:7]})을 시작했습니다." if revision else f"{env} Sync를 시작했습니다."),
           "error" if err else "ok")
@@ -273,6 +301,20 @@ def build_page(vendor, app, job, build_id):
         url = f"https://{os.environ.get('GITLAB_HOST')}/{vendor}/{app}/-/pipelines/{build_id}"
     return render_template("build.html", v=v, app=app, job=job, build_id=build_id, gl_jobs=gl_jobs or [],
                            err=err, url=url)
+
+
+@bp.route("/vendors/<vendor>/apps/<app>/builds/<job>/<build_id>/security")
+def build_security(vendor, app, job, build_id):
+    v = _vendor_or_404(vendor)
+    _app_or_404(v, app)
+    stop = _unknown_source(v, app)
+    if stop:
+        return stop
+    if not build_id.isdigit() or (v["source"] == "scm" and job not in (f"{app}-dev", f"{app}-release")):
+        abort(404)
+    from .quality_views import build_report  # noqa: PLC0415
+    summary, gate = build_report(v, app, job, build_id)
+    return render_template("quality/report.html", v=v, app=app, job=job, build_id=build_id, s=summary, gate=gate)
 
 
 @bp.route("/api/vendors/<vendor>/apps/<app>/builds/<job>/<build_id>/log")

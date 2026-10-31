@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}검사 프로파일{% endblock %}
+{% block content %}
+<div class="page-head"><h1>품질 관리 <span class="dim">검사 프로파일</span></h1></div>
+{% include "quality/_nav.html" %}
+<p class="hint">프로파일은 어떤 도구와 규칙 묶음으로 검사할지 정합니다. 앱은 기본으로 언어 유형과 같은 이름의 프로파일을 쓰고, 없으면 <code>default</code>를 씁니다.
+  {% if info.by %}마지막 변경: {{ info.by }} · {{ info.at|dt }} ({{ info.change }}){% endif %}</p>
+
+<section class="panel">
+  <div class="panel-head"><h2>프로파일</h2></div>
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>이름</th><th>설명</th>{% for t, (label, _) in tools.items() %}<th title="{{ tools[t][1] }}">{{ label }}</th>{% endfor %}<th>Semgrep 규칙</th></tr></thead>
+    <tbody>
+    {% for name, p in pol.profiles.items() %}
+      <tr><td><b>{{ name }}</b></td><td>{{ p.description }}</td>
+        {% for t in tools %}<td>{{ '●' if t in (p.tools or []) else '·' }}</td>{% endfor %}
+        <td>{% for r in p.semgrep_rules or [] %}<code>{{ sets.get(r, r) }}</code> {% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+{% if is_admin %}
+{% set edit_name = request.args.get('edit', '') %}{% set ep = pol.profiles.get(edit_name, {}) %}
+<form class="panel form wide" method="post" action="{{ url_for('quality.profiles_save') }}">
+  {{ csrf() }}<input type="hidden" name="rv" value="{{ rv }}">
+  <div class="panel-head"><h2>프로파일 추가 · 수정</h2>
+    <span class="dim">수정할 프로파일: {% for name in pol.profiles %}<a href="{{ url_for('quality.profiles', edit=name) }}">{{ name }}</a>{{ ', ' if not loop.last }}{% endfor %}</span></div>
+  <div class="row-fields">
+    <label>이름 <input name="name" required pattern="[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?" value="{{ edit_name }}" placeholder="예: php-strict"></label>
+    <label>설명 <input name="description" value="{{ ep.description }}" size="40"></label>
+  </div>
+  <fieldset><legend>도구</legend>
+    {% for t, (label, desc) in tools.items() %}<label class="check"><input type="checkbox" name="tool.{{ t }}" {{ 'checked' if t in (ep.tools or ([] if edit_name else ['semgrep', 'gitleaks', 'trivy-fs', 'pii', 'trivy-image'])) }}> <b>{{ label }}</b> <span class="dim">{{ desc }}</span></label>{% endfor %}
+  </fieldset>
+  <fieldset><legend>Semgrep 규칙 묶음</legend>
+    {% for key, label in sets.items() %}<label class="check"><input type="checkbox" name="set.{{ key }}" {{ 'checked' if key in (ep.semgrep_rules or ['common']) }}> {{ label }}</label>{% endfor %}
+  </fieldset>
+  <div class="form-actions">
+    {% if edit_name and edit_name != 'default' and edit_name in pol.profiles %}<button class="btn danger" name="action" value="delete" data-confirm-click="프로파일 {{ edit_name }}을(를) 지울까요?">삭제</button>{% endif %}
+    <button class="btn primary" name="action" value="save">저장</button></div>
+</form>
+{% endif %}
+<section class="panel">
+  <div class="panel-head"><h2>애플리케이션별 프로파일</h2></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>업체/앱</th><th>유형</th><th>프로파일</th><th></th></tr></thead>
+    <tbody>
+    {% for a in apps %}{% set key = a.vendor ~ '/' ~ a.app %}
+      <tr><td>{{ key }}</td><td>{{ a.type }}</td>
+        <td><b>{{ assigned[key] }}</b>{% if key in pol.apps %} <small class="dim">(지정)</small>{% endif %}</td>
+        <td class="r">{% if is_admin and pol.profiles %}
+          <form class="inline" method="post" action="{{ url_for('quality.assign_profile') }}">{{ csrf() }}<input type="hidden" name="rv" value="{{ rv }}">
+            <input type="hidden" name="app" value="{{ key }}">
+            <select name="profile"><option value="">유형 기본값</option>{% for name in pol.profiles %}<option {{ 'selected' if pol.apps.get(key, {}).get('profile') == name }}>{{ name }}</option>{% endfor %}</select>
+            <button class="btn small">변경</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="dim">애플리케이션이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

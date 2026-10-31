@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, source_label, csrf with context %}
+{% from "macros.html" import badge, source_label, csrf, gate_badge with context %}
 {% block title %}{{ v.name }}/{{ a.app }}{% endblock %}
 {% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › {{ a.app }}</div>{% endblock %}
 {% block content %}
@@ -29,6 +29,14 @@
       <form method="post" action="{{ url_for('main.app_build', vendor=v.name, app=a.app) }}" data-confirm="develop 브랜치를 빌드해 dev에 배포할까요?">{{ csrf() }}<button class="btn small primary">빌드 실행</button></form>
     </li>
     <li class="stage">
+      <span class="k">보안 검사</span>
+      {% if not security_installed %}<span class="dim">미설치</span>
+      {% elif security %}{% set sb, ss = security.dev %}{{ gate_badge(ss) }}
+        {% if sb %}<small class="dim">#{{ sb.number }}{% if ss %} · C{{ ss.counts.critical }} H{{ ss.counts.high }} 비밀{{ ss.counts.secret }} 개인{{ ss.counts.pii }}{% endif %}</small>
+        <a class="btn small" href="{{ url_for('main.build_security', vendor=v.name, app=a.app, job=(sb.job if v.source == 'scm' else 'pipeline'), build_id=sb.id) }}">보고서</a>{% endif %}
+      {% else %}<span class="dim">-</span>{% endif %}
+    </li>
+    <li class="stage">
       <span class="k">3. dev 배포</span>
       {% if dev %}<span class="row">{{ badge(dev.health) }} {{ badge(dev.sync) }}</span><small class="dim"><code>{{ dev.tag or '-' }}</code></small>
       <form method="post" action="{{ url_for('main.app_sync', vendor=v.name, app=a.app) }}">{{ csrf() }}<input type="hidden" name="env" value="dev"><button class="btn small">Sync</button></form>
@@ -36,18 +44,34 @@
     </li>
     <li class="stage">
       <span class="k">4. 릴리스</span>
-      {% if last_rel %}{{ badge(last_rel.status) }}<small class="dim"><code>{{ last_rel.ref }}</code> · {{ last_rel.started|ago }}</small>{% else %}<span class="dim">릴리스 없음</span>{% endif %}
+      {% if last_rel %}<span class="row">{{ badge(last_rel.status) }}{% if security %}{{ gate_badge(security.release[1], '보안 ') }}{% endif %}</span><small class="dim"><code>{{ last_rel.ref }}</code> · {{ last_rel.started|ago }}</small>{% else %}<span class="dim">릴리스 없음</span>{% endif %}
       {% if can_release %}<button class="btn small" data-open="release-dialog">릴리스</button>{% endif %}
     </li>
     <li class="stage">
       <span class="k">5. prod 배포</span>
       {% if prod %}<span class="row">{{ badge(prod.health) }} {{ badge(prod.sync) }}</span><small class="dim"><code>{{ prod.tag or '-' }}</code></small>
-      {% if is_admin %}<form method="post" action="{{ url_for('main.app_sync', vendor=v.name, app=a.app) }}" data-confirm="prod에 배포(Sync)할까요?">{{ csrf() }}<input type="hidden" name="env" value="prod"><button class="btn small {{ 'primary' if prod.sync == 'OutOfSync' }}">prod Sync</button></form>
+      {% if is_admin and not prod_gate.ok %}<button class="btn small danger" data-open="prod-override-dialog">prod Sync (보안 미통과)</button>
+      {% elif is_admin %}<form method="post" action="{{ url_for('main.app_sync', vendor=v.name, app=a.app) }}" data-confirm="prod에 배포(Sync)할까요?">{{ csrf() }}<input type="hidden" name="env" value="prod"><button class="btn small {{ 'primary' if prod.sync == 'OutOfSync' }}">prod Sync</button></form>
       {% else %}<small class="dim">운영 관리자 Sync</small>{% endif %}
       {% else %}<span class="dim">없음</span>{% endif %}
     </li>
   </ol>
 </section>
+
+{% if is_admin and not prod_gate.ok %}
+<dialog id="prod-override-dialog" class="dialog">
+  <form method="post" action="{{ url_for('main.app_sync', vendor=v.name, app=a.app) }}">
+    {{ csrf() }}<input type="hidden" name="env" value="prod">
+    <h3>보안 게이트 미통과 — prod 배포</h3>
+    <p class="hint">최근 릴리스 빌드{% if prod_gate.build %} #{{ prod_gate.build.number }} <code>{{ prod_gate.build.ref }}</code>{% endif %}의 보안 검사 결과가
+      <b>{{ status_label(prod_gate.gate.result) }}</b>입니다.
+      {% for viol in prod_gate.gate.violations %}{{ viol.key }} {{ viol.count }}건(허용 {{ viol.max }}){{ ', ' if not loop.last }}{% endfor %}</p>
+    {% if prod_gate.build %}<p><a href="{{ url_for('main.build_security', vendor=v.name, app=a.app, job=(prod_gate.build.job if v.source == 'scm' else 'pipeline'), build_id=prod_gate.build.id) }}">보안 보고서 보기</a></p>{% endif %}
+    <label>배포 사유 (기록됨) <input name="override_reason" required minlength="5" placeholder="예: 긴급 장애 조치, 오탐 확인 완료(예외 등록 예정)"></label>
+    <div class="dialog-actions"><button type="button" class="btn" data-close>취소</button><button class="btn danger">사유를 기록하고 배포</button></div>
+  </form>
+</dialog>
+{% endif %}
 
 {% if can_release %}
 <dialog id="release-dialog" class="dialog">
@@ -90,6 +114,7 @@
         <td class="dim">{{ b.cause }}</td>
         <td class="r nowrap">
           <a class="btn small" href="{{ url_for('main.build_page', vendor=v.name, app=a.app, job=(b.job if v.source == 'scm' else 'pipeline'), build_id=b.id) }}">로그</a>
+          {% if security_installed and b.status not in ('running', 'pending') %}<a class="btn small" href="{{ url_for('main.build_security', vendor=v.name, app=a.app, job=(b.job if v.source == 'scm' else 'pipeline'), build_id=b.id) }}">보안</a>{% endif %}
           {% if b.status in ('running', 'pending') %}
           <form method="post" action="{{ url_for('main.app_stop', vendor=v.name, app=a.app) }}" data-confirm="빌드 #{{ b.number }}을(를) 중지할까요?">{{ csrf() }}
             <input type="hidden" name="id" value="{{ b.id }}"><input type="hidden" name="job" value="{{ b.job }}"><button class="btn small danger">중지</button></form>

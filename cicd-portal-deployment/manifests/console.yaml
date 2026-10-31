@@ -24,6 +24,10 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
+  # 품질 관리: security policy / rules ConfigMaps in the CI namespaces (deploy-cicd-portal.sh security)
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, create, patch, update]
   - apiGroups: [storage.k8s.io]
     resources: [storageclasses]
     verbs: [get, list]

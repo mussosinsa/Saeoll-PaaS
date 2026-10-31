@@ -16,6 +16,9 @@ STATUS_LABELS = {
     "unstable": "불안정", "skipped": "건너뜀", "manual": "수동 대기", "unknown": "알 수 없음",
     "Synced": "동기화됨", "OutOfSync": "변경 있음", "Unknown": "알 수 없음",
     "Healthy": "정상", "Progressing": "진행 중", "Degraded": "오류", "Missing": "없음", "Suspended": "중지",
+    "pass": "통과", "warn": "경고", "fail": "차단", "none": "결과 없음",
+    "critical": "Critical", "high": "High", "medium": "Medium", "low": "Low", "info": "Info",
+    "report": "경고 모드", "enforce": "차단 모드",
 }
 
 
@@ -30,9 +33,11 @@ def create_app():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app.logger.setLevel(logging.INFO)
 
+    from . import quality_views  # noqa: PLC0415
     from .views import auth_bp, bp  # noqa: PLC0415
     app.register_blueprint(auth_bp)
     app.register_blueprint(bp)
+    quality_views.register(app)
 
     @app.route("/healthz")
     def healthz():

@@ -18,7 +18,7 @@ VARS = [
     "KEYCLOAK_ADMIN_USERNAME", "KEYCLOAK_ADMIN_PASSWORD", "CA_FILE", "GITLAB_URL", "GITLAB_HOST",
     "JENKINS_URL", "JENKINS_HOST", "SCM_URL", "SCM_ADMIN_USER", "HARBOR_URL", "HARBOR_HOST",
     "REPOSITORY_USERNAME", "REPOSITORY_PASSWORD", "ARGOCD_HOST", "SCM_INTERNAL_GIT_URL", "GITLAB_INTERNAL_URL",
-    "CONSOLE_HOST",
+    "CONSOLE_HOST", "RUNNER_NAMESPACE", "SECURITY_NAMESPACE",
 ]
 
 
@@ -39,6 +39,7 @@ def load():
     env.setdefault("ARGOCD_NAMESPACE", "cicd-argocd")
     env.setdefault("JENKINS_NAMESPACE", "cicd-jenkins")
     env.setdefault("GITLAB_NAMESPACE", "cicd-gitlab")
+    env.setdefault("RUNNER_NAMESPACE", "cicd-runner")
     env.setdefault("SECRET_NAME", "cicd-portal-secrets")
     env.setdefault("KEYCLOAK_ADMIN_GROUP", "cicd-admins")
     env.setdefault("CICD_SOURCES", "scm gitlab")

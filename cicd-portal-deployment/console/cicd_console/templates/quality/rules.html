@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}검사 규칙{% endblock %}
+{% block content %}
+<div class="page-head"><h1>품질 관리 <span class="dim">검사 규칙</span></h1></div>
+{% include "quality/_nav.html" %}
+{% for e in rules.errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+<p class="hint">규칙은 저장소 <code>cicd-portal-deployment/security/rules</code>에서 관리하고 <code>./deploy-cicd-portal.sh security</code>로 반영합니다(폐쇄망: 외부 규칙 저장소를 쓰지 않음).
+  오탐은 규칙을 고치기보다 <b>예외</b>로 처리합니다.</p>
+
+<section class="panel">
+  <div class="panel-head"><h2>코드 취약점 — Semgrep</h2><span class="dim">{{ rules.semgrep|length }}개 규칙</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>규칙 묶음</th><th>규칙 ID</th><th>언어</th><th>심각도</th><th>설명</th><th>CWE</th></tr></thead>
+    <tbody>
+    {% for r in rules.semgrep %}
+      <tr><td>{{ sets.get(r.set, r.set) }}</td><td><code>{{ r.id }}</code></td><td>{{ r.languages }}</td><td>{{ badge(r.severity) }}</td>
+        <td class="wrap"><b>{{ r.description }}</b><br><span class="dim">{{ r.message }}</span></td><td class="dim">{{ r.cwe }}</td></tr>
+    {% else %}<tr><td colspan="6" class="dim">설치된 Semgrep 규칙이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>비밀정보 — Gitleaks</h2>
+    <span class="dim">{{ 'Gitleaks 기본 규칙(클라우드 키, 토큰, 개인 키 등 150여 종) + ' if rules.gitleaks.extend_default }}사용자 규칙 {{ rules.gitleaks.rules|length }}개 · 심각도 Critical</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>규칙 ID</th><th>설명</th><th>패턴</th></tr></thead>
+    <tbody>
+    {% for r in rules.gitleaks.rules %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.description }}</td><td class="wrap"><code>{{ r.regex }}</code></td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if rules.gitleaks.allow_paths %}<p class="hint">제외 경로: {% for p in rules.gitleaks.allow_paths %}<code>{{ p }}</code> {% endfor %}</p>{% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>개인정보 패턴</h2><span class="dim">게이트의 '개인정보'는 High 이상만 셉니다</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>ID</th><th>이름</th><th>심각도</th><th>검증</th><th>설명</th></tr></thead>
+    <tbody>
+    {% for r in rules.pii %}<tr><td><code>{{ r.id }}</code></td><td>{{ r.name }}</td><td>{{ badge(r.severity) }}</td>
+      <td>{{ {'rrn': '주민번호 검증번호', 'luhn': 'Luhn'}.get(r.validator, '') }}{% if r.context %} 문맥: {{ r.context|join(', ') }}{% endif %}</td>
+      <td class="wrap">{{ r.description }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">Presidio: {% if rules.settings.presidio and rules.settings.presidio.url %}<code>{{ rules.settings.presidio.url }}</code> (위 패턴 + {{ rules.settings.presidio.entities|join(', ') }}){% else %}설치되지 않음 (<code>SECURITY_PRESIDIO=true ./deploy-cicd-portal.sh security</code>){% endif %}</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>의존성 · 이미지 — Trivy</h2></div>
+  <p>규칙 대신 취약점 DB(CVE)를 씁니다. 의존성은 소스의 lock 파일, 이미지는 Harbor에 올라간 이미지의 OS 패키지와 라이브러리를 검사하며 심각도는 DB의 값(Critical~Low)을 따릅니다.</p>
+  <p class="hint">DB: {% if rules.settings.trivy and rules.settings.trivy.db_repository %}<code>{{ rules.settings.trivy.db_repository }}</code>{% else %}기본(ghcr.io) — 받지 못하면 검사 이미지에 들어 있는 DB 사용{% endif %}.
+    Harbor도 이미지를 올릴 때마다 Trivy로 검사합니다(Harbor 프로젝트 → 취약점).</p>
+</section>
+{% endblock %}

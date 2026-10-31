@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}보안 보고서{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › <a href="{{ url_for('main.app_page', vendor=v.name, app=app) }}">{{ app }}</a> › 빌드 #{{ build_id }} 보안</div>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>보안 보고서 <span class="dim">{{ job if v.source == 'scm' else 'pipeline' }} #{{ build_id }}</span> {{ badge(gate.result) }}</h1>
+  <div class="actions"><a class="btn" href="{{ url_for('main.build_page', vendor=v.name, app=app, job=job, build_id=build_id) }}">빌드 로그</a></div>
+</div>
+{% if not s %}
+<div class="panel empty"><p>이 빌드에는 보안 검사 결과가 없습니다.</p>
+  <p class="dim">보안 단계가 없는 Jenkinsfile이거나(앱 추가를 '기존 CI 파일 교체'로 다시 실행), 검사 전에 빌드가 실패했습니다.</p></div>
+{% else %}
+<section class="panel">
+  <dl class="kv">
+    <dt>게이트</dt><dd>{{ badge(gate.result) }} {{ status_label(s.gate.mode) }}
+      {% for viol in s.gate.violations %}<span class="badge s-fail">{{ viol.key }} {{ viol.count }}건 (허용 {{ viol.max }})</span>{% endfor %}</dd>
+    <dt>환경 · 프로파일</dt><dd>{{ s.env }} · {{ s.profile }}</dd>
+    <dt>브랜치/태그</dt><dd><code>{{ s.ref }}</code> <code>{{ (s.commit or '')[:10] }}</code></dd>
+    <dt>이미지</dt><dd><code>{{ s.image or '-' }}</code></dd>
+    <dt>검사 시각</dt><dd>{{ s.generated|replace('T', ' ') }}</dd>
+  </dl>
+</section>
+<section class="stats">
+  {% for k, label in (('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('secret', '비밀정보'), ('pii', '개인정보')) %}
+  <div class="stat {{ 'bad' if s.counts[k] and k in ('critical', 'secret', 'pii') else ('warn' if s.counts[k] and k == 'high' else '') }}"><b>{{ s.counts[k] }}</b><span>{{ label }}</span></div>
+  {% endfor %}
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>도구</h2></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>도구</th><th>상태</th><th>건수</th><th>버전</th><th>메시지</th></tr></thead>
+    <tbody>
+    {% for t, r in s.tools.items() %}<tr><td>{{ quality_tools.get(t, (t,))[0] }}</td>
+      <td>{{ badge({'ok': 'success', 'error': 'failed', 'skipped': 'skipped'}.get(r.status, r.status)) }}</td><td>{{ r.count }}</td>
+      <td class="dim">{{ r.version }}</td><td class="wrap dim">{{ r.message }}</td></tr>{% endfor %}
+    {% for t in s.missing_tools or [] %}<tr><td>{{ quality_tools.get(t, (t,))[0] }}</td><td>{{ badge('skipped') }}</td><td colspan="3" class="dim">실행되지 않음</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>발견 사항</h2><span class="dim">{{ s.findings|length }}건{% if s.truncated %} (외 {{ s.truncated }}건){% endif %}</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>심각도</th><th>도구</th><th>규칙</th><th>위치</th><th>내용</th><th></th></tr></thead>
+    <tbody>
+    {% for x in s.findings %}
+      <tr><td>{{ badge(x.severity) }}</td><td>{{ quality_tools.get(x.tool, (x.tool,))[0] }}</td><td><code>{{ x.rule }}</code></td>
+        <td><code>{{ x.file }}{% if x.line %}:{{ x.line }}{% endif %}</code></td>
+        <td class="wrap">{{ x.message }}{% if x.url %} <a href="{{ x.url }}" target="_blank" rel="noopener">↗</a>{% endif %}</td>
+        <td class="r"><a class="btn small" href="{{ url_for('quality.exceptions', app=s.app, rule=x.tool ~ ':' ~ x.rule, path=x.file, fingerprint=x.fingerprint) }}#new">예외 요청</a></td></tr>
+    {% else %}<tr><td colspan="6" class="dim">발견 사항이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% if s.suppressed %}
+<section class="panel">
+  <div class="panel-head"><h2>예외 처리된 항목</h2><span class="dim">{{ s.suppressed|length }}건 — 게이트에서 제외</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>심각도</th><th>규칙</th><th>위치</th><th>예외 ID</th></tr></thead>
+    <tbody>{% for x in s.suppressed %}<tr><td>{{ badge(x.severity) }}</td><td><code>{{ x.tool }}:{{ x.rule }}</code></td><td><code>{{ x.file }}:{{ x.line }}</code></td><td><code>{{ x.exception }}</code></td></tr>{% endfor %}</tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

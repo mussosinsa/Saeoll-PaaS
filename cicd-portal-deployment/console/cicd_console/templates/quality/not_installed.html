@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}품질 관리{% endblock %}
+{% block content %}
+<div class="panel empty">
+  <h1>보안 검사가 설치되어 있지 않습니다</h1>
+  <p>파이프라인 보안 검사(Semgrep, Gitleaks, Trivy, 개인정보)와 품질 관리 메뉴를 쓰려면 관리 노드에서 다음을 실행합니다.</p>
+  <p><code>./deploy-cicd-portal.sh security-image security</code> → <code>./deploy-cicd-portal.sh console</code></p>
+  <p class="dim">자세한 내용: cicd-portal-deployment/docs/security-guide.md</p>
+</div>
+{% endblock %}

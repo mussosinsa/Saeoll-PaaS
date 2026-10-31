@@ -1,0 +1,7 @@
+<div class="tabs">
+  <a href="{{ url_for('quality.issues') }}" class="{{ 'on' if request.endpoint == 'quality.issues' }}">보안 이슈</a>
+  <a href="{{ url_for('quality.rules') }}" class="{{ 'on' if request.endpoint == 'quality.rules' }}">검사 규칙</a>
+  <a href="{{ url_for('quality.profiles') }}" class="{{ 'on' if request.endpoint == 'quality.profiles' }}">검사 프로파일</a>
+  <a href="{{ url_for('quality.gates') }}" class="{{ 'on' if request.endpoint == 'quality.gates' }}">보안 게이트</a>
+  <a href="{{ url_for('quality.exceptions') }}" class="{{ 'on' if request.endpoint == 'quality.exceptions' }}">예외 관리</a>
+</div>

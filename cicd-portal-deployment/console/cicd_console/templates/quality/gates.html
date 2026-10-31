@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf with context %}
+{% block title %}보안 게이트{% endblock %}
+{% block content %}
+<div class="page-head"><h1>품질 관리 <span class="dim">보안 게이트</span></h1></div>
+{% include "quality/_nav.html" %}
+<p class="hint">게이트는 빌드마다 발견 건수를 허용 건수와 비교합니다(-1 = 제한 없음). <b>경고 모드</b>는 초과해도 배포하고 빌드를 '불안정/경고'로 표시하며,
+  <b>차단 모드</b>는 배포를 막습니다. 예외 처리된 항목은 세지 않습니다.
+  {% if info.by %}마지막 변경: {{ info.by }} · {{ info.at|dt }} ({{ info.change }}){% endif %}</p>
+
+<section class="panel">
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>환경</th><th>모드</th>{% for k, label in keys %}<th>{{ label }}</th>{% endfor %}<th>도구 오류 시 실패</th><th>prod Sync 차단</th></tr></thead>
+    <tbody>
+    {% for env, label in envs %}{% set gt = pol.gates.get(env, {}) %}
+      <tr><td><b>{{ label }}</b></td><td>{{ badge('fail' if gt.mode == 'enforce' else 'warn') if gt else '-' }} {{ status_label(gt.mode) if gt else '' }}</td>
+        {% for k, _ in keys %}{% set m = (gt.max or {}).get(k) %}<td>{{ '제한 없음' if m is none or m < 0 else m ~ '건' }}</td>{% endfor %}
+        <td>{{ '예' if gt.fail_on_tool_error else '아니요' }}</td>
+        <td>{{ ('예' if gt.get('console_block', true) else '아니요') if env == 'prod' else '-' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+{% if is_admin %}
+<form class="panel form wide" method="post" action="{{ url_for('quality.gates_save') }}">
+  {{ csrf() }}<input type="hidden" name="rv" value="{{ rv }}">
+  <div class="panel-head"><h2>게이트 수정</h2><span class="dim">운영 관리자 · 저장하면 다음 빌드부터 적용</span></div>
+  <div class="alert warn">처음에는 <b>경고 모드</b>로 운영하며 오탐을 예외로 정리한 뒤, prod부터 <b>차단 모드</b>로 바꾸는 것을 권장합니다.
+    차단 모드에서 기준을 넘으면 파이프라인이 배포 단계를 건너뜁니다.</div>
+  {% for env, label in envs %}{% set gt = pol.gates.get(env, {}) %}
+  <fieldset>
+    <legend>{{ label }}</legend>
+    <div class="row-fields">
+      <label>모드
+        <select name="{{ env }}.mode">
+          <option value="report" {{ 'selected' if gt.mode != 'enforce' }}>경고 모드 (배포 계속)</option>
+          <option value="enforce" {{ 'selected' if gt.mode == 'enforce' }}>차단 모드 (배포 중단)</option>
+        </select></label>
+      {% for k, klabel in keys %}{% set m = (gt.max or {}).get(k) %}
+      <label>{{ klabel }} 허용 <input name="{{ env }}.max.{{ k }}" value="{{ -1 if m is none else m }}" inputmode="numeric" pattern="-1|[0-9]+" size="4"></label>
+      {% endfor %}
+    </div>
+    <label class="check"><input type="checkbox" name="{{ env }}.fail_on_tool_error" {{ 'checked' if gt.fail_on_tool_error }}> 검사 도구가 실패하면 게이트도 실패</label>
+    {% if env == 'prod' %}<label class="check"><input type="checkbox" name="prod.console_block" {{ 'checked' if gt.get('console_block', true) }}> 콘솔 prod Sync 차단 — 최근 릴리스가 통과하지 않으면 배포 사유 입력 필요</label>{% endif %}
+  </fieldset>
+  {% endfor %}
+  <div class="form-actions"><button class="btn primary">저장</button></div>
+</form>
+{% endif %}
+{% endblock %}

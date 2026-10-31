@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf with context %}
+{% block title %}보안 이슈{% endblock %}
+{% block content %}
+<div class="page-head"><h1>품질 관리 <span class="dim">보안 이슈</span></h1></div>
+{% include "quality/_nav.html" %}
+{% for e in errors %}<div class="alert warn">{{ e }}</div>{% endfor %}
+
+<form class="filters panel" method="get">
+  <label>범위
+    <select name="scope">
+      <option value="dev" {{ 'selected' if scope == 'dev' }}>최근 develop 빌드</option>
+      <option value="release" {{ 'selected' if scope == 'release' }}>최근 릴리스 빌드</option>
+    </select></label>
+  <label>업체
+    <select name="vendor"><option value="">전체</option>
+      {% for v in vendors %}<option {{ 'selected' if f.vendor == v.name }}>{{ v.name }}</option>{% endfor %}</select></label>
+  <label>앱 <input name="app" value="{{ f.app }}" placeholder="전체"></label>
+  <label>게이트
+    <select name="result"><option value="">전체</option>
+      {% for r in ('fail', 'warn', 'pass', 'none') %}<option value="{{ r }}" {{ 'selected' if f.result == r }}>{{ status_label(r) }}</option>{% endfor %}</select></label>
+  <label>심각도
+    <select name="severity"><option value="">전체</option>
+      {% for sv in ('critical', 'high', 'medium', 'low', 'info') %}<option value="{{ sv }}" {{ 'selected' if f.severity == sv }}>{{ status_label(sv) }}</option>{% endfor %}</select></label>
+  <label>분류
+    <select name="category"><option value="">전체</option>
+      {% for c, label in (('code', '코드'), ('secret', '비밀정보'), ('dependency', '의존성'), ('image', '이미지'), ('pii', '개인정보')) %}<option value="{{ c }}" {{ 'selected' if f.category == c }}>{{ label }}</option>{% endfor %}</select></label>
+  <button class="btn primary">조회</button>
+</form>
+
+<section class="panel">
+  <div class="panel-head"><h2>애플리케이션별 결과</h2><span class="dim">{{ '최근 develop 빌드' if scope == 'dev' else '최근 릴리스 빌드' }} 기준</span></div>
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>업체/앱</th><th>빌드</th><th>게이트</th><th>Critical</th><th>High</th><th>Medium</th><th>비밀정보</th><th>개인정보</th><th>위반 내용</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set c = r.gate.counts %}
+      <tr>
+        <td><a href="{{ url_for('main.app_page', vendor=r.app.vendor, app=r.app.app) }}">{{ r.app.vendor }}/{{ r.app.app }}</a></td>
+        <td>{% if r.build %}#{{ r.build.number }} <code>{{ r.build.ref }}</code>{% else %}<span class="dim">-</span>{% endif %}</td>
+        <td>{{ badge(r.gate.result) }}{% if r.gate.mode %} <small class="dim">{{ status_label(r.gate.mode) }}</small>{% endif %}</td>
+        <td>{{ c.critical if c else '-' }}</td><td>{{ c.high if c else '-' }}</td><td>{{ c.medium if c else '-' }}</td>
+        <td>{{ c.secret if c else '-' }}</td><td>{{ c.pii if c else '-' }}</td>
+        <td class="dim">{% for viol in r.gate.violations %}{{ viol.key }} {{ viol.count }}/{{ viol.max }}{{ ', ' if not loop.last }}{% endfor %}</td>
+        <td class="r">{% if r.build and r.summary %}<a class="btn small" href="{{ url_for('main.build_security', vendor=r.app.vendor, app=r.app.app, job=(r.build.job if '/' not in r.build.job else 'pipeline'), build_id=r.build.id) }}">보고서</a>{% endif %}</td>
+      </tr>
+    {% else %}<tr><td colspan="10" class="dim">조건에 맞는 애플리케이션이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">결과 없음: 보안 단계가 없는 Jenkinsfile(앱 추가를 '기존 CI 파일 교체'로 다시 실행), 아직 빌드 전, 또는 빌드 실패로 검사 전 중단.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>발견 사항</h2><span class="dim">{{ total }}건{% if total > findings|length %} (상위 {{ findings|length }}건 표시){% endif %}</span></div>
+  <div class="table-wrap">
+  <table class="grid compact">
+    <thead><tr><th>심각도</th><th>업체/앱</th><th>도구</th><th>규칙</th><th>위치</th><th>내용</th><th></th></tr></thead>
+    <tbody>
+    {% for x in findings %}
+      <tr>
+        <td>{{ badge(x.severity) }}</td>
+        <td>{{ x.vendor }}/{{ x.app_name }}</td>
+        <td>{{ quality_tools.get(x.tool, (x.tool,))[0] }}</td>
+        <td><code>{{ x.rule }}</code></td>
+        <td><code>{{ x.file }}{% if x.line %}:{{ x.line }}{% endif %}</code></td>
+        <td class="wrap">{{ x.message }}{% if x.url %} <a href="{{ x.url }}" target="_blank" rel="noopener">↗</a>{% endif %}</td>
+        <td class="r"><a class="btn small" href="{{ url_for('quality.exceptions', app=x.vendor ~ '/' ~ x.app_name, rule=x.tool ~ ':' ~ x.rule, path=x.file, fingerprint=x.fingerprint) }}#new">예외 요청</a></td>
+      </tr>
+    {% else %}<tr><td colspan="7" class="dim">발견 사항이 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

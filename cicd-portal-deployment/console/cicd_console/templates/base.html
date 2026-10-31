@@ -17,6 +17,16 @@
   {% if user %}
   <nav class="menu">
     <a href="{{ url_for('main.dashboard') }}" class="{{ 'on' if request.endpoint == 'main.dashboard' }}">대시보드</a>
+    <div class="drop {{ 'on' if request.blueprint == 'quality' }}">
+      <button type="button" class="drop-btn" aria-haspopup="true">품질 관리 ▾</button>
+      <div class="drop-menu">
+        <a href="{{ url_for('quality.issues') }}">보안 이슈</a>
+        <a href="{{ url_for('quality.rules') }}">검사 규칙</a>
+        <a href="{{ url_for('quality.profiles') }}">검사 프로파일</a>
+        <a href="{{ url_for('quality.gates') }}">보안 게이트</a>
+        <a href="{{ url_for('quality.exceptions') }}">예외 관리</a>
+      </div>
+    </div>
     {% if is_admin %}
     <a href="{{ url_for('main.vendor_new') }}" class="{{ 'on' if request.endpoint == 'main.vendor_new' }}">업체 등록</a>
     <a href="{{ url_for('main.jobs_page') }}" class="{{ 'on' if request.endpoint in ('main.jobs_page', 'main.job_page') }}">작업 이력</a>

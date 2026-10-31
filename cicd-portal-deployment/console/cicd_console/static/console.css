@@ -32,6 +32,14 @@ h3 { font-size: 13px; margin: 18px 0 6px; color: var(--head); }
 .menu a.on { color: #fff; border-bottom-color: var(--accent); }
 .who { display: flex; gap: 14px; align-items: center; color: var(--head-text); font-size: 13px; }
 .who a { color: var(--head-dim); }
+.drop { position: relative; display: flex; }
+.drop-btn { background: none; border: 0; border-bottom: 3px solid transparent; color: var(--head-dim); font: inherit; padding: 15px 12px; cursor: pointer; }
+.drop-btn:hover, .drop:focus-within .drop-btn { color: #fff; }
+.drop.on .drop-btn { color: #fff; border-bottom-color: var(--accent); }
+.drop-menu { display: none; position: absolute; top: 100%; left: 0; z-index: 20; min-width: 150px; background: #fff; border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.15); padding: 4px 0; }
+.drop:hover .drop-menu, .drop:focus-within .drop-menu, .drop.open .drop-menu { display: block; }
+.menu .drop-menu a { display: block; color: var(--text); padding: 8px 16px; border: 0; }
+.menu .drop-menu a:hover { background: var(--mute-bg); text-decoration: none; }
 .tag { font-style: normal; background: var(--accent); color: #fff; border-radius: 3px; padding: 1px 6px; font-size: 11px; margin-left: 4px; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
@@ -76,6 +84,11 @@ td form, .stage form { display: inline; margin: 0; }
 .s-failed, .s-degraded, .s-missing { background: var(--bad-bg); color: var(--bad); }
 .s-running, .s-progressing { background: var(--run-bg); color: var(--run); }
 .s-pending, .s-outofsync, .s-manual, .s-unstable, .s-suspended { background: var(--warn-bg); color: var(--warn); }
+.s-pass { background: var(--ok-bg); color: var(--ok); }
+.s-warn, .s-high { background: var(--warn-bg); color: var(--warn); }
+.s-fail, .s-critical { background: var(--bad-bg); color: var(--bad); }
+.s-medium { background: #fff8db; color: #8a6d00; }
+.s-low, .s-info, .s-none { background: var(--mute-bg); color: var(--dim); }
 .src { font-size: 12px; border-radius: 3px; padding: 1px 7px; border: 1px solid var(--line); color: var(--dim); font-weight: normal; }
 .src.gitlab { border-color: #f3b98a; color: #c4521a; }
 .src.scm { border-color: #a5c8ec; color: #2468a8; }
@@ -86,6 +99,7 @@ td form, .stage form { display: inline; margin: 0; }
 .grid th { text-align: left; font-weight: 600; color: var(--head); background: #f6f7f9; border-top: 2px solid var(--head); }
 .grid th, .grid td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .grid th, .grid td { white-space: nowrap; }
+.grid td.wrap { white-space: normal; min-width: 240px; }
 .grid code { word-break: normal; }
 .grid tbody tr:hover { background: #fafbfc; }
 .grid.compact th, .grid.compact td { padding: 5px 8px; font-size: 13px; }
@@ -137,6 +151,18 @@ input:focus, select:focus { outline: 2px solid #fbc77f; border-color: var(--acce
 .inline-form { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
 .inline-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--head); font-weight: 600; flex: 1; min-width: 200px; max-width: 360px; }
 
+.form.wide { max-width: none; }
+.row-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+.row-fields label { flex: 1 1 140px; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+.filters label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--head); flex: 1 1 130px; }
+td.actions-cell { min-width: 170px; }
+form.stack { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+form.stack input { flex-basis: 100%; padding: 4px 6px; font-size: 12px; }
+form.inline { display: inline-flex; gap: 4px; align-items: center; }
+form.inline select { width: auto; padding: 3px 6px; }
+a.stat:hover { text-decoration: none; border-color: var(--accent); }
+
 /* dialog */
 .dialog { border: 1px solid var(--line); border-radius: 6px; padding: 0; width: min(520px, calc(100vw - 32px)); }
 .dialog::backdrop { background: rgba(20, 22, 26, .45); }
@@ -155,7 +181,7 @@ input:focus, select:focus { outline: 2px solid #fbc77f; border-color: var(--acce
 @media (max-width: 640px) {
   .gnb { padding: 8px 16px; gap: 4px 12px; justify-content: space-between; }
   .menu { order: 3; flex-basis: 100%; }
-  .menu a { padding: 6px 8px; white-space: nowrap; }
+  .menu a, .drop-btn { padding: 6px 8px; white-space: nowrap; }
   .wrap { padding: 14px 16px 32px; }
   .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .kv dd { margin-bottom: 8px; }

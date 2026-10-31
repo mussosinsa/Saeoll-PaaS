@@ -11,7 +11,12 @@ class KubeError(Exception):
 
 
 def kubectl(*args, stdin=None, timeout=30):
-    out = subprocess.run(["kubectl", *args], input=stdin, capture_output=True, text=True, timeout=timeout)
+    try:
+        out = subprocess.run(["kubectl", *args], input=stdin, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        raise KubeError("kubectl is not installed") from None
+    except subprocess.TimeoutExpired:
+        raise KubeError(f"kubectl {' '.join(args[:3])} timed out") from None
     if out.returncode != 0:
         raise KubeError(out.stderr.strip() or f"kubectl {' '.join(args)} failed")
     return out.stdout
