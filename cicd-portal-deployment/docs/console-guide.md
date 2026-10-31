@@ -19,7 +19,7 @@ Cloud Foundry UAA·4개 REST API에 의존하던 원본 대신, 이미 있는 CI
 | 저장소 브랜치/태그 조회 | 릴리스 태그 선택 | SCM-Manager 1.x `tags.json`, GitLab tags API |
 | 참여자(Contributor) 관리 | 업체 구성원 추가·제외 | Keycloak 그룹 `cicd-<업체>` (+ GitLab 그룹 Developer) |
 | 서비스 인스턴스 · 사용자 · 권한 | 업체 등록, 앱 추가, DB 연결 (운영 관리자) | `onboard-vendor.sh`, `add-app.sh`, `add-db.sh`를 백그라운드 실행 |
-| 품질 관리 (SonarQube) | 제외 | CI/CD 포털에 SonarQube가 없음 (빌드 단계의 단위 테스트 결과는 Jenkins/GitLab에서 확인) |
+| 품질 이슈 · 코딩 규칙 · 품질 프로파일 · 품질 게이트 (SonarQube) | **품질 관리** 메뉴: 보안 이슈 · 검사 규칙 · 검사 프로파일 · 보안 게이트 · 예외 관리 | 파이프라인 보안 검사(Semgrep, Gitleaks, Trivy, 개인정보) 결과 — [보안 검사 · 품질 관리 가이드](security-guide.md) |
 | CF 정보 · 바이너리 저장소 | 제외 | Kubernetes·Harbor로 대체 |
 
 ## 2. 설치

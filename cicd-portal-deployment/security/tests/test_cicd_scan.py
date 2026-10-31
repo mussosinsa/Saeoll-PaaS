@@ -138,3 +138,89 @@ class GateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Phase4Test(unittest.TestCase):
+    """Presidio analyzer and DefectDojo upload against small fake servers."""
+
+    def serve(self, handler_fn):
+        import http.server
+        import threading
+        received = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                received.append((self.path, dict(self.headers), body))
+                status, payload = handler_fn(self.path, body)
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}", received
+
+    def test_presidio(self):
+        def analyze(path, body):
+            req = json.loads(body)
+            text, out = req["text"], []
+            for entity, value, score in (("KR-RRN", "900101-1234567", 0.85), ("EMAIL_ADDRESS", "a@b.kr", 1.0),
+                                         ("CARD", "4111-1111-1111-1112", 0.6)):
+                i = text.find(value)
+                if i >= 0:
+                    out.append({"entity_type": entity, "start": i, "end": i + len(value), "score": score})
+            return 200, out
+        url, received = self.serve(analyze)
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "a.txt").write_text("x\n주민 900101-1234567\nmail a@b.kr\ncard 4111-1111-1111-1112\n")
+            with mock.patch.object(cicd_scan, "settings", return_value={"presidio": {"url": url}}), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                status, _, found = cicd_scan.scan_presidio(tmp, os.path.join(tmp, "security"), {})
+        self.assertEqual(status, "ok")
+        req = json.loads(received[0][2])
+        self.assertEqual(req["language"], "en")
+        self.assertIn("KR-RRN", [r["supported_entity"] for r in req["ad_hoc_recognizers"]])
+        # the card number fails the Luhn check and is dropped; values are masked
+        self.assertEqual([(f["rule"], f["line"], f["severity"]) for f in found],
+                         [("kr-rrn", 2, "high"), ("email_address", 3, "low")])
+        self.assertNotIn("1234567", json.dumps(found))
+
+    def test_presidio_not_configured(self):
+        with mock.patch.object(cicd_scan, "settings", return_value={}), mock.patch.dict(os.environ, {"PRESIDIO_URL": ""}):
+            status, msg, found = cicd_scan.scan_presidio(".", "security", {})
+        self.assertEqual((status, found), ("skipped", []))
+
+    def test_defectdojo_upload(self):
+        url, received = self.serve(lambda path, body: (201, {"test": 1}))
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "semgrep.json").write_text('{"results": []}')
+            pathlib.Path(tmp, "trivy-image.json").write_text('{"Results": []}')
+            env = {"DEFECTDOJO_URL": url, "DEFECTDOJO_TOKEN": "tok123", "CICD_APP": "saeoll/web", "CICD_ENV": "prod",
+                   "CICD_REF": "v1.0.0"}
+            with mock.patch.dict(os.environ, env), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cicd_scan.main(["upload", "--out", tmp]), 0)
+        self.assertEqual(len(received), 2)
+        path, headers, body = received[0]
+        self.assertEqual(path, "/api/v2/reimport-scan/")
+        self.assertEqual(headers["Authorization"], "Token tok123")
+        text = body.decode()
+        self.assertIn('name="scan_type"\r\n\r\nSemgrep JSON Report', text)
+        self.assertIn('name="product_name"\r\n\r\nsaeoll', text)
+        self.assertIn('name="engagement_name"\r\n\r\nweb prod', text)
+        self.assertIn("Trivy Scan", received[1][2].decode())
+
+    def test_defectdojo_failure_does_not_fail_the_build(self):
+        url, _ = self.serve(lambda path, body: (500, {"error": "x"}))
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "gitleaks.json").write_text("[]")
+            with mock.patch.dict(os.environ, {"DEFECTDOJO_URL": url, "DEFECTDOJO_TOKEN": "t"}), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cicd_scan.main(["upload", "--out", tmp]), 0)

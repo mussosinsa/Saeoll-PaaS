@@ -20,6 +20,7 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 > 웹 화면 사용법: [Jenkins · Argo CD 웹 화면 가이드](docs/web-ui-guide.md)
 > 통합 웹 콘솔(선택): [CI/CD 콘솔 가이드](docs/console-guide.md) — 업체·앱·빌드·배포를 한 화면에서 (`ap-pipeline-ui` 화면 참고)
 > 콘솔 사용법: [운영 관리자 가이드](docs/console-admin-guide.md) · [업체 가이드](docs/console-vendor-guide.md)
+> 보안 검사(선택): [보안 검사 · 품질 관리 가이드](docs/security-guide.md) — Semgrep · Gitleaks · Trivy · 개인정보, 콘솔 품질 관리 메뉴
 > 운영 절차: [운영 관리자 가이드](docs/admin-guide.md)
 > 테스트 샘플: [PHP · Java Spring · Node.js · Vue 게시판 (MariaDB 연동)과 배포 방법](samples/README.md)
 
@@ -209,6 +210,16 @@ SCM_ADMIN_PASSWORD='...' ./check-cicd-portal.sh   # Pod, SCM·Jenkins·Argo CD·
 
 ```bash
 SCM_ADMIN_PASSWORD='...' ./deploy-cicd-portal.sh console-image console   # 이미지 빌드(podman) → Harbor push → 배포
+```
+
+### 8-2. 보안 검사 · 품질 관리 (선택)
+
+파이프라인에 보안 검사 단계(Semgrep 코드 취약점, Gitleaks 비밀정보, Trivy 의존성·이미지, 한국 개인정보 패턴)를 넣고
+콘솔 **품질 관리** 메뉴에서 결과·게이트(경고/차단)·프로파일·예외를 관리한다. 자세한 내용: [보안 검사 · 품질 관리 가이드](docs/security-guide.md).
+
+```bash
+./deploy-cicd-portal.sh security-image security    # 검사 이미지 → Harbor, 정책·규칙 ConfigMap, Harbor 자동 스캔
+SECURITY_PRESIDIO=true DEFECTDOJO_URL=... DEFECTDOJO_TOKEN=... ./deploy-cicd-portal.sh security   # (선택) Presidio, DefectDojo
 ```
 
 ## 9. 운영 참고
