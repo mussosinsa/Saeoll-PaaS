@@ -15,6 +15,7 @@ Java(Gradle/Maven)·PHP·Node.js·Vue 서비스를 위한 CI/CD를 별도로 구
 > 파일 내용을 보여 준다(git clone/push만 참여자 권한으로 막힘, 실측 확인). `scm`은 신뢰할 수 있는 내부 사용자만 쓴다.
 > `scm` 업체는 `migrate-vendor.sh`로 이력째 `gitlab`으로 옮길 수 있다.
 >
+> **처음 설치 (기존 K-PaaS 환경)**: [처음 설치하기 — 관리자·사용자](docs/getting-started.md) (cp-portal·cp-source-control·cp-pipeline이 설치된 클러스터, 초보자용)
 > 처음 설치: [설치·설정·운영 전체 가이드](docs/install-guide.md) (초보자용, 신규 클러스터 기준)
 > 솔루션별 적용 가이드: [SCM / GitLab](docs/guide-scm-gitlab.md) · [Harbor](docs/guide-harbor.md) · [Jenkins](docs/guide-jenkins.md) · [Argo CD](docs/guide-argocd.md)
 > 웹 화면 사용법: [Jenkins · Argo CD 웹 화면 가이드](docs/web-ui-guide.md)
