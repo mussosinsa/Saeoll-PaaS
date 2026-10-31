@@ -307,8 +307,11 @@ step_console() {
   ensure_namespace "$CONSOLE_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
   copy_tls_secret "$CONSOLE_NAMESPACE"
   ensure_ca_secret "$CONSOLE_NAMESPACE"
+  # redirect URIs: login callback, and the console root that Keycloak returns to after logout
+  # (post.logout.redirect.uris "+" = the same list)
   oidc_secret=$($API kc-client "$KEYCLOAK_CONSOLE_CLIENT_ID" --groups-mapper \
-    --redirect "https://$CONSOLE_HOST/oauth/callback" --origin "https://$CONSOLE_HOST")
+    --redirect "https://$CONSOLE_HOST/oauth/callback" --redirect "https://$CONSOLE_HOST/" \
+    --origin "https://$CONSOLE_HOST")
   # pull secret: robot account of the console's Harbor project (pull only is enough, push is harmless)
   mapfile -t robot < <($API harbor-robot "$CONSOLE_HARBOR_PROJECT" console)
   ((${#robot[@]} == 2)) || die "Cannot create the Harbor robot account (run: $0 console-image first)."

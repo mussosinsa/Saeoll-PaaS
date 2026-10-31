@@ -106,6 +106,8 @@ class Keycloak:
             log(f"[OK]   Keycloak client created: {client_id}")
         else:
             current.update({k: rep[k] for k in ("redirectUris", "webOrigins")})
+            # logout redirects must be allowed too (Keycloak rejects post_logout_redirect_uri otherwise)
+            current.setdefault("attributes", {}).setdefault("post.logout.redirect.uris", "+")
             self.call("PUT", f"/clients/{current['id']}", current)
             log(f"[INFO] Keycloak client exists (redirect URIs updated): {client_id}")
         if groups_mapper:
