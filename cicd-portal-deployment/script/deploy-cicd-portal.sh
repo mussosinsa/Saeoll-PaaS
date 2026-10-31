@@ -403,9 +403,19 @@ step_security-image() {
 # Security scan in the pipelines: ConfigMaps (policy edited in the console, rules/settings from this repo),
 # scanner pull secret, Harbor scan on push, optional Presidio and DefectDojo, GitLab templates/runner.
 step_security() {
-  local namespaces=() ns dir presidio_url="" policy_src="" robot v
+  local namespaces=() ns dir presidio_url="" policy_src="" robot v gitlab=0
   has_source scm && namespaces+=("$JENKINS_NAMESPACE")
-  has_source gitlab && namespaces+=("$RUNNER_NAMESPACE")
+  # gitlab in CICD_SOURCES but not installed yet (no automation token): skip its parts
+  if has_source gitlab; then
+    if [[ -n "$(get_secret automation-token)" ]]; then
+      gitlab=1
+      namespaces+=("$RUNNER_NAMESPACE")
+    else
+      warn "GitLab is in CICD_SOURCES but not installed (no automation token) - GitLab parts skipped."
+      warn "  Not using GitLab: set CICD_SOURCES=\"scm\" in cicd-vars.sh. Installing it later: re-run '$0 security' after 'gitlab bootstrap templates runner'."
+    fi
+  fi
+  ((${#namespaces[@]})) || die "No installed CI source (scm: Jenkins, gitlab: GitLab + runner)."
   info "Security scan for ${namespaces[*]} (image $SECURITY_IMAGE)"
 
   if [[ "$SECURITY_PRESIDIO" == true ]]; then
@@ -469,7 +479,7 @@ PY
       warn "Harbor project $v: scan settings not changed"
   done
 
-  if has_source gitlab; then
+  if ((gitlab)); then
     load_gitlab_token
     $API gl-instance-var CICD_SECURITY_IMAGE="$SECURITY_IMAGE"
     if [[ -n "${DEFECTDOJO_URL:-}" && -n "${DEFECTDOJO_TOKEN:-}" ]]; then
