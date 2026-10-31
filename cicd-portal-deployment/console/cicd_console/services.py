@@ -371,8 +371,16 @@ def scm_tags(repo):
     return sorted((t.get("name") for t in tags if t.get("name")), reverse=True)
 
 
+def require_source(vendor_info):
+    """Vendors without a recorded source (projects made before the label, or not by onboard-vendor.sh)."""
+    if vendor_info["source"] not in ("scm", "gitlab"):
+        raise BackendError(f"업체 {vendor_info['name']}의 소스(scm|gitlab)를 알 수 없습니다. "
+                           f"./onboard-vendor.sh --source <scm|gitlab> {vendor_info['name']} 를 다시 실행해 기록하세요.")
+
+
 def builds(vendor_info, app, limit=15):
     """Recent builds of an application (scm: Jenkins jobs -dev and -release, gitlab: pipelines)."""
+    require_source(vendor_info)
     if vendor_info["source"] == "scm":
         j = Jenkins()
         found = j.builds(vendor_info["name"], f"{app}-dev", limit) + j.builds(vendor_info["name"], f"{app}-release", limit)
@@ -383,6 +391,7 @@ def builds(vendor_info, app, limit=15):
 
 
 def release_tags(vendor_info, app):
+    require_source(vendor_info)
     if vendor_info["source"] == "scm":
         return scm_tags(f"{vendor_info['name']}-{app}")
     return GitLab().tags(f"{vendor_info['name']}/{app}")
@@ -397,7 +406,7 @@ def links(vendor_info, app=None):
     if vendor_info["source"] == "scm":
         result["jenkins"] = f"https://{env.get('JENKINS_HOST')}/job/{q(v)}/"
         result["scm"] = f"https://scm.{env.get('HOST_DOMAIN')}"
-    else:
+    elif vendor_info["source"] == "gitlab":
         result["gitlab"] = f"https://{env.get('GITLAB_HOST')}/{v}" + (f"/{app}" if app else "")
     if app:
         result["argocd"] = f"https://{env.get('ARGOCD_HOST')}/applications?labels={q(f'{LABEL}/app={app}')}"

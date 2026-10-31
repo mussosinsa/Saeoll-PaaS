@@ -66,6 +66,15 @@ def _try(fn, *args, **kwargs):
         return None, str(e)
 
 
+def _unknown_source(vendor_info, app):
+    """Redirect with a message when the vendor's source is not recorded (no scm|gitlab label)."""
+    _, err = _try(services.require_source, vendor_info)
+    if err:
+        flash(err, "error")
+        return redirect(url_for("main.app_page", vendor=vendor_info["name"], app=app))
+    return None
+
+
 def can_release(vendor_info):
     # scm: vendor groups may build the -release job in Jenkins; gitlab: v* tags are protected (Maintainer)
     return auth.is_admin() or vendor_info["source"] == "scm"
@@ -154,6 +163,9 @@ def app_page(vendor, app):
 def app_build(vendor, app):
     v = _vendor_or_404(vendor)
     _app_or_404(v, app)
+    stop = _unknown_source(v, app)
+    if stop:
+        return stop
     if v["source"] == "scm":
         _, err = _try(lambda: services.Jenkins().trigger(vendor, f"{app}-dev"))
     else:
@@ -167,6 +179,9 @@ def app_build(vendor, app):
 def app_release(vendor, app):
     v = _vendor_or_404(vendor)
     _app_or_404(v, app)
+    stop = _unknown_source(v, app)
+    if stop:
+        return stop
     if not can_release(v):
         abort(403, "GitLab 업체의 릴리스 태그는 PM(GitLab Maintainer)이 GitLab에서 만들거나 운영 관리자가 실행합니다.")
     tag = request.form.get("tag", "").strip()
@@ -189,6 +204,9 @@ def app_release(vendor, app):
 def app_stop(vendor, app):
     v = _vendor_or_404(vendor)
     _app_or_404(v, app)
+    stop = _unknown_source(v, app)
+    if stop:
+        return stop
     build_id = request.form.get("id", "")
     job = request.form.get("job", "")
     if not build_id.isdigit():
@@ -240,6 +258,9 @@ def app_refresh(vendor, app):
 def build_page(vendor, app, job, build_id):
     v = _vendor_or_404(vendor)
     _app_or_404(v, app)
+    stop = _unknown_source(v, app)
+    if stop:
+        return stop
     if not build_id.isdigit():
         abort(404)
     gl_jobs, err = [], None
@@ -260,6 +281,7 @@ def build_log(vendor, app, job, build_id):
     if not NAME_RE.match(app) or not build_id.isdigit():
         abort(404)
     try:
+        services.require_source(v)
         if v["source"] == "scm":
             if job not in (f"{app}-dev", f"{app}-release"):
                 abort(404)

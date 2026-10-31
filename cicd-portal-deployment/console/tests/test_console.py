@@ -192,6 +192,22 @@ class ConsoleTest(unittest.TestCase):
             self.post("/vendors/acme/apps/shop/stop", {"id": "55", "job": "acme/shop"})
             gl.cancel.assert_called_once_with("acme/shop", "55")
 
+    def test_vendor_without_source(self):
+        legacy = {"name": "user01", "source": "", "ns_mode": "split", "ci_user": "", "namespaces": ["user01-dev"],
+                  "repos": [], "created": NOW}
+        app = {"vendor": "user01", "app": "web", "type": "php", "envs": {"dev": env("user01-web-dev")}}
+        self.login("admin", ["cicd-admins"])
+        with mock.patch.object(services, "vendor", side_effect=lambda n: legacy), \
+                mock.patch.object(services, "application", side_effect=lambda v, a: app), \
+                mock.patch.object(services, "GitLab") as gl:
+            self.assertIn("소스(scm|gitlab)가 기록되어 있지 않아",
+                          self.client.get("/vendors/user01").get_data(as_text=True))
+            r = self.post("/vendors/user01/apps/web/build")
+            self.assertEqual(r.location, "/vendors/user01/apps/web")
+            gl.assert_not_called()
+        with self.assertRaises(services.BackendError):
+            services.require_source(legacy)
+
     # -------------------------------------------------------------- scripts ---
     def test_onboard_form(self):
         self.login("admin", ["cicd-admins"])

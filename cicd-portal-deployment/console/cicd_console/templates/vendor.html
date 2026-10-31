@@ -11,6 +11,11 @@
   </div>
 </div>
 
+{% if v.source not in ('scm', 'gitlab') %}
+<div class="alert warn">이 업체는 소스(scm|gitlab)가 기록되어 있지 않아 빌드 조회·실행을 할 수 없습니다.
+  CI/CD 포털로 등록한 업체라면 <code>./onboard-vendor.sh --source &lt;scm|gitlab&gt; {{ v.name }}</code>를 다시 실행하고,
+  다른 용도로 만든 Argo CD 프로젝트라면 무시해도 됩니다.</div>
+{% endif %}
 <div class="tabs" data-tabs>
   <a href="#apps" class="on">애플리케이션 ({{ apps|length }})</a>
   <a href="#members">구성원 ({{ members|length }})</a>
