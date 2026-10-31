@@ -126,6 +126,10 @@ def env_summary(obj):
                         "initiated_by": ((h.get("initiatedBy") or {}).get("username") or
                                          ("자동 Sync" if (h.get("initiatedBy") or {}).get("automated") else ""))})
     images = (st.get("summary") or {}).get("images") or []
+    # the application image is the one in Harbor (a dedicated DB adds e.g. docker.io/library/mariadb:11.4)
+    harbor = os.environ.get("HARBOR_HOST", "")
+    app_images = [i for i in images if harbor and i.startswith(harbor + "/")] or images
+    app_image = app_images[0] if app_images else ""
     return {
         "name": obj["metadata"]["name"],
         "namespace": (spec.get("destination") or {}).get("namespace", ""),
@@ -135,7 +139,7 @@ def env_summary(obj):
         "health": (st.get("health") or {}).get("status") or "Unknown",
         "health_message": (st.get("health") or {}).get("message") or "",
         "images": images,
-        "tag": images[0].rsplit(":", 1)[-1] if images and ":" in images[0].rsplit("/", 1)[-1] else "",
+        "tag": app_image.rsplit(":", 1)[-1] if ":" in app_image.rsplit("/", 1)[-1] else "",
         "urls": (st.get("summary") or {}).get("externalURLs") or [],
         "op_phase": op.get("phase") or "",
         "op_message": op.get("message") or "",

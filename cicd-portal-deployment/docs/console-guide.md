@@ -5,6 +5,8 @@ CI/CD 포털(GitLab / K-PaaS SCM + Jenkins + Argo CD)을 웹 화면 하나에서
 Cloud Foundry UAA·4개 REST API에 의존하던 원본 대신, 이미 있는 CI/CD 포털 스크립트와 Keycloak·Jenkins·GitLab·Argo CD API를
 그대로 사용하므로 별도 DB나 백엔드 서버가 없다.
 
+> 사용 방법(초보자용): [운영 관리자 가이드 — 업체 등록·앱 추가](console-admin-guide.md) · [업체 가이드 — 개발·배포](console-vendor-guide.md)
+
 ## 1. ap-pipeline-ui 기능 대응
 
 | ap-pipeline-ui | CI/CD 콘솔 | 구현 |

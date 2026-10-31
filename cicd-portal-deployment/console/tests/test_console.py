@@ -269,6 +269,10 @@ class ServicesTest(unittest.TestCase):
         self.assertEqual((s["tag"], s["auto"], s["sync"]), ("v1.2.0", False, "OutOfSync"))
         self.assertEqual([h["id"] for h in s["history"]], [2, 1])
         self.assertEqual(s["history"][1]["initiated_by"], "자동 Sync")
+        with mock.patch.dict(os.environ, {"HARBOR_HOST": "harbor.x"}):
+            both = {"metadata": {"name": "x"}, "spec": {},
+                    "status": {"summary": {"images": ["docker.io/library/mariadb:11.4", "harbor.x/saeoll/web:dev-1"]}}}
+            self.assertEqual(services.env_summary(both)["tag"], "dev-1")
         self.assertEqual(services.env_summary({"metadata": {"name": "x"}, "spec": {"source": {}},
                                                "status": {"summary": {"images": ["harbor:443/a/b"]}}})["tag"], "")
 
