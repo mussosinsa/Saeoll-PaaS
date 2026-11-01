@@ -4,8 +4,8 @@ import concurrent.futures
 import os
 import re
 
-from flask import (Blueprint, abort, flash, g, jsonify, redirect, render_template, request, session,
-                   url_for)
+from flask import (Blueprint, abort, flash, g, jsonify, make_response, redirect, render_template, request,
+                   session, url_for)
 
 from . import auth, config, jobs, quality, services
 from .kube import KubeError
@@ -136,6 +136,17 @@ def vendor_members(vendor):
     v = _vendor_or_404(vendor)
     username = request.form.get("username", "").strip()
     action = request.form.get("action")
+    if action == "reset" and USERS_RE.match(username) and "," not in username:
+        password, err = _try(services.reset_password, vendor, username)
+        _audit("password-reset", f"{vendor}/{username}")
+        if err:
+            flash(err, "error")
+            return redirect(url_for("main.vendor_page", vendor=vendor) + "#members")
+        resp = make_response(render_template(
+            "credentials.html", title=f"{vendor} 구성원 임시 비밀번호", creds=[(username, "", "", password)],
+            errors=[], back=url_for("main.vendor_page", vendor=vendor) + "#members"))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     if not USERS_RE.match(username) or "," in username or action not in ("add", "remove"):
         flash("사용자 ID를 확인하세요.", "error")
     else:
@@ -376,6 +387,19 @@ def vendor_new():
         for value in (users, pm_users):
             if value and not USERS_RE.match(value):
                 errors.append("사용자 목록은 쉼표로 구분한 Keycloak 사용자 ID입니다.")
+        new_users, new_errors = _parse_new_users(form.get("new_users", ""), users, pm_users)
+        errors += new_errors
+        if not errors and new_users:
+            taken, err = _try(services.existing_accounts, [u[0] for u in new_users], [u[2] for u in new_users])
+            if err:
+                errors.append(f"Keycloak 확인 실패: {err}")
+            else:
+                taken_users, taken_emails = taken
+                if taken_users:
+                    errors.append(f"Keycloak에 이미 있는 ID입니다: {', '.join(taken_users)}. "
+                                  "기존 사용자는 '개발자' 칸에 넣거나 다른 ID를 쓰세요.")
+                if taken_emails:
+                    errors.append(f"다른 계정이 이미 쓰는 이메일입니다: {', '.join(taken_emails)}")
         if not errors:
             env = {"PM_USERS": pm_users}
             secrets_ = []
@@ -388,10 +412,54 @@ def vendor_new():
                         errors.append("CI 계정 ID를 확인하세요.")
                     env["SCM_CI_USER"] = form["scm_ci_user"].strip()
         if not errors:
-            args = ["--source", source, "--namespace", ns_mode, vendor] + ([users] if users else [])
-            return _start(f"업체 등록: {vendor}", "onboard-vendor.sh", args, env, secrets_)
+            created = []
+            for username, name, email in new_users:
+                password, err = _try(services.create_user, username, name, email)
+                if err:
+                    errors.append(f"{username} 생성 실패: {err}"
+                                  + (f" (이미 생성됨: {', '.join(c[0] for c in created)})" if created else ""))
+                    break
+                created.append((username, name, email, password))
+                _audit("user-create", f"{vendor}/{username}")
+            if created and errors:   # show the passwords of the accounts that exist now
+                return render_template("credentials.html", title=f"업체 등록: {vendor} — 일부 계정만 생성됨",
+                                       creds=created, errors=errors, back=url_for("main.vendor_new"))
+        if not errors:
+            all_users = ",".join(x for x in [users] + [c[0] for c in created] if x)
+            args = ["--source", source, "--namespace", ns_mode, vendor] + ([all_users] if all_users else [])
+            job = jobs.start(f"업체 등록: {vendor}", "onboard-vendor.sh", args, g.user["username"], env=env,
+                             secrets=secrets_)
+            job.credentials = created or None
+            _audit("onboard-vendor.sh", " ".join(args))
+            return redirect(url_for("main.job_page", job_id=job.id))
     return render_template("vendor_new.html", form=form, errors=errors, sources=config.sources(),
                            existing=services.vendor(form.get("vendor", "")) if form.get("vendor") else None)
+
+
+def _parse_new_users(text, users, pm_users):
+    """'ID, 이름, 이메일' per line -> [(id, name, email)], errors."""
+    result, errors, seen = [], [], set()
+    listed = {u for u in (users + "," + pm_users).split(",") if u}
+    for no, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 3 or not all(parts):
+            errors.append(f"신규 계정 {no}번째 줄: 'ID, 이름, 이메일' 형식으로 입력하세요.")
+            continue
+        username, name, email = parts[0].lower(), parts[1], parts[2]
+        if not services.NEW_USER_RE.match(username):
+            errors.append(f"신규 계정 {username}: ID는 영문 소문자·숫자·'.'·'_'·'-' (2~63자)입니다.")
+        elif not services.EMAIL_RE.match(email) or len(name) > 60:
+            errors.append(f"신규 계정 {username}: 이름(60자 이내)과 이메일을 확인하세요.")
+        elif username in seen or username in listed:
+            errors.append(f"신규 계정 {username}: 목록에 두 번 들어 있습니다(개발자·PM 칸 포함).")
+        else:
+            seen.add(username)
+            result.append((username, name, email))
+    if len(result) > 30:
+        errors.append("신규 계정은 한 번에 30명까지 만들 수 있습니다.")
+    return result, errors
 
 
 @bp.route("/vendors/<vendor>/apps/new", methods=["GET", "POST"])
@@ -476,7 +544,14 @@ def jobs_page():
 @auth.admin_required
 def job_page(job_id):
     job = jobs.get(job_id) or abort(404)
-    return render_template("job.html", job=job)
+    # temporary passwords of accounts created with the job: shown once, to the operator who started it
+    creds = None
+    if getattr(job, "credentials", None) and job.user == g.user["username"]:
+        creds, job.credentials = job.credentials, None
+    resp = make_response(render_template("job.html", job=job, creds=creds))
+    if creds:
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @bp.route("/api/jobs/<job_id>")

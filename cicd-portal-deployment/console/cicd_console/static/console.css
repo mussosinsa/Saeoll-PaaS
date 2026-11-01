@@ -145,6 +145,9 @@ td form, .stage form { display: inline; margin: 0; }
 .form label.radio, .form label.check { flex-direction: row; align-items: baseline; gap: 8px; font-weight: normal; color: var(--text); }
 .form fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 10px; margin: 0; }
 .form legend { padding: 0 6px; font-weight: 700; color: var(--head); }
+textarea { font: inherit; padding: 7px 9px; border: 1px solid #c9ccd1; border-radius: 3px; width: 100%; resize: vertical; }
+code.secret { font-size: 14px; background: #fff4e0; color: #5c3b00; padding: 2px 8px; user-select: all; }
+h2.sub { margin: 0 0 8px; }
 input:not([type=radio]):not([type=checkbox]), select { font: inherit; padding: 7px 9px; border: 1px solid #c9ccd1; border-radius: 3px; background: #fff; color: var(--text); width: 100%; max-width: 100%; }
 input:focus, select:focus { outline: 2px solid #fbc77f; border-color: var(--accent); }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; }

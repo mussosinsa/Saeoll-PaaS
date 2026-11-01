@@ -13,6 +13,16 @@
     if (btn && !window.confirm(btn.getAttribute('data-confirm-click'))) e.preventDefault();
   });
 
+  // Copy buttons (temporary passwords)
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-copy]');
+    if (!btn || !navigator.clipboard) return;
+    navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function () {
+      btn.textContent = '복사됨';
+      setTimeout(function () { btn.textContent = '복사'; }, 1500);
+    });
+  });
+
   // 품질 관리 dropdown (click for touch screens; hover/focus in CSS)
   document.querySelectorAll('.drop-btn').forEach(function (btn) {
     btn.addEventListener('click', function (e) {

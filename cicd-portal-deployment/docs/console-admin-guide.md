@@ -101,7 +101,8 @@ SCM 업체는 **두 번 실행**한다. 1차 실행에서 CI 계정이 만들어
 | 업체 ID | `saeoll` | 3장에서 정한 ID |
 | 소스 저장소 · CI | **K-PaaS SCM + Jenkins** | GitLab을 설치했으면 GitLab도 보인다(외부 업체용, 4-5) |
 | 네임스페이스 구성 | **분리** (권장) | 분리: `saeoll-dev`, `saeoll-prod` 두 개 / 단일: `saeoll` 하나에 dev·prod. **나중에 바꿀 수 없다** |
-| 개발자 | `saeoll-hong,saeoll-kim` | 쉼표로 구분, 띄어쓰기 없이. 비워 두고 나중에 구성원 탭에서 추가해도 된다 |
+| 개발자 (기존 계정) | `saeoll-hong,saeoll-kim` | Keycloak에 **이미 있는** ID. 쉼표로 구분, 띄어쓰기 없이 |
+| 신규 개발자 계정 | `user11, 홍길동, hong@anbsoft.kr` (한 줄에 한 명) | Keycloak에 계정을 **새로 만든다**(3장 대신). 같은 ID·이메일이 있으면 오류. 임시 비밀번호는 실행 직후 작업 화면에 **한 번만** 표시 |
 | PM (GitLab Maintainer) | 비움 | GitLab 업체에서만 사용 |
 | CI 계정 | 비움 | 비우면 `jenkins-saeoll` 계정을 새로 만든다. 이미 git 비밀번호를 설정한 기존 계정(예: `saeoll`)을 쓰려면 그 ID 입력 |
 | CI 계정 git 비밀번호 | **비움** (새 CI 계정일 때) | 기존 계정을 CI 계정으로 쓰고 git 비밀번호를 알면 여기에 넣는다 → 2차 실행 없이 바로 끝난다 |
@@ -258,6 +259,10 @@ The dev application stays Degraded until the first develop build pushes an image
 ---
 
 ## 7. 구성원 관리
+
+> **임시 비밀번호**: 업체 등록의 '신규 개발자 계정'으로 만든 계정은 작업 화면 위쪽 **생성한 계정** 표에 임시 비밀번호가
+> 한 번만 표시된다(복사 버튼). 놓쳤거나 분실했으면 구성원 탭의 **비밀번호 초기화**로 새 임시 비밀번호를 받는다.
+> 사용자는 첫 로그인 때 새 비밀번호를 정한다. 이 업체 구성원만 초기화할 수 있다.
 
 업체 화면 → **구성원** 탭.
 

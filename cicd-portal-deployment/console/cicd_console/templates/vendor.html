@@ -57,6 +57,10 @@
             <form method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}" data-confirm="{{ username }}을(를) 구성원에서 제외할까요?">
               {{ csrf() }}<input type="hidden" name="action" value="remove"><input type="hidden" name="username" value="{{ username }}">
               <button class="btn small danger">제외</button>
+            </form>
+            <form method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}" data-confirm="{{ username }}의 비밀번호를 임시 비밀번호로 초기화할까요? 기존 비밀번호는 더 이상 쓸 수 없습니다.">
+              {{ csrf() }}<input type="hidden" name="action" value="reset"><input type="hidden" name="username" value="{{ username }}">
+              <button class="btn small">비밀번호 초기화</button>
             </form></td>{% endif %}
         </tr>
       {% else %}<tr><td colspan="4" class="dim">구성원이 없습니다.</td></tr>{% endfor %}

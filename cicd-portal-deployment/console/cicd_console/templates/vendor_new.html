@@ -29,8 +29,13 @@
     <label class="radio"><input type="radio" name="ns_mode" value="single" {{ 'checked' if form.get('ns_mode') == 'single' }}> <b>단일</b> — &lt;업체&gt; 하나에 dev·prod (리소스 이름 &lt;앱&gt;-dev / &lt;앱&gt;-prod)</label>
   </fieldset>
 
-  <label>개발자 <input name="users" value="{{ form.get('users', '') }}" placeholder="user1,user2">
-    <small>쉼표로 구분한 Keycloak 사용자 ID. GitLab 업체는 GitLab에 한 번 로그인한 사용자만 GitLab 그룹(Developer)에 추가됩니다.</small></label>
+  <label>개발자 (기존 계정) <input name="users" value="{{ form.get('users', '') }}" placeholder="user1,user2">
+    <small>쉼표로 구분한, Keycloak에 이미 있는 사용자 ID. GitLab 업체는 GitLab에 한 번 로그인한 사용자만 GitLab 그룹(Developer)에 추가됩니다.</small></label>
+  <label>신규 개발자 계정 (Keycloak 자동 생성)
+    <textarea name="new_users" rows="3" placeholder="user11, 홍길동, hong@anbsoft.kr&#10;user12, 김철수, kim@anbsoft.kr">{{ form.get('new_users', '') }}</textarea>
+    <small>한 줄에 한 명씩 <b>ID, 이름, 이메일</b>. Keycloak cp-realm에 계정을 만들고 이 업체 구성원으로 넣습니다.
+      임시 비밀번호는 실행 직후 화면에 <b>한 번만</b> 표시되며, 첫 로그인 때 새 비밀번호로 바꾸게 됩니다.
+      이미 있는 ID나 이메일이면 오류가 나므로, 기존 사용자는 위의 '개발자' 칸에 넣습니다.</small></label>
   <label>PM (GitLab Maintainer) <input name="pm_users" value="{{ form.get('pm_users', '') }}" placeholder="pm1">
     <small>GitLab 업체: main 병합, 릴리스 태그(v*) 생성 권한.</small></label>
 

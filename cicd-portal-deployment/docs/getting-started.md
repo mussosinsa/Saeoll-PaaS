@@ -209,7 +209,8 @@ Keycloak 관리 화면 `https://keycloak.<도메인>/admin` → realm **cp-realm
 | 업체 ID | `saeoll` (나중에 바꿀 수 없음) |
 | 소스 저장소 · CI | **K-PaaS SCM + Jenkins** |
 | 네임스페이스 구성 | **분리** (`saeoll-dev`, `saeoll-prod`) |
-| 개발자 | `saeoll-hong` (여러 명이면 쉼표로) |
+| 개발자 (기존 계정) | `saeoll-hong` (여러 명이면 쉼표로) |
+| 신규 개발자 계정 | STEP 1 대신 여기서 만들 수 있다: `user11, 홍길동, hong@anbsoft.kr` (한 줄에 한 명). 임시 비밀번호는 실행 직후 화면에 한 번만 표시 |
 | CI 계정 / git 비밀번호 | 둘 다 **비움** |
 
 **실행** → 작업 로그가 나온다. 상태 **수동 대기**(종료 코드 3)로 끝나는 것이 정상이다. 새 CI 계정 `jenkins-saeoll`이 만들어졌고 git 비밀번호 설정이 남았다는 뜻이다.

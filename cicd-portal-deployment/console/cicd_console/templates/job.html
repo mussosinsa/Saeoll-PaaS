@@ -6,6 +6,10 @@
 <div class="page-head">
   <h1>{{ job.title }} <span id="job-status">{{ badge(job.status) }}</span></h1>
 </div>
+{% if creds %}
+<h2 class="sub">생성한 계정</h2>
+{% include "_credentials.html" %}
+{% endif %}
 <section class="panel">
   <dl class="kv">
     <dt>명령</dt><dd><code>{{ job.command }}</code></dd>

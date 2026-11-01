@@ -37,6 +37,7 @@ class Job:
         self.ended = None
         self.rc = None
         self.lines = []
+        self.credentials = None   # [(id, name, email, temporary password)] shown once on the job page
 
     @property
     def command(self):

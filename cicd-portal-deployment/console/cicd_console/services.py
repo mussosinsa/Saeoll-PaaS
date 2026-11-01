@@ -9,6 +9,8 @@ import datetime
 import functools
 import json
 import os
+import re
+import secrets
 import sys
 import urllib.error
 import urllib.parse
@@ -445,6 +447,63 @@ def change_member(vendor_info, username, add):
         if not GitLab().sync_member(vendor_info["name"], username, add) and add:
             note = "GitLab에 아직 로그인한 적이 없어 GitLab 그룹에는 추가되지 않았습니다. 첫 로그인 후 다시 추가하세요."
     return note
+
+
+# Developer accounts created from the console (업체 등록): temporary password, changed at the first login
+NEW_USER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
+EMAIL_RE = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")
+
+
+def temp_password(length=14):
+    """Random password with lower, upper, digit and symbol (typical Keycloak password policies)."""
+    lower, upper, digits, symbols = "abcdefghijkmnopqrstuvwxyz", "ABCDEFGHJKLMNPQRSTUVWXYZ", "23456789", "!@#%*-_"
+    chars = [secrets.choice(lower), secrets.choice(upper), secrets.choice(digits), secrets.choice(symbols)]
+    chars += [secrets.choice(lower + upper + digits) for _ in range(length - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def split_name(name):
+    """Keycloak firstName / lastName: 'Gildong Hong' -> (Gildong, Hong), '홍길동' -> (길동, 홍)."""
+    name = name.strip()
+    if " " in name:
+        first, last = name.split(" ", 1)
+        return first, last.strip()
+    return (name[1:] or name), name[:1]
+
+
+def existing_accounts(usernames, emails):
+    """(usernames that exist in Keycloak cp-realm, emails used by another account)."""
+    kc = api().Keycloak()
+    taken_users = [u for u in usernames
+                   if any(x["username"] == u for x in kc.call("GET", f"/users?username={q(u)}&exact=true") or [])]
+    taken_emails = [e for e in emails
+                    if any((x.get("email") or "").lower() == e.lower()
+                           for x in kc.call("GET", f"/users?email={q(e)}&exact=true") or [])]
+    return taken_users, taken_emails
+
+
+def create_user(username, name, email):
+    """Create a Keycloak user with a temporary password (UPDATE_PASSWORD at the first login); returns it."""
+    kc = api().Keycloak()
+    first, last = split_name(name)
+    password = temp_password()
+    kc.call("POST", "/users", {"username": username, "email": email, "emailVerified": True, "enabled": True,
+                               "firstName": first, "lastName": last, "requiredActions": ["UPDATE_PASSWORD"],
+                               "credentials": [{"type": "password", "value": password, "temporary": True}]})
+    return password
+
+
+def reset_password(vendor_name, username):
+    """New temporary password for a member of cicd-<vendor> (not for other accounts)."""
+    if username not in [m[0] for m in members(vendor_name)]:
+        raise BackendError(f"{username}은(는) 업체 {vendor_name}의 구성원이 아닙니다.")
+    kc = api().Keycloak()
+    user = next(u for u in kc.call("GET", f"/users?username={q(username)}&exact=true") or []
+                if u["username"] == username)
+    password = temp_password()
+    kc.call("PUT", f"/users/{user['id']}/reset-password", {"type": "password", "value": password, "temporary": True})
+    return password
 
 
 def namespace_quota(namespace):
