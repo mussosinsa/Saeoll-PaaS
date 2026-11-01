@@ -235,6 +235,9 @@ kubectl -n cicd-jenkins get secret cicd-portal-secrets -o jsonpath='{.data.kc-je
 
 ### STEP 1. SCM 저장소 만들기
 
+> 앱 추가 화면의 **저장소 자동 생성**(기본 켜짐)을 쓰면 이 단계를 건너뛴다(저장소 생성, `scm.` 목록 등록, CI 계정 보기·구성원 쓰기 권한).
+> 개발자가 `scm.`에 아직 로그인하지 않았다면 첫 로그인 후 앱 추가를 같은 값으로 다시 실행해 권한을 추가한다. 아래는 수작업 방법이다.
+
 `https://scm.<도메인>`에 운영 관리자로 로그인 → **레파지토리** → **신규생성** → 유형 **Git**, 이름 **`saeoll-homepage`**.
 저장소 상세 → **참여자 추가**: `jenkins-saeoll` **보기**, `saeoll-hong` **쓰기**.
 

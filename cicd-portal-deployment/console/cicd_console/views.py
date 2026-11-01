@@ -485,6 +485,12 @@ def app_new(vendor):
             env["REPLACE_CI"] = "1"
         if form.get("db") in ("dedicated", "shared"):
             env["DB"] = form["db"]
+        if v["source"] == "scm" and form.get("scm_create"):
+            env["SCM_CREATE_REPO"] = "1"
+            writers = form.get("scm_writers", "").replace(" ", "")
+            if writers and not USERS_RE.match(writers):
+                errors.append("쓰기 권한 사용자는 쉼표로 구분한 ID입니다.")
+            env["SCM_WRITERS"] = writers
         scm_repo = form.get("scm_repo", "").strip()
         if scm_repo:
             if v["source"] != "scm" or not re.match(r"^[A-Za-z0-9._-]+$", scm_repo):

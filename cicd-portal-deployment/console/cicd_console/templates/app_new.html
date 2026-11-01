@@ -10,8 +10,15 @@
   <p class="hint"><code>add-app.sh</code>를 실행합니다. 소스 저장소(시작 소스), gitops 매니페스트, CI 작업, Argo CD 애플리케이션(dev 자동 / prod 수동)을 만듭니다.
     기존 파일은 덮어쓰지 않으며 다시 실행해도 안전합니다.</p>
   {% if v.source == 'scm' %}
-  <div class="alert warn">K-PaaS SCM 업체: 먼저 <code>scm.{{ host_domain }}</code>에서 Git 저장소 <code>{{ v.name }}-&lt;앱&gt;</code>을 만들고
-    참여자로 <code>{{ v.ci_user or 'jenkins-' ~ v.name }}</code>(보기)와 개발자(쓰기)를 지정하세요.</div>
+  <fieldset>
+    <legend>K-PaaS SCM 저장소</legend>
+    <label class="check"><input type="checkbox" name="scm_create" {{ 'checked' if request.method == 'GET' or form.get('scm_create') }}> 저장소 자동 생성
+      (<code>{{ v.name }}-&lt;앱&gt;</code>, 이미 있으면 참여자만 추가)</label>
+    <label>쓰기 권한 추가 사용자 <input name="scm_writers" value="{{ form.get('scm_writers', '') }}" placeholder="비우면 업체 구성원 전체">
+      <small>업체 구성원(cicd-{{ v.name }}) 전체와 여기 적은 ID에 <b>쓰기</b>, CI 계정 <code>{{ v.ci_user or 'jenkins-' ~ v.name }}</code>에 <b>보기</b> 권한을 줍니다.
+        <code>scm.{{ host_domain }}</code>에 아직 한 번도 로그인하지 않은 사용자는 건너뛰며, 첫 로그인 후 같은 값으로 다시 실행하면 추가됩니다.</small></label>
+    <p class="hint">끄면 기존 방식입니다: <code>scm.{{ host_domain }}</code>에서 저장소를 직접 만들고 참여자를 지정한 뒤 실행합니다.</p>
+  </fieldset>
   {% endif %}
 
   <label>앱 ID <input name="app" required pattern="[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?" value="{{ form.get('app', '') }}" placeholder="homepage">

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -144,6 +145,12 @@ class Keycloak:
                                      "credentials": [{"type": "password", "value": password, "temporary": False}]})
         log(f"[OK]   Keycloak user created: {username}")
         return True
+
+    def group_members(self, group):
+        for g in self.call("GET", f"/groups?search={q(group)}") or []:
+            if g["name"] == group:
+                return [u["username"] for u in self.call("GET", f"/groups/{g['id']}/members?max=500") or []]
+        return []
 
     def add_members(self, group, users):
         gid = self.ensure_group(group)
@@ -362,8 +369,8 @@ class Harbor:
 
 # ------------------------------------------------- SCM-Manager 1.x (K-PaaS) ---
 class SCM:
-    """Read-only use of the SCM-Manager 1.x REST API. Repositories and permissions are
-    managed in scm.<domain> so that the K-PaaS source control DB stays consistent."""
+    """SCM-Manager 1.x REST API of K-PaaS source control. Application repositories created here are also
+    registered in the K-PaaS source control DB (ScmDB) so that scm.<domain> lists them."""
     LEVELS = {"READ": 1, "WRITE": 2, "OWNER": 3}
 
     def __init__(self):
@@ -385,6 +392,40 @@ class SCM:
         log(f"[OK]   SCM repository created in SCM-Manager: {repo}" + (f" ({user}: {level})" if user else ""))
         return True
 
+    def users(self):
+        return {u.get("name") for u in request("GET", self.base + "/users.json", self.headers)[1] or []}
+
+    def ensure_app_repo(self, repo, description, wanted):
+        """Create the application repository if missing and add the wanted permissions {user: level}
+        (existing permissions are kept, never lowered). Returns the SCM-Manager repository."""
+        found = [r for r in self.repositories() if r.get("name") == repo]
+        if not found:
+            request("POST", self.base + "/repositories", self.headers,
+                    {"name": repo, "type": "git", "public": False, "description": description,
+                     "permissions": [{"name": u, "type": lv, "groupPermission": False} for u, lv in wanted.items()]})
+            log(f"[OK]   SCM repository created: {repo} (" + ", ".join(f"{u}: {lv}" for u, lv in wanted.items()) + ")")
+            found = [r for r in self.repositories() if r.get("name") == repo]
+            if not found:
+                raise SystemExit(f"[ERROR] SCM repository {repo} not found after creation")
+            return found[0]
+        current = found[0]
+        perms = list(current.get("permissions") or [])
+        changed = []
+        for user, level in wanted.items():
+            have = [p for p in perms if p.get("name") == user and not p.get("groupPermission")]
+            if have and max(self.LEVELS.get(p.get("type", ""), 0) for p in have) >= self.LEVELS[level]:
+                continue
+            perms = [p for p in perms if not (p.get("name") == user and not p.get("groupPermission"))]
+            perms.append({"name": user, "type": level, "groupPermission": False})
+            changed.append(f"{user}: {level}")
+        if changed:
+            current["permissions"] = perms
+            request("PUT", f"{self.base}/repositories/{q(current['id'])}", self.headers, current)
+            log(f"[OK]   SCM repository {repo}: permissions added ({', '.join(changed)})")
+        else:
+            log(f"[INFO] SCM repository exists: {repo}")
+        return current
+
     def check(self, repo, user, level):
         found = [r for r in self.repositories() if r.get("name") == repo]
         if not found:
@@ -399,6 +440,118 @@ class SCM:
                 return (f"user '{user}' needs {level} on '{repo}' - add as 참여자 "
                         f"({'쓰기' if level != 'READ' else '보기'} 권한) in scm.<domain>")
         return ""
+
+
+# ------------------------------------------- K-PaaS source control DB (cp_scm) ---
+class ScmDB:
+    """Registers a repository created through the SCM-Manager API in the K-PaaS source control DB so that
+    scm.<domain> lists it with its 참여자. The DB layout is not documented: every value is derived from
+    repositories created in scm.<domain> (template rows) and nothing is written when that is not possible."""
+    NAME_RE = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
+    TIME_FORMATS = {12: "%Y%m%d%H%M", 8: "%Y%m%d", 14: "%Y%m%d%H%M%S"}
+
+    def __init__(self):
+        self.password = ENV.get("DATABASE_USER_PASSWORD", "")
+        if not self.password:
+            raise SystemExit("[ERROR] DATABASE_USER_PASSWORD (K-PaaS MariaDB root) is not set")
+        out = subprocess.run(["kubectl", "-n", "mariadb", "get", "pods", "-l", "app.kubernetes.io/name=mariadb",
+                              "-o", "name"], capture_output=True, text=True, timeout=30)
+        self.pod = (out.stdout.split() or ["pod/mariadb-0"])[0].split("/", 1)[1]
+
+    def sql(self, statement):
+        """Rows of a statement on cp_scm (tab separated, no header), as the MariaDB root (password on stdin)."""
+        script = ('IFS= read -r MYSQL_PWD; export MYSQL_PWD; c=$(command -v mariadb || command -v mysql); '
+                  '"$c" -uroot -N -B cp_scm')
+        out = subprocess.run(["kubectl", "-n", "mariadb", "exec", "-i", self.pod, "--", "sh", "-c", script],
+                             input=f"{self.password}\n{statement}\n", capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            raise SystemExit(f"[ERROR] cp_scm: {out.stderr.strip()[:300]}")
+        return [line.split("\t") for line in out.stdout.splitlines() if line]
+
+    @staticmethod
+    def lit(value):
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
+
+    @classmethod
+    def time_format(cls, sample):
+        """Format of SC_REPOSITORY.CREATED_TIME (varchar(12)) from a row created in scm.<domain>."""
+        return cls.TIME_FORMATS.get(len(sample)) if sample.isdigit() else None
+
+    @staticmethod
+    def scm_key(template, scm_repos):
+        """Which SCM-Manager field SC_REPOSITORY.REPO_SCM_ID holds ('id' or 'name'), learned from the rows."""
+        by_id = {r.get("id"): r for r in scm_repos}
+        for repo_scm_id, *_, repo_name in template:
+            if repo_scm_id in by_id and by_id[repo_scm_id].get("name") == repo_name:
+                return "id"
+            if repo_scm_id == repo_name and any(r.get("name") == repo_name for r in scm_repos):
+                return "name"
+        return None
+
+    def register(self, scm_repo, scm_repos, description, owner, wanted):
+        """Insert SC_REPOSITORY / REPO_PERMITION rows like scm.<domain> does. Returns (registered, pending users)."""
+        name = scm_repo["name"]
+        template = self.sql("SELECT REPO_SCM_ID, INSTANCE_ID, OWNER_USER_ID, CREATED_TIME, REPO_NAME "
+                            "FROM SC_REPOSITORY ORDER BY REPO_NO DESC LIMIT 20")
+        if not template:
+            log("[WARN] cp_scm.SC_REPOSITORY is empty: create one repository in scm.<domain> first (template) - "
+                f"{name} works for git/Jenkins but is not listed in scm.<domain>")
+            return False, []
+        key = self.scm_key(template, scm_repos)
+        fmt = self.time_format(template[0][3])
+        if key is None or fmt is None:
+            log(f"[WARN] cp_scm layout not recognised (REPO_SCM_ID {template[0][0]!r}, CREATED_TIME {template[0][3]!r})"
+                f" - {name} is not listed in scm.<domain>; add it there by hand if needed")
+            return False, []
+        instance, template_owner = template[0][1], template[0][2]
+        owner = owner if owner and self.NAME_RE.match(owner) else template_owner
+        existing = self.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={self.lit(name)}")
+        if existing:
+            repo_no = existing[0][0]
+            log(f"[INFO] {name} is already listed in scm.<domain>")
+        else:
+            created = datetime.datetime.now().strftime(fmt)
+            self.sql("INSERT INTO SC_REPOSITORY (REPO_SCM_ID, REPO_NAME, REPO_DESC, INSTANCE_ID, OWNER_USER_ID, "
+                     f"CREATE_USER_ID, CREATED_TIME) VALUES ({self.lit(scm_repo[key])}, {self.lit(name)}, "
+                     f"{self.lit(description[:255])}, {self.lit(instance)}, {self.lit(owner)}, {self.lit(owner)}, "
+                     f"{self.lit(created)})")
+            repo_no = self.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={self.lit(name)}")[0][0]
+            log(f"[OK]   {name} registered in scm.<domain> (owner {owner})")
+        values = {row[0] for row in self.sql("SELECT DISTINCT PERMISSION FROM REPO_PERMITION")}
+        value_of = {v.upper(): v for v in values}
+        if not all(level in value_of for level in set(wanted.values())):
+            log(f"[WARN] REPO_PERMITION values {sorted(values)} do not show {sorted(set(wanted.values()))} - "
+                f"참여자 of {name} not registered; add them in scm.<domain>")
+            return True, []
+        have = {row[0] for row in self.sql(f"SELECT USER_ID FROM REPO_PERMITION WHERE REPO_NO={int(repo_no)}")}
+        known = {row[0] for row in self.sql("SELECT DISTINCT USER_ID FROM SC_INSTANCE_USER")}
+        pending = []
+        for user, level in wanted.items():
+            if user not in known:
+                pending.append(user)          # no scm.<domain> account until the first login
+            elif user not in have:
+                self.sql(f"INSERT INTO REPO_PERMITION (REPO_NO, USER_ID, PERMISSION) VALUES "
+                         f"({int(repo_no)}, {self.lit(user)}, {self.lit(value_of[level])})")
+                log(f"[OK]   참여자 {user}: {'쓰기' if level == 'WRITE' else '보기'} 권한")
+        return True, pending
+
+
+def scm_app_repo(repo, description, ci_user, writers, owner):
+    """Application repository: SCM-Manager (git, Jenkins) + cp_scm (scm.<domain> list and 참여자).
+    Users without an scm.<domain> account yet (first login) get their permission on a later run."""
+    scm = SCM()
+    scm_users = scm.users()
+    wanted = {w: "WRITE" for w in writers}
+    if ci_user:
+        wanted[ci_user] = "READ"
+    ready = {u: lv for u, lv in wanted.items() if u in scm_users}
+    scm_repo = scm.ensure_app_repo(repo, description, ready)
+    registered, pending_db = ScmDB().register(scm_repo, scm.repositories(), description, owner, ready)
+    pending = sorted(set(wanted) - set(ready) | set(pending_db))
+    for user in pending:
+        log(f"[WARN] {user} has not signed in to scm.<domain> yet - run 앱 추가 again after the first login "
+            "to add the permission")
+    print(json.dumps({"repo": repo, "registered": registered, "pending": pending}))
 
 
 # ------------------------------------------------------------------ Jenkins ---
@@ -566,6 +719,10 @@ def main():
     p = sub.add_parser("scm-check"); p.add_argument("repo"); p.add_argument("--user", default="")
     p.add_argument("--level", default="READ", choices=["READ", "WRITE", "OWNER"])
     sub.add_parser("scm-ping")
+    p = sub.add_parser("scm-app-repo"); p.add_argument("repo"); p.add_argument("--description", default="")
+    p.add_argument("--ci-user", default=""); p.add_argument("--writers", default="")
+    p.add_argument("--writers-group", default="", help="Keycloak group whose members get WRITE")
+    p.add_argument("--owner", default="")
     p = sub.add_parser("scm-create"); p.add_argument("repo"); p.add_argument("--user", default="")
     p.add_argument("--level", default="WRITE", choices=["READ", "WRITE", "OWNER"]); p.add_argument("--description", default="")
     p = sub.add_parser("jenkins-folder"); p.add_argument("name"); p.add_argument("--group", required=True)
@@ -654,6 +811,12 @@ def main():
             log(f"[OK]   SCM repository {a.repo}" + (f" ({a.user}: {a.level})" if a.user else ""))
         elif a.cmd == "scm-create":
             print("created" if SCM().create(a.repo, a.user, a.level, a.description) else "exists")
+        elif a.cmd == "scm-app-repo":
+            writers = [u.strip().lower() for u in a.writers.split(",") if u.strip()]
+            if a.writers_group:
+                writers += Keycloak().group_members(a.writers_group)
+            writers = sorted({w for w in writers if w and w != a.ci_user and ScmDB.NAME_RE.match(w)})
+            scm_app_repo(a.repo, a.description, a.ci_user, writers, a.owner)
         elif a.cmd == "scm-ping":
             print(len(SCM().repositories()))
         elif a.cmd == "jenkins-folder":

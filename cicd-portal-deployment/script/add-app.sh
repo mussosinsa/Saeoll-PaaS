@@ -12,6 +12,8 @@
 #   source  : starter files on main + branch develop (scm: repository <vendor>-<app>;
 #             gitlab: project <vendor>/<app> with protected tags v*). SKIP_STARTER=1 keeps your own source.
 #   existing SCM repository with another name : SCM_REPO=<repository> (default <vendor>-<app>)
+#   create the SCM repository : SCM_CREATE_REPO=1 (참여자: CI account 보기, members of cicd-<vendor> and
+#     SCM_WRITERS=u1,u2 쓰기; registered in the K-PaaS source control DB so scm.<domain> lists it)
 #   replace an old CI file (Jenkinsfile / .gitlab-ci.yml) with the portal one : REPLACE_CI=1
 #     (scm: on main and on an existing develop; your other changes on those branches are kept)
 #   gitops  : apps/<app>/base + overlays/dev,prod
@@ -73,8 +75,18 @@ SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE
        SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE")
 
 
+SCM_PENDING=""
 if [[ "$SOURCE" == scm ]]; then
-  # 1. SCM source repository (created in scm.<domain>) --------------------------------------
+  # 1. SCM source repository --------------------------------------------------------------------
+  # SCM_CREATE_REPO=1: create it (SCM-Manager + K-PaaS source control DB, so scm.<domain> lists it) with
+  # 참여자 CI account (보기) and the members of cicd-<vendor> / SCM_WRITERS (쓰기); otherwise it must exist.
+  if [[ "${SCM_CREATE_REPO:-0}" == 1 ]]; then
+    result=$(DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-app-repo "$SOURCE_REPO" \
+      --description "$VENDOR $APP ($TYPE, CI/CD portal)" --ci-user "$CI_USER" \
+      --writers "${SCM_WRITERS:-}" --writers-group "cicd-$VENDOR" --owner "${SCM_REPO_OWNER:-}") || \
+      die "Cannot create SCM repository $SOURCE_REPO."
+    SCM_PENDING=$(printf '%s' "$result" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["pending"]))')
+  fi
   $API scm-check "$SOURCE_REPO" --user "$CI_USER" --level READ || \
     die "Prepare '$SOURCE_REPO' in https://scm.$HOST_DOMAIN (Git, 참여자: $CI_USER 보기 권한, developers 쓰기 권한) and re-run."
   dir=$(scm_clone "$SOURCE_REPO")
@@ -213,3 +225,8 @@ echo "  Dev URL  : https://$APP-$VENDOR-dev.$HOST_DOMAIN"
 echo "  Prod URL : https://$APP-$VENDOR.$HOST_DOMAIN   (after Argo CD sync of $VENDOR-$APP-prod)"
 echo "  Argo CD  : https://$ARGOCD_HOST/applications?labels=cicd.k-paas.org%2Fvendor%3D$VENDOR"
 echo "The dev application stays Degraded until the first develop build pushes an image."
+if [[ -n "$SCM_PENDING" ]]; then
+  echo
+  echo "[TODO] Not yet signed in to https://scm.$HOST_DOMAIN: $SCM_PENDING"
+  echo "       After their first login (and git password in 내정보 관리), run this again (same values) to add their 쓰기 권한."
+fi
