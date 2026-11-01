@@ -12,6 +12,7 @@ import base64
 import datetime
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -220,7 +221,8 @@ class GitLab:
                 with open(local, encoding="utf-8") as fh:
                     content = fh.read()
                 for k, v in subs.items():
-                    content = content.replace("{" + k + "}", v)
+                    # {KEY} only - "${KEY}" belongs to the file (Dockerfile ARG, shell, CI variables)
+                    content = re.sub(r"(?<!\$)\{" + re.escape(k) + r"\}", lambda m, v=v: v, content)
                 current = self.get(f"/projects/{pid}/repository/files/{q(dest)}?ref={q(branch)}")
                 if current is None:
                     actions.append({"action": "create", "file_path": dest, "content": content})

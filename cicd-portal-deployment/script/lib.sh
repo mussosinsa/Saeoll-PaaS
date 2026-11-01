@@ -206,7 +206,7 @@ require_scm_admin() {
 render_tree() {
   local src=$1 dst=$2; shift 2
   python3 - "$src" "$dst" "$@" <<'PY'
-import os, sys
+import os, re, sys
 src, dst, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
 exclude, subs = set(), {}
 while rest:
@@ -227,7 +227,8 @@ for root, _, files in os.walk(src):
             continue
         text = open(path, encoding="utf-8").read()
         for k, v in subs.items():
-            text = text.replace("{" + k + "}", v)
+            # {KEY} only - "${KEY}" belongs to the file (Dockerfile ARG, shell, Groovy)
+            text = re.sub(r"(?<!\$)\{" + re.escape(k) + r"\}", lambda m: v, text)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -282,12 +283,13 @@ scm_commit_push() { # dir branch message
 render_file() {
   local src=$1 dst=$2; shift 2
   python3 - "$src" "$dst" "$@" <<'PY'
-import sys
+import re, sys
 src, dst, pairs = sys.argv[1], sys.argv[2], sys.argv[3:]
 text = open(src).read()
 for p in pairs:
     k, v = p.split("=", 1)
-    text = text.replace("{" + k + "}", v)
+    # {KEY} only - "${KEY}" belongs to the file (Dockerfile ARG, shell, Groovy)
+    text = re.sub(r"(?<!\$)\{" + re.escape(k) + r"\}", lambda m: v, text)
 open(dst, "w").write(text)
 PY
 }
