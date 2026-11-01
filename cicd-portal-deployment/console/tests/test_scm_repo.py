@@ -30,8 +30,8 @@ class FakeDB(cicd_api.ScmDB):
 
     def __init__(self):
         self.statements = []
-        self.repos = [["a1b2", "inst-1", "admin", "202611011230", "saeoll-homepage", "7"]]
-        self.perms = {("7", "jenkins-saeoll"): "READ", ("7", "dev1"): "WRITE"}
+        self.repos = [["a1b2", "standalone", "admin", "202611010951", "saeoll-homepage", "7"]]
+        self.perms = {("7", "admin"): "OWNER", ("7", "jenkins-saeoll"): "WRITE", ("7", "dev1"): "WRITE"}
 
     def sql(self, statement):
         self.statements.append(statement)
@@ -69,13 +69,25 @@ class ScmDBTest(unittest.TestCase):
         self.assertTrue(registered)
         self.assertEqual(pending, ["dev3"])                       # not signed in to scm.<domain> yet
         new = db.repos[-1]
-        self.assertEqual(new[:3], ["c3d4", "inst-1", "admin"])     # SCM-Manager id, instance and owner of the template
+        self.assertEqual(new[:3], ["c3d4", "standalone", "admin"])     # SCM-Manager id, instance and owner of the template
         self.assertRegex(new[3], r"^\d{12}$")
         self.assertEqual(db.perms[("8", "dev1")], "WRITE")
-        self.assertEqual(db.perms[("8", "jenkins-saeoll")], "READ")
+        self.assertEqual(db.perms[("8", "jenkins-saeoll")], "READ")      # READ not in the DB yet: same naming
+        self.assertEqual(db.perms[("8", "admin")], "OWNER")              # owner row like scm.<domain>
         with mock.patch.object(cicd_api, "log"):                  # second run: nothing inserted again
             db.register(scm_repos[1], scm_repos, "board", "", {"dev1": "WRITE"})
         self.assertEqual(sum(s.startswith("INSERT INTO SC_REPOSITORY") for s in db.statements), 1)
+
+    def test_unknown_permission_values_skip_participants(self):
+        db = FakeDB()
+        db.perms = {("7", "admin"): "관리자"}
+        with mock.patch.object(cicd_api, "log") as log:
+            registered, _ = db.register({"id": "c3d4", "name": "saeoll-board"},
+                                        [{"id": "a1b2", "name": "saeoll-homepage"}, {"id": "c3d4", "name": "saeoll-board"}],
+                                        "", "", {"dev1": "WRITE"})
+        self.assertTrue(registered)
+        self.assertFalse(any(s.startswith("INSERT INTO REPO_PERMITION") for s in db.statements))
+        self.assertIn("not SCM-Manager permission names", log.call_args[0][0])
 
     def test_unknown_layout_writes_nothing(self):
         db = FakeDB()

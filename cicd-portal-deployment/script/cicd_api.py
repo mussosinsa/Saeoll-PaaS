@@ -519,10 +519,17 @@ class ScmDB:
             log(f"[OK]   {name} registered in scm.<domain> (owner {owner})")
         values = {row[0] for row in self.sql("SELECT DISTINCT PERMISSION FROM REPO_PERMITION")}
         value_of = {v.upper(): v for v in values}
-        if not all(level in value_of for level in set(wanted.values())):
-            log(f"[WARN] REPO_PERMITION values {sorted(values)} do not show {sorted(set(wanted.values()))} - "
+        # scm.<domain> stores the SCM-Manager permission names (OWNER, WRITE seen in the DB); a level that no
+        # repository uses yet (e.g. READ = 보기) is written the same way
+        if values and set(value_of) <= set(SCM.LEVELS):
+            for level in SCM.LEVELS:
+                value_of.setdefault(level, level)
+        if not all(level in value_of for level in set(wanted.values()) | {"OWNER"}):
+            log(f"[WARN] REPO_PERMITION values {sorted(values)} are not SCM-Manager permission names - "
                 f"참여자 of {name} not registered; add them in scm.<domain>")
             return True, []
+        # like scm.<domain>: the owner (creator) is a 참여자 with OWNER
+        wanted = {owner: "OWNER", **{u: lv for u, lv in wanted.items() if u != owner}}
         have = {row[0] for row in self.sql(f"SELECT USER_ID FROM REPO_PERMITION WHERE REPO_NO={int(repo_no)}")}
         known = {row[0] for row in self.sql("SELECT DISTINCT USER_ID FROM SC_INSTANCE_USER")}
         pending = []
@@ -532,7 +539,7 @@ class ScmDB:
             elif user not in have:
                 self.sql(f"INSERT INTO REPO_PERMITION (REPO_NO, USER_ID, PERMISSION) VALUES "
                          f"({int(repo_no)}, {self.lit(user)}, {self.lit(value_of[level])})")
-                log(f"[OK]   참여자 {user}: {'쓰기' if level == 'WRITE' else '보기'} 권한")
+                log(f"[OK]   참여자 {user}: {dict(OWNER='관리', WRITE='쓰기', READ='보기')[level]} 권한")
         return True, pending
 
 
