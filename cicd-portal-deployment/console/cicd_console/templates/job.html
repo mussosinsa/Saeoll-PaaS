@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge with context %}
 {% block title %}{{ job.title }}{% endblock %}
-{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.jobs_page') }}">작업 이력</a> › #{{ job.id }}</div>{% endblock %}
+{% block crumbs %}<div class="crumbs">{% if is_admin %}<a href="{{ url_for('main.jobs_page') }}">작업 이력</a>{% else %}<a href="{{ url_for('main.dashboard') }}">대시보드</a> › 작업{% endif %} › #{{ job.id }}</div>{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>{{ job.title }} <span id="job-status">{{ badge(job.status) }}</span></h1>

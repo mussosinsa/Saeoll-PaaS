@@ -1,5 +1,6 @@
 # CI/CD console image. Build context (prepared by ./deploy-cicd-portal.sh console-image):
 #   console/  script/  starters/  gitops-template/  db-template/  ci-templates/  kubectl
+# skopeo: 컨테이너 이미지 등록 (upload-image.sh pushes uploaded image files to Harbor, no container daemon)
 # Closed network: BASE_IMAGE from the Harbor mirror, APT_MIRROR / PIP_INDEX_URL for packages.
 ARG BASE_IMAGE=docker.io/library/python:3.12-slim
 FROM ${BASE_IMAGE}
@@ -8,7 +9,7 @@ ARG APT_MIRROR=""
 ARG PIP_INDEX_URL=""
 RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|http://deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; fi \
  && apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates \
+ && apt-get install -y --no-install-recommends git curl ca-certificates skopeo \
  && rm -rf /var/lib/apt/lists/*
 
 COPY console/requirements.txt /opt/cicd/console/requirements.txt

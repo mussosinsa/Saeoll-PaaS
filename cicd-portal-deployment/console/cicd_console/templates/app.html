@@ -28,6 +28,7 @@
       {% if images %}<b><code>{{ images[0].tags|join(', ') or images[0].digest[:19] }}</code></b><small class="dim">최근 push · {{ images[0].pushed|ago }}</small>
       {% else %}<span class="dim">push된 이미지 없음</span>{% endif %}
       <small class="dim">{{ links.harbor and 'harbor' }} {{ v.name }}/{{ a.app }}</small>
+      <a class="btn small" href="{{ url_for('main.image_upload_page', vendor=v.name, app=a.app) }}">이미지 업로드</a>
     </li>
     <li class="stage">
       <span class="k">2. 이미지 배포 (dev)</span>

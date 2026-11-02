@@ -396,7 +396,35 @@ Argo CD 앱(dev 자동 / prod 수동)을 만든다. 이미지가 아직 없으�
 - prod는 `vX.Y.Z` 태그만 승격할 수 있다. dev는 `latest`·`1.2.0-rc1` 같은 태그도 배포할 수 있다.
 - 롤백은 8-2와 같다(배포 이력 → 롤백), 또는 이전 버전을 다시 **prod 승격**한다.
 
-### 12-4. 반입 기준 (업체에 전달)
+### 12-4. 콘솔에서 이미지 파일 올리기 (컨테이너 이미지 등록)
+
+Harbor에 직접 push하기 어려운 업체(사내망 PC, podman 미설치 등)는 이미지 **파일**을 콘솔로 올린다.
+업체 화면 오른쪽 위 **컨테이너 이미지 등록** (앱 화면의 **이미지 업로드**도 같음).
+
+| 칸 | 입력 |
+| --- | --- |
+| 앱 | 기존 image 앱 선택. 관리자는 **+ 새 앱**으로 앱 추가(유형 image)까지 한 번에 할 수 있다 (포트를 비우면 이미지의 EXPOSE 포트) |
+| 태그 | `v1.2.0` (운영 승격 가능) 또는 `dev-1` 같은 시험용 |
+| 이미지 파일 | `podman save -o app.tar <이미지>` / `docker save` 결과, `.tar.gz`도 가능. 최대 2048MiB |
+| 등록 후 dev에 배포 | 기본 켬 |
+
+업로드가 끝나면 작업 화면으로 이동해 진행을 보여 준다(업로드한 사용자와 관리자만 볼 수 있음).
+
+```text
+[OK]   Image: docker-archive, linux/amd64, user '1000', ports 8080
+[INFO] Pushing to harbor.<도메인>/<업체>/<앱>:v1.2.0 as robot$<업체>+upload
+[OK]   Harbor ... (sha256:...)
+[OK]   dev deployment started: security gate -> gitops dev -> Argo CD <업체>-<앱>-dev (auto sync)
+```
+
+- 파일은 풀지 않고 검사만 한다: `linux/amd64` 이미지 1개가 아니면 거절, root 실행·EXPOSE 없음은 경고.
+- Harbor push는 그 업체 프로젝트 전용 계정(`robot$<업체>+upload`, 매번 새 비밀번호)으로 하므로 다른 업체 프로젝트에 올라갈 수 없다.
+- 이미 있는 `v*` 태그는 거절된다. 업로드 파일은 push가 끝나거나 실패하면 바로 지워진다.
+- 콘솔은 한 번에 **하나의 이미지만** 처리한다. 진행 중이면 "다른 이미지 등록이 진행 중" 메시지가 나온다.
+- 한도 변경: `manifests/console.yaml`의 `CICD_UPLOAD_MAX_MB`(콘솔), Ingress `proxy-body-size`, `uploads` emptyDir `sizeLimit`(한도의 4배 이상)을 함께 바꾼다.
+- 업로드가 413으로 바로 실패하면 Ingress 설정이 반영되지 않은 것이다 → `./deploy-cicd-portal.sh console` 다시 실행.
+
+### 12-5. 반입 기준 (업체에 전달)
 
 - `linux/amd64` 이미지, root가 아닌 사용자로 실행(`USER 1000` 등), 지정한 포트 하나로 서비스.
 - 설정·접속 정보는 이미지에 넣지 않는다 → 환경변수/DB 연결 화면으로 주입. 비밀번호·키가 든 이미지는 보안 검사에서 막힌다.

@@ -49,3 +49,16 @@ def load():
 
 def sources():
     return os.environ.get("CICD_SOURCES", "").split()
+
+
+def upload_dir():
+    """Where 컨테이너 이미지 등록 stores uploads until upload-image.sh has pushed them (emptyDir)."""
+    return os.environ.get("CICD_UPLOAD_DIR") or "/tmp/cicd-uploads"
+
+
+def upload_max_bytes():
+    """Largest image file accepted (CICD_UPLOAD_MAX_MB, default 2048 MiB)."""
+    try:
+        return int(os.environ.get("CICD_UPLOAD_MAX_MB") or 2048) * 1024 * 1024
+    except ValueError:
+        return 2048 * 1024 * 1024

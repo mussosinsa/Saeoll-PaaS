@@ -155,6 +155,74 @@
       poll();
     },
 
+    // 컨테이너 이미지 등록: the file is sent as the raw request body (streamed to disk by the console)
+    imageUpload: function (form) {
+      if (!form) return;
+      var select = form.querySelector('select[name=app]');
+      var newBox = form.querySelector('[data-new-app]');
+      var bar = form.querySelector('.upload-progress');
+      var text = form.querySelector('[data-progress-text]');
+      var error = form.querySelector('[data-upload-error]');
+      var button = form.querySelector('button.primary');
+      function isNew() { return select.value === '__new__'; }
+      function sync() {
+        newBox.hidden = !isNew();
+        form.querySelector('input[name=new_app]').required = isNew();
+      }
+      select.addEventListener('change', sync);
+      sync();
+      function fail(msg) {
+        error.textContent = msg;
+        error.hidden = false;
+        button.disabled = false;
+        bar.hidden = true;
+      }
+      function mib(n) { return (n / 1048576).toFixed(1) + 'MiB'; }
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        error.hidden = true;
+        var file = form.querySelector('input[name=file]').files[0];
+        if (!file) { fail('이미지 파일을 선택하세요.'); return; }
+        if (file.size > parseInt(form.getAttribute('data-max'), 10)) {
+          fail('파일이 너무 큽니다 (' + mib(file.size) + '). 큰 이미지는 Harbor push 계정으로 podman push 하세요.');
+          return;
+        }
+        var params = new URLSearchParams();
+        params.set('app', isNew() ? form.querySelector('input[name=new_app]').value.trim() : select.value);
+        params.set('tag', form.querySelector('input[name=tag]').value.trim());
+        params.set('deploy', form.querySelector('input[name=deploy]').checked ? '1' : '0');
+        if (isNew()) {
+          params.set('new', '1');
+          ['health', 'port', 'memory'].forEach(function (k) {
+            params.set(k, form.querySelector('input[name=' + k + ']').value.trim());
+          });
+        }
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', form.getAttribute('data-url') + '?' + params.toString());
+        xhr.setRequestHeader('X-CSRF-Token', form.getAttribute('data-csrf'));
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.upload.onprogress = function (ev) {
+          if (!ev.lengthComputable) return;
+          bar.querySelector('progress').value = Math.round(ev.loaded * 100 / ev.total);
+          text.textContent = mib(ev.loaded) + ' / ' + mib(ev.total) + (ev.loaded === ev.total ? ' - 저장 중' : '');
+        };
+        xhr.onload = function () {
+          var body = {};
+          try { body = JSON.parse(xhr.responseText); } catch (err) { /* proxy error page */ }
+          if (xhr.status === 200 && body.job) { location.href = body.job; return; }
+          fail(body.error || (xhr.status === 413 ? '파일이 너무 큽니다 (Ingress 업로드 한도).' : '업로드 실패 (HTTP ' + xhr.status + ')'));
+        };
+        xhr.onerror = function () { fail('업로드가 끊어졌습니다. 네트워크를 확인하고 다시 시도하세요.'); };
+        window.addEventListener('beforeunload', function warn(ev) {
+          if (xhr.readyState !== 4) { ev.preventDefault(); ev.returnValue = ''; }
+        });
+        button.disabled = true;
+        bar.hidden = false;
+        text.textContent = '업로드 시작';
+        xhr.send(file);
+      });
+    },
+
     // Script job output
     jobLog: function (pre) {
       var base = pre.getAttribute('data-url');

@@ -3,6 +3,9 @@ build/deploy stages, build log history, contributors; plus the portal's onboardi
 import concurrent.futures
 import os
 import re
+import shutil
+import tempfile
+import threading
 
 from flask import (Blueprint, abort, flash, g, jsonify, make_response, redirect, render_template, request,
                    session, url_for)
@@ -253,6 +256,105 @@ def vendor_push_account(vendor):
                                          harbor_host=os.environ.get("HARBOR_HOST", "")))
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+# ------------------------------------------------- 컨테이너 이미지 등록 (upload) ---
+_upload_lock = threading.Lock()     # one upload at a time (disk of the console Pod)
+UPLOAD_CHUNK = 1024 * 1024
+
+
+def _image_apps(vendor_name):
+    return sorted(a["app"] for a in services.applications(vendor_name) if a.get("type") == "image")
+
+
+@bp.route("/vendors/<vendor>/images/new")
+def image_upload_page(vendor):
+    v = _vendor_or_404(vendor)
+    apps, err = _try(_image_apps, vendor)
+    return render_template("image_upload.html", v=v, apps=apps or [], apps_err=err,
+                           preset=request.args.get("app", ""), max_mb=config.upload_max_bytes() // (1024 * 1024))
+
+
+def _upload_error(message, status=400):
+    return jsonify(error=message), status
+
+
+@bp.route("/vendors/<vendor>/images/upload", methods=["POST"])
+def image_upload(vendor):
+    """Receive an image file (raw request body, streamed to the upload directory) and run upload-image.sh:
+    Harbor <vendor>/<app>:<tag> -> (dev deployment). Vendor members: existing image apps; new apps: admins."""
+    v = _vendor_or_404(vendor)
+    form = request.args
+    app, tag, new = form.get("app", "").strip(), form.get("tag", "").strip(), form.get("new") == "1"
+    errors, env = [], {"DEPLOY_DEV": "1" if form.get("deploy", "1") == "1" else "0",
+                       "UPLOAD_USER": g.user["username"]}
+    if v["source"] != "scm":
+        errors.append("이미지 등록은 K-PaaS SCM + Jenkins 업체에서만 쓸 수 있습니다.")
+    if not NAME_RE.match(app) or app == "gitops":
+        errors.append("앱 ID는 영문 소문자·숫자·'-' (2~30자)이며 gitops는 쓸 수 없습니다.")
+    if not IMAGE_TAG_RE.match(tag):
+        errors.append("태그는 영문·숫자·'.'·'_'·'-' (128자 이내)입니다. 운영용은 v1.2.0 형식.")
+    if errors:
+        return _upload_error(" ".join(errors))
+    existing, err = _try(services.application, vendor, app)
+    if err:
+        return _upload_error(f"앱 조회 실패: {err}", 502)
+    if new:
+        if not auth.is_admin():
+            return _upload_error("새 앱 등록은 운영 관리자만 할 수 있습니다. 운영 관리자에게 앱 추가를 요청하세요.", 403)
+        if existing:
+            return _upload_error(f"앱 {app}이(가) 이미 있습니다. 기존 앱으로 선택하세요.")
+        health, opts, errors = _runtime_options(form)
+        if errors:
+            return _upload_error(" ".join(errors))
+        env.update(opts, NEW_APP="1", APP_HEALTH=health)
+    elif not existing or existing.get("type") != "image":
+        return _upload_error(f"{app}은(는) 이미지 배포 앱이 아닙니다 (유형 image인 앱만 이미지를 등록할 수 있습니다).")
+
+    length, limit = request.content_length, config.upload_max_bytes()
+    if not length:
+        return _upload_error("업로드할 이미지 파일이 없습니다.", 411)
+    if length > limit:
+        return _upload_error(f"파일이 너무 큽니다 (최대 {limit // (1024 * 1024)}MiB). "
+                             "큰 이미지는 Harbor push 계정으로 podman push 하세요.", 413)
+    directory = config.upload_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    if not _upload_lock.acquire(blocking=False):
+        return _upload_error("다른 이미지 업로드가 진행 중입니다. 잠시 뒤 다시 시도하세요.", 409)
+    # one image in the upload directory at a time (uploaded, waiting or being pushed by upload-image.sh):
+    # the emptyDir has a sizeLimit, exceeding it would evict the console Pod
+    if os.listdir(directory) or shutil.disk_usage(directory).free < length * 3:
+        _upload_lock.release()
+        return _upload_error("다른 이미지 등록이 진행 중이거나 업로드 공간이 부족합니다. "
+                             "작업이 끝난 뒤 다시 시도하세요.", 409)
+    path = None
+    try:
+        fd, path = tempfile.mkstemp(prefix=f"{vendor}-{app}-", suffix=".image", dir=directory)
+        received = 0
+        with os.fdopen(fd, "wb") as fh:
+            while True:
+                chunk = request.stream.read(UPLOAD_CHUNK)
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > length:
+                    raise ValueError("more data than Content-Length")
+                fh.write(chunk)
+        if received != length:
+            raise ValueError(f"incomplete upload ({received}/{length} bytes)")
+    except Exception as e:  # noqa: BLE001 - client gone, disk full, ...: never leave the file behind
+        if path and os.path.exists(path):
+            os.remove(path)
+        from flask import current_app  # noqa: PLC0415
+        current_app.logger.warning("image upload %s/%s failed: %s", vendor, app, e)
+        return _upload_error(f"업로드가 완료되지 않았습니다: {e}", 400)
+    finally:
+        _upload_lock.release()
+    env["UPLOAD_MAX_BYTES"] = str(limit * 2)     # decompressed .tar.gz
+    title = f"이미지 등록: {vendor}/{app}:{tag}" + (" (새 앱)" if new else "")
+    job = jobs.start(title, "upload-image.sh", [vendor, app, tag, path], g.user["username"], env=env)
+    _audit("image-upload", f"{vendor}/{app}:{tag} {received} bytes")
+    return jsonify(job=url_for("main.job_page", job_id=job.id))
 
 
 @bp.route("/vendors/<vendor>/apps/<app>/release", methods=["POST"])
@@ -514,6 +616,24 @@ def _parse_new_users(text, users, pm_users):
     return result, errors
 
 
+def _runtime_options(form):
+    """Health check, container port and memory limit of 앱 추가 / 이미지 등록: (health, env, errors)."""
+    errors, env = [], {}
+    health = form.get("health", "").strip()
+    if health and health not in ("tcp", "none") and not re.match(r"^/[A-Za-z0-9._/~-]*$", health):
+        errors.append("헬스 체크는 /로 시작하는 경로, tcp 또는 none입니다.")
+    port, memory = form.get("port", "").strip(), form.get("memory", "").strip()
+    if port:
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            errors.append("컨테이너 포트는 1~65535 숫자입니다.")
+        env["APP_PORT"] = port
+    if memory:
+        if not re.match(r"^[0-9]+(Mi|Gi)$", memory):
+            errors.append("메모리 상한은 512Mi, 1Gi 형식입니다.")
+        env["APP_MEMORY_LIMIT"] = memory
+    return health, env, errors
+
+
 @bp.route("/vendors/<vendor>/apps/new", methods=["GET", "POST"])
 @auth.admin_required
 def app_new(vendor):
@@ -523,23 +643,12 @@ def app_new(vendor):
     if request.method == "POST":
         app = form.get("app", "").strip()
         app_type = form.get("type", "")
-        health = form.get("health", "").strip()
         if not NAME_RE.match(app) or app == "gitops":
             errors.append("앱 ID는 영문 소문자·숫자·'-' (2~30자)이며 gitops는 쓸 수 없습니다.")
         if app_type not in TYPES:
             errors.append("언어/빌드 유형을 선택하세요.")
-        if health and health not in ("tcp", "none") and not re.match(r"^/[A-Za-z0-9._/~-]*$", health):
-            errors.append("헬스 체크는 /로 시작하는 경로, tcp 또는 none입니다.")
-        env = {}
-        port, memory = form.get("port", "").strip(), form.get("memory", "").strip()
-        if port:
-            if not port.isdigit() or not 1 <= int(port) <= 65535:
-                errors.append("컨테이너 포트는 1~65535 숫자입니다.")
-            env["APP_PORT"] = port
-        if memory:
-            if not re.match(r"^[0-9]+(Mi|Gi)$", memory):
-                errors.append("메모리 상한은 512Mi, 1Gi 형식입니다.")
-            env["APP_MEMORY_LIMIT"] = memory
+        health, env, opt_errors = _runtime_options(form)
+        errors += opt_errors
         if app_type == "image" and v["source"] != "scm":
             errors.append("이미지 배포 앱은 K-PaaS SCM + Jenkins 업체에서만 쓸 수 있습니다.")
         if form.get("skip_starter"):
@@ -609,10 +718,17 @@ def jobs_page():
     return render_template("jobs.html", jobs=jobs.all_jobs())
 
 
-@bp.route("/admin/jobs/<job_id>")
-@auth.admin_required
-def job_page(job_id):
+def _job_or_404(job_id):
+    """Script jobs are visible to operators and to the user who started them (e.g. 컨테이너 이미지 등록)."""
     job = jobs.get(job_id) or abort(404)
+    if not auth.is_admin() and job.user != g.user["username"]:
+        abort(403)
+    return job
+
+
+@bp.route("/admin/jobs/<job_id>")
+def job_page(job_id):
+    job = _job_or_404(job_id)
     # temporary passwords of accounts created with the job: shown once, to the operator who started it
     creds = None
     if getattr(job, "credentials", None) and job.user == g.user["username"]:
@@ -624,8 +740,7 @@ def job_page(job_id):
 
 
 @bp.route("/api/jobs/<job_id>")
-@auth.admin_required
 def job_log(job_id):
-    job = jobs.get(job_id) or abort(404)
+    job = _job_or_404(job_id)
     offset = request.args.get("offset", 0, type=int)
     return jsonify(lines=job.lines[offset:], offset=len(job.lines), status=job.status, rc=job.rc)

@@ -145,6 +145,13 @@ spec:
               value: "{GITLAB_API_URL}"
             - name: CICD_SCM_URL
               value: "{SCM_API_URL}"
+            # 컨테이너 이미지 등록: uploaded image files wait here until pushed to Harbor (one upload at a time).
+            # Keep CICD_UPLOAD_MAX_MB below the Ingress proxy-body-size and under 1/4 of the uploads sizeLimit
+            # (a .tar.gz may be decompressed to twice its size, plus skopeo's temporary files).
+            - name: CICD_UPLOAD_DIR
+              value: /var/lib/cicd-uploads
+            - name: CICD_UPLOAD_MAX_MB
+              value: "2048"
           volumeMounts:
             - name: portal-vars
               mountPath: /etc/cicd-console
@@ -158,6 +165,8 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: uploads
+              mountPath: /var/lib/cicd-uploads
           resources:
             requests:
               cpu: 100m
@@ -196,6 +205,9 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 2Gi
+        - name: uploads
+          emptyDir:
+            sizeLimit: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -215,6 +227,12 @@ kind: Ingress
 metadata:
   name: cicd-console
   namespace: {NAMESPACE}
+  annotations:
+    # 컨테이너 이미지 등록: large request bodies streamed to the console (ingress-nginx)
+    nginx.ingress.kubernetes.io/proxy-body-size: "2100m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
 spec:
   ingressClassName: {INGRESS_CLASS_NAME}
   tls:

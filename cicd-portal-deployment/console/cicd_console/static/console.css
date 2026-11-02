@@ -192,3 +192,6 @@ a.stat:hover { text-decoration: none; border-color: var(--accent); }
   .kv dd { margin-bottom: 8px; }
   .panel { padding: 14px; }
 }
+
+.upload-progress { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.upload-progress progress { flex: 1; height: 14px; }

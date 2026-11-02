@@ -340,6 +340,16 @@ class Harbor:
             "tag_selectors": [{"kind": "doublestar", "decoration": "matches", "pattern": pattern}]})
         log(f"[OK]   Harbor project {project}: tags {pattern} immutable")
 
+    def tag_digest(self, project, repo, tag):
+        """Digest of <project>/<repo>:<tag>, '' when the tag (or the repository) does not exist yet."""
+        try:
+            art = self.call("GET", f"/projects/{q(project)}/repositories/{q(q(repo))}/artifacts/{q(tag)}")
+        except HTTPError as e:
+            if e.code == 404:
+                return ""
+            raise
+        return (art or {}).get("digest", "")
+
     def project_id(self, project):
         for p in self.call("GET", f"/projects?name={q(project)}&page_size=100") or []:
             if p.get("name") == project:
@@ -799,6 +809,11 @@ def main():
     p = sub.add_parser("jenkins-deploy-job"); p.add_argument("folder"); p.add_argument("name")
     p.add_argument("--script-file", required=True); p.add_argument("--description", default="")
     p = sub.add_parser("harbor-immutable"); p.add_argument("project"); p.add_argument("--pattern", default="v*")
+    p = sub.add_parser("harbor-tag-digest"); p.add_argument("project"); p.add_argument("repo"); p.add_argument("tag")
+    p = sub.add_parser("harbor-authfile"); p.add_argument("project"); p.add_argument("name")
+    p.add_argument("--file", required=True)
+    p = sub.add_parser("jenkins-trigger"); p.add_argument("folder"); p.add_argument("name")
+    p.add_argument("params", nargs="*", help="KEY=VALUE")
     p = sub.add_parser("jenkins-ping")
     p = sub.add_parser("jenkins-build"); p.add_argument("folder"); p.add_argument("name")
     p = sub.add_parser("jenkins-disable"); p.add_argument("folder"); p.add_argument("name")
@@ -900,6 +915,23 @@ def main():
                 j.put_job(a.folder, a.name, j.deploy_job_xml(a.description, fh.read()))
         elif a.cmd == "harbor-immutable":
             Harbor().immutable(a.project, a.pattern)
+        elif a.cmd == "harbor-tag-digest":
+            print(Harbor().tag_digest(a.project, a.repo, a.tag))
+        elif a.cmd == "harbor-authfile":
+            # fresh robot secret straight into a container auth file (0600): never printed or passed as an argument
+            name, secret = Harbor().robot(a.project, a.name)
+            host = urllib.parse.urlparse(ENV["HARBOR_URL"]).netloc
+            auth = base64.b64encode(f"{name}:{secret}".encode()).decode()
+            fd = os.open(a.file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"auths": {host: {"auth": auth}}}, fh)
+            print(name)
+        elif a.cmd == "jenkins-trigger":
+            params = dict(p.split("=", 1) for p in a.params if "=" in p)
+            j = Jenkins()
+            request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/buildWithParameters", j.headers,
+                    form=params)
+            log(f"[OK]   Jenkins build queued: {a.folder}/{a.name}")
         elif a.cmd == "jenkins-build":
             j = Jenkins()
             request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/build", j.headers, form={})

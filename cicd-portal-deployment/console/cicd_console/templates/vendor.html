@@ -7,6 +7,7 @@
   <h1>{{ v.name }} {{ source_label(v.source) }}</h1>
   <div class="actions">
     {% for name, url in links.items() %}<a class="btn" href="{{ url }}" target="_blank" rel="noopener">{{ {'argocd': 'Argo CD', 'harbor': 'Harbor', 'jenkins': 'Jenkins', 'scm': 'SCM', 'gitlab': 'GitLab'}[name] }} ↗</a>{% endfor %}
+    {% if v.source == 'scm' %}<a class="btn" href="{{ url_for('main.image_upload_page', vendor=v.name) }}">컨테이너 이미지 등록</a>{% endif %}
     {% if is_admin %}<a class="btn primary" href="{{ url_for('main.app_new', vendor=v.name) }}">+ 앱 추가</a>{% endif %}
   </div>
 </div>
