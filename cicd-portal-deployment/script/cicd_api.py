@@ -327,6 +327,19 @@ class Harbor:
         self.call("PUT", f"/projects/{self.project_id(name)}", {"metadata": meta})
         log(f"[OK]   Harbor project {name}: scan on push" + (f", pulls blocked from severity {prevent}" if prevent else ""))
 
+    def immutable(self, project, pattern):
+        """Tag immutability rule: a pushed tag matching pattern (e.g. v*) cannot be overwritten."""
+        pid = self.project_id(project)
+        for r in self.call("GET", f"/projects/{pid}/immutabletagrules") or []:
+            if any(t.get("pattern") == pattern for t in r.get("tag_selectors") or []):
+                log(f"[INFO] Harbor project {project}: tags {pattern} already immutable")
+                return
+        self.call("POST", f"/projects/{pid}/immutabletagrules", {
+            "disabled": False, "action": "immutable", "template": "immutable_template",
+            "scope_selectors": {"repository": [{"kind": "doublestar", "decoration": "repoMatches", "pattern": "**"}]},
+            "tag_selectors": [{"kind": "doublestar", "decoration": "matches", "pattern": pattern}]})
+        log(f"[OK]   Harbor project {project}: tags {pattern} immutable")
+
     def project_id(self, project):
         for p in self.call("GET", f"/projects?name={q(project)}&page_size=100") or []:
             if p.get("name") == project:
@@ -682,6 +695,51 @@ class Jenkins:
   <disabled>false</disabled>
 </flow-definition>"""
 
+    @staticmethod
+    def deploy_job_xml(description, script):
+        """Image deploy job (application type image): the pipeline is stored in the job by the portal,
+        so vendors cannot change it; parameters are filled by the CI/CD console."""
+        params = "".join(f"""
+        <hudson.model.StringParameterDefinition>
+          <name>{n}</name>
+          <description>{xml_escape(d)}</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>""" for n, d in (
+            ("IMAGE_TAG", "Image tag in Harbor (prod: vX.Y.Z)"),
+            ("IMAGE_DIGEST", "sha256 digest of the tag (resolved by the CI/CD console)")))
+        return f"""<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition>
+  <description>{xml_escape(description)}</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <org.jenkinsci.plugins.workflow.job.properties.DisableConcurrentBuildsJobProperty/>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>50</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>{params}
+        <hudson.model.ChoiceParameterDefinition>
+          <name>TARGET</name>
+          <description>dev, or prod (promotion of an image already deployed to dev)</description>
+          <choices class="java.util.Arrays$ArrayList"><a class="string-array"><string>dev</string><string>prod</string></a></choices>
+        </hudson.model.ChoiceParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition">
+    <script>{xml_escape(script)}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>"""
+
     def put_job(self, folder, name, xml):
         path = f"/job/{q(folder)}/job/{q(name)}"
         if self.exists(path):
@@ -738,6 +796,9 @@ def main():
     p = sub.add_parser("jenkins-job"); p.add_argument("folder"); p.add_argument("name")
     p.add_argument("--repo-url", required=True); p.add_argument("--credentials", required=True)
     p.add_argument("--release", action="store_true"); p.add_argument("--description", default="")
+    p = sub.add_parser("jenkins-deploy-job"); p.add_argument("folder"); p.add_argument("name")
+    p.add_argument("--script-file", required=True); p.add_argument("--description", default="")
+    p = sub.add_parser("harbor-immutable"); p.add_argument("project"); p.add_argument("--pattern", default="v*")
     p = sub.add_parser("jenkins-ping")
     p = sub.add_parser("jenkins-build"); p.add_argument("folder"); p.add_argument("name")
     p = sub.add_parser("jenkins-disable"); p.add_argument("folder"); p.add_argument("name")
@@ -833,6 +894,12 @@ def main():
         elif a.cmd == "jenkins-job":
             j = Jenkins()
             j.put_job(a.folder, a.name, j.job_xml(a.description, a.repo_url, a.credentials, a.release))
+        elif a.cmd == "jenkins-deploy-job":
+            j = Jenkins()
+            with open(a.script_file, encoding="utf-8") as fh:
+                j.put_job(a.folder, a.name, j.deploy_job_xml(a.description, fh.read()))
+        elif a.cmd == "harbor-immutable":
+            Harbor().immutable(a.project, a.pattern)
         elif a.cmd == "jenkins-build":
             j = Jenkins()
             request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(a.name)}/build", j.headers, form={})

@@ -10,7 +10,7 @@
   <p class="hint"><code>add-app.sh</code>를 실행합니다. 소스 저장소(시작 소스), gitops 매니페스트, CI 작업, Argo CD 애플리케이션(dev 자동 / prod 수동)을 만듭니다.
     기존 파일은 덮어쓰지 않으며 다시 실행해도 안전합니다.</p>
   {% if v.source == 'scm' %}
-  <fieldset>
+  <fieldset data-hide-type="image">
     <legend>K-PaaS SCM 저장소</legend>
     <label class="check"><input type="checkbox" name="scm_create" {{ 'checked' if request.method == 'GET' or form.get('scm_create') }}> 저장소 자동 생성
       (<code>{{ v.name }}-&lt;앱&gt;</code>, 이미 있으면 참여자만 추가)</label>
@@ -26,17 +26,26 @@
   <label>언어 · 빌드 유형
     <select name="type" required>
       <option value="">선택</option>
-      {% for t in types %}<option value="{{ t }}" {{ 'selected' if form.get('type') == t }}>{{ t }}</option>{% endfor %}
-    </select></label>
-  <label>헬스 체크 경로 <input name="health" value="{{ form.get('health', '') }}" placeholder="/healthz (php: /healthz.php)"></label>
+      {% for t in types %}<option value="{{ t }}" {{ 'selected' if form.get('type') == t }}>{{ 'image — 업체가 만든 컨테이너 이미지 배포 (Harbor push)' if t == 'image' else t }}</option>{% endfor %}
+    </select>
+    <small data-show-type="image">소스 저장소·빌드 없이, 업체가 Harbor <code>{{ v.name }}/&lt;앱&gt;</code>에 올린 이미지를 콘솔의 <b>이미지 배포</b>로 dev에 배포하고
+      dev에서 확인한 <code>vX.Y.Z</code>만 prod로 승격합니다. 업체 push 계정은 업체 화면 → 업체 정보에서 발급합니다.</small></label>
+  <label>헬스 체크 <input name="health" value="{{ form.get('health', '') }}" placeholder="/healthz (php: /healthz.php) · tcp · none">
+    <small>HTTP 경로(200 응답), <code>tcp</code>(포트 열림만 확인), <code>none</code>(확인 안 함)</small></label>
+  <div class="row-fields">
+    <label>컨테이너 포트 <input name="port" value="{{ form.get('port', '') }}" placeholder="8080" inputmode="numeric"></label>
+    <label>메모리 상한 <input name="memory" value="{{ form.get('memory', '') }}" placeholder="512Mi"></label>
+  </div>
 
   <fieldset>
     <legend>선택 사항</legend>
+    <div data-hide-type="image">
     <label class="check"><input type="checkbox" name="skip_starter" {{ 'checked' if form.get('skip_starter') }}> 시작 소스를 넣지 않음 (기존 소스 사용, Dockerfile·CI 파일 필요)</label>
     <label class="check"><input type="checkbox" name="replace_ci" {{ 'checked' if form.get('replace_ci') }}> 기존 CI 파일(Jenkinsfile / .gitlab-ci.yml)을 포털 버전으로 교체</label>
     {% if v.source == 'scm' %}
     <label>기존 SCM 저장소 이름 <input name="scm_repo" value="{{ form.get('scm_repo', '') }}" placeholder="{{ v.name }}-&lt;앱&gt; (기본)"></label>
     {% endif %}
+    </div>
     <label>dev DB
       <select name="db">
         <option value="">연결 안 함 (나중에 DB 연결 화면에서)</option>

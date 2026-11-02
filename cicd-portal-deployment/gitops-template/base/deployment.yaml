@@ -19,25 +19,14 @@ spec:
         - name: harbor-cicd
       containers:
         - name: {APP}
-          image: app            # replaced by the overlay (images.newTag is set by CI)
+          image: app            # replaced by the overlay (images.newTag is set by CI or the image deploy job)
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {APP_PORT}
           resources:
             requests:
               cpu: 50m
               memory: 128Mi
             limits:
-              memory: 512Mi
-          readinessProbe:
-            httpGet:
-              path: {HEALTH_PATH}
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: {HEALTH_PATH}
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 20
+              memory: {APP_MEMORY_LIMIT}
+{PROBES}

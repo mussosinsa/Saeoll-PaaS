@@ -141,7 +141,8 @@ def env_summary(obj):
         "health": (st.get("health") or {}).get("status") or "Unknown",
         "health_message": (st.get("health") or {}).get("message") or "",
         "images": images,
-        "tag": app_image.rsplit(":", 1)[-1] if ":" in app_image.rsplit("/", 1)[-1] else "",
+        "tag": _image_tag(app_image),
+        "digest": app_image.split("@", 1)[1] if "@" in app_image else "",
         "urls": (st.get("summary") or {}).get("externalURLs") or [],
         "op_phase": op.get("phase") or "",
         "op_message": op.get("message") or "",
@@ -155,6 +156,13 @@ def env_summary(obj):
         "conditions": [c.get("message", "") for c in st.get("conditions") or []],
         "reconciled": parse_time(st.get("reconciledAt")),
     }
+
+
+def _image_tag(image):
+    """Tag of an image reference; image apps are pinned as <repo>:<tag>@sha256:..."""
+    base = image.split("@", 1)[0]
+    last = base.rsplit("/", 1)[-1]
+    return last.rsplit(":", 1)[-1] if ":" in last else ""
 
 
 def applications(vendor_name=None):
@@ -251,9 +259,12 @@ class Jenkins:
                     params[p.get("name")] = p.get("value")
                 for c in a.get("causes") or []:
                     cause = cause or c.get("shortDescription", "")
+            release = job.endswith("-release") or params.get("TARGET") == "prod"     # -deploy: image apps
             result.append({"id": str(b["number"]), "number": b["number"], "job": job,
-                           "pipeline": "release" if job.endswith("-release") else "dev",
-                           "status": _jenkins_status(b), "ref": params.get("RELEASE_TAG") or "develop",
+                           "pipeline": "release" if release else "dev",
+                           "status": _jenkins_status(b),
+                           "ref": params.get("RELEASE_TAG") or params.get("IMAGE_TAG") or "develop",
+                           "digest": params.get("IMAGE_DIGEST") or "",
                            "started": parse_time(b.get("timestamp")), "duration": (b.get("duration") or 0) / 1000,
                            "cause": cause,
                            "url": f"{self.public}{self.path(folder, job)}/{b['number']}/"})
@@ -358,6 +369,56 @@ class GitLab:
         return True
 
 
+class Harbor:
+    """Harbor of CP-Portal: images of image apps (<vendor>/<app>) and the vendors' push accounts."""
+
+    def __init__(self):
+        env = os.environ
+        cred = base64.b64encode(f"{env.get('REPOSITORY_USERNAME', '')}:{env.get('REPOSITORY_PASSWORD', '')}".encode()).decode()
+        self.headers = {"Authorization": "Basic " + cred}
+        self.base = env.get("HARBOR_URL", "").rstrip("/") + "/api/v2.0"
+
+    def artifacts(self, project, repo, limit=30):
+        """Pushed images, newest first: digest, tags, push time, Trivy scan summary of Harbor."""
+        try:
+            data, _ = http("GET", f"{self.base}/projects/{q(project)}/repositories/{q(repo)}/artifacts"
+                                  f"?page_size={limit}&with_tag=true&with_scan_overview=true&sort=-push_time", self.headers)
+        except BackendError as e:
+            if "HTTP 404" in str(e):
+                return []
+            raise
+        result = []
+        for a in data or []:
+            scan = next(iter((a.get("scan_overview") or {}).values()), {}) or {}
+            counts = ((scan.get("summary") or {}).get("summary") or {})
+            result.append({"digest": a.get("digest", ""), "tags": [t["name"] for t in a.get("tags") or []],
+                           "pushed": parse_time(a.get("push_time")), "size": a.get("size") or 0,
+                           "scan_status": scan.get("scan_status", ""), "severity": (scan.get("severity") or "").lower(),
+                           "critical": counts.get("Critical", 0), "high": counts.get("High", 0)})
+        return result
+
+    def digest(self, project, repo, tag):
+        data, _ = http("GET", f"{self.base}/projects/{q(project)}/repositories/{q(repo)}/artifacts/{q(tag)}",
+                       self.headers)
+        return data["digest"]
+
+
+def push_account(vendor_name):
+    """(Re)issue the vendor's Harbor push robot (robot$<vendor>+push, push/pull on its own project) and make
+    release tags v* immutable. Returns (name, secret); the old secret stops working."""
+    harbor = api().Harbor()
+    name, secret = harbor.robot(vendor_name, "push")
+    harbor.immutable(vendor_name, "v*")
+    return name, secret
+
+
+def deploy_image(vendor_info, app, tag, target):
+    """Run <app>-deploy for an image tag: the digest is resolved here so the job deploys exactly that image."""
+    digest = Harbor().digest(vendor_info["name"], app, tag)
+    Jenkins().trigger(vendor_info["name"], f"{app}-deploy", {"IMAGE_TAG": tag, "IMAGE_DIGEST": digest, "TARGET": target})
+    return digest
+
+
 def scm_tags(repo):
     """Tags of a K-PaaS SCM (SCM-Manager 1.x) repository - the release job builds refs/tags/<tag>."""
     password = os.environ.get("SCM_ADMIN_PASSWORD", "")
@@ -389,7 +450,8 @@ def builds(vendor_info, app, limit=15):
     require_source(vendor_info)
     if vendor_info["source"] == "scm":
         j = Jenkins()
-        found = j.builds(vendor_info["name"], f"{app}-dev", limit) + j.builds(vendor_info["name"], f"{app}-release", limit)
+        found = (j.builds(vendor_info["name"], f"{app}-dev", limit) + j.builds(vendor_info["name"], f"{app}-release", limit)
+                 + j.builds(vendor_info["name"], f"{app}-deploy", limit))     # image apps
     else:
         found = GitLab().builds(f"{vendor_info['name']}/{app}", limit)
     epoch = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)

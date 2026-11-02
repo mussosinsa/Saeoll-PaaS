@@ -19,7 +19,9 @@
     "node": {"description": "Node.js", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
              "semgrep_rules": ["common", "javascript"]},
     "vue": {"description": "Vue / Vite", "tools": ["semgrep", "gitleaks", "trivy-fs", "pii", "trivy-image"],
-            "semgrep_rules": ["common", "javascript"]}
+            "semgrep_rules": ["common", "javascript"]},
+    "image": {"description": "업체 제공 이미지 (소스 없음)", "tools": ["trivy-image"],
+              "semgrep_rules": []}
   },
   "apps": {},
   "exceptions": []

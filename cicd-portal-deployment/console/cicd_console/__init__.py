@@ -2,6 +2,7 @@
 import datetime
 import logging
 import os
+import re
 
 from flask import Flask, g, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
@@ -62,6 +63,8 @@ def create_app():
                 "csrf_token": session.get("csrf", ""), "sources": config.sources(),
                 "admin_group": auth.admin_group(), "host_domain": os.environ.get("HOST_DOMAIN", ""),
                 "status_label": lambda s: STATUS_LABELS.get(s, s or "-")}
+
+    app.jinja_env.tests["release_tag"] = lambda tag: bool(re.match(r"^v\d+\.\d+\.\d+$", str(tag)))
 
     @app.template_filter("dt")
     def fmt_dt(value):

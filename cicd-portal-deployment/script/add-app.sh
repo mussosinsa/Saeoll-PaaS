@@ -2,8 +2,12 @@
 # Add an application to an onboarded vendor.
 #
 # Usage: ./add-app.sh <vendor> <app> <type> [health-path]
-#   type        : java-gradle | java-maven | php | node | vue
-#   health-path : readiness/liveness path (default: /healthz.php for php, /healthz otherwise)
+#   type        : java-gradle | java-maven | php | node | vue   (built from source)
+#                 image  (the vendor pushes a ready image to Harbor <vendor>/<app>; scm vendors only:
+#                         no source repository, Jenkins job <app>-deploy run from the CI/CD console)
+#   health-path : readiness/liveness path (default: /healthz.php for php, /healthz otherwise);
+#                 tcp = check the port only, none = no probes
+#   APP_PORT (default 8080), APP_MEMORY_LIMIT (default 512Mi): container port and memory limit
 #
 # The vendor's source (scm|gitlab) comes from onboard-vendor.sh (Argo CD project label).
 # scm vendors (env SCM_ADMIN_PASSWORD), prepared in scm.<domain>:
@@ -34,16 +38,35 @@ APP=${2:-}
 TYPE=${3:-}
 NAME_RE='^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$'
 if [[ ! "$VENDOR" =~ $NAME_RE || ! "$APP" =~ $NAME_RE || ! -d "../starters/$TYPE" || "$APP" == gitops ]]; then
-  echo "Usage: $0 <vendor> <app> <java-gradle|java-maven|php|node|vue> [health-path]" >&2
+  echo "Usage: $0 <vendor> <app> <java-gradle|java-maven|php|node|vue|image> [health-path|tcp|none]" >&2
   exit 2
 fi
 HEALTH_PATH=${4:-$([[ "$TYPE" == php ]] && echo /healthz.php || echo /healthz)}
+APP_PORT=${APP_PORT:-8080}
+APP_MEMORY_LIMIT=${APP_MEMORY_LIMIT:-512Mi}
+[[ "$APP_PORT" =~ ^[0-9]{2,5}$ && "$APP_PORT" -ge 1 && "$APP_PORT" -le 65535 ]] || die "APP_PORT must be a port number (got '$APP_PORT')."
+[[ "$APP_MEMORY_LIMIT" =~ ^[0-9]+(Mi|Gi)$ ]] || die "APP_MEMORY_LIMIT must look like 512Mi or 1Gi (got '$APP_MEMORY_LIMIT')."
+[[ "$HEALTH_PATH" == tcp || "$HEALTH_PATH" == none || "$HEALTH_PATH" =~ ^/[A-Za-z0-9._/~-]*$ ]] || \
+  die "health check must be a path (/healthz), tcp or none (got '$HEALTH_PATH')."
+# readiness/liveness probes of the Deployment (gitops base): HTTP path, TCP port or none
+probe_block() {
+  local check
+  case "$HEALTH_PATH" in
+    none) return 0 ;;
+    tcp) check=$'            tcpSocket:\n              port: http' ;;
+    *) check=$'            httpGet:\n              path: '"$HEALTH_PATH"$'\n              port: http' ;;
+  esac
+  printf '          readinessProbe:\n%s\n            initialDelaySeconds: 5\n            periodSeconds: 10\n' "$check"
+  printf '          livenessProbe:\n%s\n            initialDelaySeconds: 30\n            periodSeconds: 20\n' "$check"
+}
+PROBES=$(probe_block)
 load_portal_vars
 require_cmds kubectl python3
 SOURCE=$(vendor_source "$VENDOR")
 [[ -n "$SOURCE" ]] || die "Vendor $VENDOR is not onboarded. Run ./onboard-vendor.sh --source <scm|gitlab> $VENDOR first."
 has_source "$SOURCE" || die "Vendor $VENDOR uses '$SOURCE', which is not in CICD_SOURCES ($CICD_SOURCES)."
 info "Vendor $VENDOR uses $SOURCE"
+[[ "$TYPE" != image || "$SOURCE" == scm ]] || die "Type image needs the Jenkins source (scm vendor); $VENDOR uses $SOURCE."
 CI_USER=$(vendor_ci_user "$VENDOR")
 NS_MODE=$(vendor_ns_mode "$VENDOR")
 DEV_NS=$(env_namespace "$VENDOR" dev "$NS_MODE")
@@ -72,11 +95,31 @@ SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE
        BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB"
        DEV_NAMESPACE="$DEV_NS" PROD_NAMESPACE="$PROD_NS"
        DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT"
-       SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE")
+       SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE"
+       APP_PORT="$APP_PORT" APP_MEMORY_LIMIT="$APP_MEMORY_LIMIT" PROBES="$PROBES")
 
 
 SCM_PENDING=""
-if [[ "$SOURCE" == scm ]]; then
+if [[ "$TYPE" == image ]]; then
+  # Image application: no source repository and no build. gitops manifests + the deploy job (pipeline kept
+  # in the Jenkins job by the portal, so vendors cannot skip its security gate).
+  gdir=$(scm_clone "$GITOPS_REPO")
+  mkdir -p "$gdir/apps/$APP"
+  render_tree ../gitops-template "$gdir/apps/$APP" "${SUBST[@]}" >/dev/null
+  if scm_commit_push "$gdir" main "Add $APP manifests (image app, cicd-portal)"; then
+    ok "SCM $GITOPS_REPO: apps/$APP manifests pushed (port $APP_PORT, health $HEALTH_PATH, memory $APP_MEMORY_LIMIT)"
+  else
+    info "SCM $GITOPS_REPO: apps/$APP already present (kept)"
+  fi
+  scm_cleanup "$gdir"
+  script_file=$(mktemp)
+  render_file ../starters/image/deploy.groovy "$script_file" "${SUBST[@]}"
+  $API jenkins-deploy-job "$VENDOR" "$APP-deploy" --script-file "$script_file" \
+    --description "$VENDOR/$APP image deploy: Harbor $IMAGE_REPO -> dev / prod (promotion). Run from the CI/CD console."
+  rm -f "$script_file"
+  # release tags cannot be overwritten in Harbor: a promoted vX.Y.Z always means the same image
+  $API harbor-immutable "$VENDOR" --pattern 'v*' || warn "Harbor tag immutability rule not set for $VENDOR"
+elif [[ "$SOURCE" == scm ]]; then
   # 1. SCM source repository --------------------------------------------------------------------
   # SCM_CREATE_REPO=1: create it (SCM-Manager + K-PaaS source control DB, so scm.<domain> lists it) with
   # 참여자 CI account (보기) and the members of cicd-<vendor> / SCM_WRITERS (쓰기); otherwise it must exist.
@@ -208,13 +251,17 @@ if [[ -n "${DB:-}" ]]; then
 fi
 
 # Pipeline jobs need one build before Poll SCM starts watching develop
-if [[ "$SOURCE" == scm ]]; then
+if [[ "$SOURCE" == scm && "$TYPE" != image ]]; then
   $API jenkins-build "$VENDOR" "$APP-dev"
 fi
 
 echo
 echo "Application $VENDOR/$APP ($TYPE) ready."
-if [[ "$SOURCE" == scm ]]; then
+if [[ "$TYPE" == image ]]; then
+  echo "  Image    : push to $IMAGE_REPO:<tag>   (Harbor push account: CI/CD console > $VENDOR > 업체 정보)"
+  echo "  Deploy   : CI/CD console > $VENDOR/$APP > 이미지 배포 (dev), prod 승격 (vX.Y.Z deployed to dev) -> prod Sync"
+  echo "  Jenkins  : https://$JENKINS_HOST/job/$VENDOR/job/$APP-deploy/"
+elif [[ "$SOURCE" == scm ]]; then
   echo "  Source   : https://scm.$HOST_DOMAIN  repository $SOURCE_REPO  (clone: $SCM_GIT_URL/$SOURCE_REPO)"
   echo "  Jenkins  : https://$JENKINS_HOST/job/$VENDOR/  ($APP-dev: develop, $APP-release: RELEASE_TAG=vX.Y.Z)"
 else
@@ -224,7 +271,11 @@ fi
 echo "  Dev URL  : https://$APP-$VENDOR-dev.$HOST_DOMAIN"
 echo "  Prod URL : https://$APP-$VENDOR.$HOST_DOMAIN   (after Argo CD sync of $VENDOR-$APP-prod)"
 echo "  Argo CD  : https://$ARGOCD_HOST/applications?labels=cicd.k-paas.org%2Fvendor%3D$VENDOR"
-echo "The dev application stays Degraded until the first develop build pushes an image."
+if [[ "$TYPE" == image ]]; then
+  echo "The dev application stays Degraded until the first image is deployed (container port $APP_PORT)."
+else
+  echo "The dev application stays Degraded until the first develop build pushes an image."
+fi
 if [[ -n "$SCM_PENDING" ]]; then
   echo
   echo "[TODO] Not yet signed in to https://scm.$HOST_DOMAIN: $SCM_PENDING"

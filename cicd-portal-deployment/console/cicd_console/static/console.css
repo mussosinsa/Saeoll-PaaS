@@ -168,6 +168,8 @@ a.stat:hover { text-decoration: none; border-color: var(--accent); }
 
 /* dialog */
 .dialog { border: 1px solid var(--line); border-radius: 6px; padding: 0; width: min(520px, calc(100vw - 32px)); }
+.dialog.wide { width: min(760px, calc(100vw - 32px)); }
+.image-choices { max-height: 50vh; overflow: auto; }
 .dialog::backdrop { background: rgba(20, 22, 26, .45); }
 .dialog form { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
 .dialog h3 { margin: 0; font-size: 16px; }

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Harbor push 계정{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ v.name }} Harbor push 계정</h1></div>
+<section class="panel creds">
+  <div class="alert warn"><b>비밀번호는 지금 한 번만 표시됩니다.</b> 화면을 벗어나면 다시 볼 수 없고, 이전 비밀번호는 더 이상 쓸 수 없습니다.
+    업체 담당자에게만 안전하게 전달하세요.</div>
+  <dl class="kv">
+    <dt>계정</dt><dd><code class="secret">{{ name }}</code> <button type="button" class="btn small" data-copy="{{ name }}">복사</button></dd>
+    <dt>비밀번호</dt><dd><code class="secret">{{ secret }}</code> <button type="button" class="btn small" data-copy="{{ secret }}">복사</button></dd>
+    <dt>권한</dt><dd>Harbor 프로젝트 <code>{{ v.name }}</code>에 push · pull (다른 프로젝트 불가). <code>v*</code> 태그는 덮어쓸 수 없음</dd>
+  </dl>
+  <h3>업체 사용 방법</h3>
+<pre class="log">podman login {{ harbor_host }} -u '{{ name }}'        # 또는 docker login (비밀번호 입력)
+podman tag  my-app:1.2.0  {{ harbor_host }}/{{ v.name }}/&lt;앱&gt;:v1.2.0
+podman push {{ harbor_host }}/{{ v.name }}/&lt;앱&gt;:v1.2.0</pre>
+  <p class="hint">계정 이름의 <code>$</code> 때문에 셸에서는 작은따옴표로 감쌉니다. 이미지는 <code>linux/amd64</code>로 빌드해야 합니다.</p>
+</section>
+<p><a class="btn" href="{{ url_for('main.vendor_page', vendor=v.name) }}#info">업체 화면으로</a></p>
+{% endblock %}

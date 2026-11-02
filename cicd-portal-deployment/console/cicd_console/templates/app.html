@@ -16,8 +16,25 @@
 </div>
 
 <section class="panel">
+  {% if a.type == 'image' %}
+  <div class="panel-head"><h2>파이프라인</h2><span class="dim">Harbor 이미지 → 이미지 배포(dev) → prod 승격(vX.Y.Z, dev에 배포된 이미지만) → 운영 관리자 Sync</span></div>
+  {% else %}
   <div class="panel-head"><h2>파이프라인</h2><span class="dim">develop → dev 자동 배포 · 릴리스 태그 vX.Y.Z → prod (운영 관리자 Sync)</span></div>
+  {% endif %}
   <ol class="flow">
+    {% if a.type == 'image' %}
+    <li class="stage">
+      <span class="k">1. 이미지 (Harbor)</span>
+      {% if images %}<b><code>{{ images[0].tags|join(', ') or images[0].digest[:19] }}</code></b><small class="dim">최근 push · {{ images[0].pushed|ago }}</small>
+      {% else %}<span class="dim">push된 이미지 없음</span>{% endif %}
+      <small class="dim">{{ links.harbor and 'harbor' }} {{ v.name }}/{{ a.app }}</small>
+    </li>
+    <li class="stage">
+      <span class="k">2. 이미지 배포 (dev)</span>
+      {% if last_dev %}{{ badge(last_dev.status) }}<small class="dim">#{{ last_dev.number }} <code>{{ last_dev.ref }}</code> · {{ last_dev.started|ago }}</small>{% else %}<span class="dim">배포 없음</span>{% endif %}
+      <button class="btn small primary" data-open="image-deploy-dialog" {{ 'disabled' if not images }}>이미지 배포</button>
+    </li>
+    {% else %}
     <li class="stage">
       <span class="k">1. 소스</span>
       <b>develop</b>
@@ -28,6 +45,7 @@
       {% if last_dev %}{{ badge(last_dev.status) }}<small class="dim">#{{ last_dev.number }} · {{ last_dev.started|ago }}</small>{% else %}<span class="dim">빌드 없음</span>{% endif %}
       <form method="post" action="{{ url_for('main.app_build', vendor=v.name, app=a.app) }}" data-confirm="develop 브랜치를 빌드해 dev에 배포할까요?">{{ csrf() }}<button class="btn small primary">빌드 실행</button></form>
     </li>
+    {% endif %}
     <li class="stage">
       <span class="k">보안 검사</span>
       {% if not security_installed %}<span class="dim">미설치</span>
@@ -43,9 +61,10 @@
       {% else %}<span class="dim">없음</span>{% endif %}
     </li>
     <li class="stage">
-      <span class="k">4. 릴리스</span>
+      <span class="k">4. {{ 'prod 승격' if a.type == 'image' else '릴리스' }}</span>
       {% if last_rel %}<span class="row">{{ badge(last_rel.status) }}{% if security %}{{ gate_badge(security.release[1], '보안 ') }}{% endif %}</span><small class="dim"><code>{{ last_rel.ref }}</code> · {{ last_rel.started|ago }}</small>{% else %}<span class="dim">릴리스 없음</span>{% endif %}
-      {% if can_release %}<button class="btn small" data-open="release-dialog">릴리스</button>{% endif %}
+      {% if a.type == 'image' %}<button class="btn small" data-open="image-promote-dialog" {{ 'disabled' if not images }}>prod 승격</button>
+      {% elif can_release %}<button class="btn small" data-open="release-dialog">릴리스</button>{% endif %}
     </li>
     <li class="stage">
       <span class="k">5. prod 배포</span>
@@ -73,7 +92,31 @@
 </dialog>
 {% endif %}
 
-{% if can_release %}
+{% if a.type == 'image' %}
+{% set dev_digest = dev.digest if dev else '' %}
+<dialog id="image-deploy-dialog" class="dialog wide">
+  <form method="post" action="{{ url_for('main.app_image_deploy', vendor=v.name, app=a.app) }}">
+    {{ csrf() }}<input type="hidden" name="target" value="dev">
+    <h3>이미지 배포 (dev)</h3>
+    <p class="hint">Harbor <code>{{ v.name }}/{{ a.app }}</code>에 올라온 이미지를 고릅니다. 이미지 보안 검사(게이트)를 거쳐 dev에 자동 반영됩니다.</p>
+    {% include "_image_choices.html" %}
+    <div class="dialog-actions"><button type="button" class="btn" data-close>취소</button><button class="btn primary">dev 배포</button></div>
+  </form>
+</dialog>
+<dialog id="image-promote-dialog" class="dialog wide">
+  <form method="post" action="{{ url_for('main.app_image_deploy', vendor=v.name, app=a.app) }}">
+    {{ csrf() }}<input type="hidden" name="target" value="prod">
+    <h3>prod 승격</h3>
+    <p class="hint"><code>vX.Y.Z</code> 태그 중 <b>dev에 배포됐던 이미지</b>만 승격됩니다(같은 digest인지 배포 Job이 확인). 승격하면 prod 설정이 바뀌고,
+      <b>운영 관리자가 prod Sync</b>해야 운영에 반영됩니다.</p>
+    {% set release_only = true %}
+    {% include "_image_choices.html" %}
+    <div class="dialog-actions"><button type="button" class="btn" data-close>취소</button><button class="btn primary">prod 승격</button></div>
+  </form>
+</dialog>
+{% endif %}
+
+{% if can_release and a.type != 'image' %}
 <dialog id="release-dialog" class="dialog">
   <form method="post" action="{{ url_for('main.app_release', vendor=v.name, app=a.app) }}">
     {{ csrf() }}

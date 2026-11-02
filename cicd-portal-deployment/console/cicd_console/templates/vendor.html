@@ -99,6 +99,13 @@
   </div>
   {% endif %}{% endfor %}
   {% if is_admin %}
+  <div class="panel">
+    <div class="panel-head"><h2>Harbor 이미지 push 계정</h2><span class="dim">이미지 배포 앱(유형 image)용</span></div>
+    <p>업체가 만든 컨테이너 이미지를 Harbor <code>{{ v.name }}/&lt;앱&gt;</code>에 올릴 때 쓰는 계정 <code>robot${{ v.name }}+push</code>입니다
+      (자기 프로젝트 push·pull만 가능). 발급하면 비밀번호가 한 번만 표시되며, 다시 발급하면 이전 비밀번호는 쓸 수 없습니다.</p>
+    <form method="post" action="{{ url_for('main.vendor_push_account', vendor=v.name) }}" data-confirm="push 계정을 발급(재발급)할까요? 이전 비밀번호는 더 이상 쓸 수 없습니다.">
+      {{ csrf() }}<button class="btn primary">push 계정 발급 · 재발급</button></form>
+  </div>
   <p class="hint">업체 설정 재실행(구성원 일괄 추가, SCM CI 비밀번호 등록 등): <a href="{{ url_for('main.vendor_new', vendor=v.name, source=v.source, ns_mode=v.ns_mode) }}">업체 등록 화면</a>에서 같은 업체 ID로 다시 실행합니다.</p>
   {% endif %}
 </section>

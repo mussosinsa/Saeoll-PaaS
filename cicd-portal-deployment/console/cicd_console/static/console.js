@@ -83,6 +83,21 @@
     update();
   }
   toggle('source', 'data-for-source');
+
+  // 앱 추가: fields that depend on the application type (image apps have no source repository)
+  var typeSelect = document.querySelector('select[name=type]');
+  if (typeSelect) {
+    var byType = function () {
+      document.querySelectorAll('[data-hide-type]').forEach(function (el) {
+        el.hidden = typeSelect.value === el.getAttribute('data-hide-type');
+      });
+      document.querySelectorAll('[data-show-type]').forEach(function (el) {
+        el.hidden = typeSelect.value !== el.getAttribute('data-show-type');
+      });
+    };
+    typeSelect.addEventListener('change', byType);
+    byType();
+  }
   toggle('mode', 'data-for-mode');
 
   // Auto reload while builds or syncs are running (not while a dialog is open)

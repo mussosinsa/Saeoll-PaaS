@@ -1,0 +1,21 @@
+{% if images_err %}<p class="hint warn">Harbor 조회 실패: {{ images_err }}</p>{% endif %}
+<div class="table-wrap image-choices">
+<table class="grid compact">
+  <thead><tr><th></th><th>태그</th><th>digest</th><th>push</th><th>Harbor 스캔</th></tr></thead>
+  <tbody>
+  {% set ns = namespace(any=false) %}
+  {% for img in images %}{% for t in img.tags %}
+    {% if not release_only or t is release_tag %}{% set ns.any = true %}
+    <tr>
+      <td><input type="radio" name="tag" value="{{ t }}" required></td>
+      <td><b><code>{{ t }}</code></b>{% if dev_digest and dev_digest == img.digest %} <span class="badge s-pass">dev 배포 중</span>{% endif %}</td>
+      <td><code class="dim">{{ img.digest[7:19] }}</code></td>
+      <td>{{ img.pushed|ago }}</td>
+      <td>{% if img.scan_status == 'Success' %}{{ badge(img.severity or 'none') }} <small class="dim">C{{ img.critical }} H{{ img.high }}</small>{% else %}<span class="dim">{{ img.scan_status or '-' }}</span>{% endif %}</td>
+    </tr>
+    {% endif %}
+  {% endfor %}{% endfor %}
+  {% if not ns.any %}<tr><td colspan="5" class="dim">{{ 'vX.Y.Z 태그가 없습니다.' if release_only else 'push된 이미지가 없습니다.' }}</td></tr>{% endif %}
+  </tbody>
+</table>
+</div>

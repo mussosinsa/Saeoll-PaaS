@@ -16,7 +16,13 @@ auth_bp = Blueprint("auth", __name__)
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 USERS_RE = re.compile(r"^[A-Za-z0-9._@-]+(,[A-Za-z0-9._@-]+)*$")
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
-TYPES = ["java-gradle", "java-maven", "php", "node", "vue"]
+TYPES = ["java-gradle", "java-maven", "php", "node", "vue", "image"]
+IMAGE_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+
+
+def _jobs(app):
+    """Jenkins jobs of an application: -dev/-release (built from source) or -deploy (image apps)."""
+    return (f"{app}-dev", f"{app}-release", f"{app}-deploy")
 
 
 # ---------------------------------------------------------------------- auth ---
@@ -172,6 +178,9 @@ def app_page(vendor, app):
         tags, tags_err = _try(services.release_tags, v, app)
     running = any(e["running"] for e in a["envs"].values()) or \
         any(b["status"] in ("running", "pending") for b in build_list or [])
+    images, images_err = (None, None)
+    if a["type"] == "image":
+        images, images_err = _try(services.Harbor().artifacts, vendor, app)
     security, prod_gate = None, {"checked": False, "ok": True}
     if build_list is not None and quality.installed():
         security, sec_err = _try(quality.latest, v, app, build_list)
@@ -183,14 +192,16 @@ def app_page(vendor, app):
     return render_template("app.html", v=v, a=a, builds=build_list or [], builds_err=builds_err,
                            tags=tags or [], tags_err=tags_err, running=running,
                            can_release=can_release(v), links=services.links(v, app),
-                           security=security, prod_gate=prod_gate,
+                           security=security, prod_gate=prod_gate, images=images or [], images_err=images_err,
                            security_installed=quality.installed())
 
 
 @bp.route("/vendors/<vendor>/apps/<app>/build", methods=["POST"])
 def app_build(vendor, app):
     v = _vendor_or_404(vendor)
-    _app_or_404(v, app)
+    if _app_or_404(v, app)["type"] == "image":
+        flash("이미지 배포 앱은 빌드하지 않습니다. '이미지 배포'에서 Harbor 태그를 고르세요.", "warn")
+        return redirect(url_for("main.app_page", vendor=vendor, app=app))
     stop = _unknown_source(v, app)
     if stop:
         return stop
@@ -201,6 +212,47 @@ def app_build(vendor, app):
     _audit("build-dev", f"{vendor}/{app}")
     flash(err or "develop 빌드를 시작했습니다. 완료되면 dev 환경에 자동 배포됩니다.", "error" if err else "ok")
     return redirect(url_for("main.app_page", vendor=vendor, app=app))
+
+
+@bp.route("/vendors/<vendor>/apps/<app>/image-deploy", methods=["POST"])
+def app_image_deploy(vendor, app):
+    """Image apps: deploy a Harbor tag to dev, or promote a vX.Y.Z already deployed to dev to prod
+    (the job checks the digest; prod then needs the operator's prod Sync like every application)."""
+    v = _vendor_or_404(vendor)
+    a = _app_or_404(v, app)
+    if a["type"] != "image":
+        abort(400)
+    tag, target = request.form.get("tag", "").strip(), request.form.get("target", "dev")
+    if target not in ("dev", "prod") or not IMAGE_TAG_RE.match(tag):
+        flash("이미지 태그를 확인하세요.", "error")
+    elif target == "prod" and not TAG_RE.match(tag):
+        flash("prod 승격은 vX.Y.Z 태그만 할 수 있습니다.", "error")
+    else:
+        digest, err = _try(services.deploy_image, v, app, tag, target)
+        _audit(f"image-{target}", f"{vendor}/{app}:{tag}")
+        if err:
+            flash(f"배포 실행 실패: {err}", "error")
+        elif target == "dev":
+            flash(f"{tag} ({digest[:19]}) dev 배포를 시작했습니다. 보안 검사 후 dev에 자동 반영됩니다.", "ok")
+        else:
+            flash(f"{tag} prod 승격을 시작했습니다. dev에 배포됐던 이미지인지 확인한 뒤 prod 설정을 바꾸며, "
+                  "운영 관리자가 prod Sync하면 운영에 반영됩니다.", "ok")
+    return redirect(url_for("main.app_page", vendor=vendor, app=app))
+
+
+@bp.route("/vendors/<vendor>/push-account", methods=["POST"])
+@auth.admin_required
+def vendor_push_account(vendor):
+    v = _vendor_or_404(vendor)
+    account, err = _try(services.push_account, v["name"])
+    _audit("harbor-push-account", vendor)
+    if err:
+        flash(f"Harbor push 계정 발급 실패: {err}", "error")
+        return redirect(url_for("main.vendor_page", vendor=vendor) + "#info")
+    resp = make_response(render_template("push_account.html", v=v, name=account[0], secret=account[1],
+                                         harbor_host=os.environ.get("HARBOR_HOST", "")))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @bp.route("/vendors/<vendor>/apps/<app>/release", methods=["POST"])
@@ -240,7 +292,7 @@ def app_stop(vendor, app):
     if not build_id.isdigit():
         abort(400)
     if v["source"] == "scm":
-        if job not in (f"{app}-dev", f"{app}-release"):
+        if job not in _jobs(app):
             abort(400)
         _, err = _try(lambda: services.Jenkins().stop(vendor, job, build_id))
     else:
@@ -304,7 +356,7 @@ def build_page(vendor, app, job, build_id):
         abort(404)
     gl_jobs, err = [], None
     if v["source"] == "scm":
-        if job not in (f"{app}-dev", f"{app}-release"):
+        if job not in _jobs(app):
             abort(404)
         url = f"https://{os.environ.get('JENKINS_HOST')}/job/{vendor}/job/{job}/{build_id}/"
     else:
@@ -321,7 +373,7 @@ def build_security(vendor, app, job, build_id):
     stop = _unknown_source(v, app)
     if stop:
         return stop
-    if not build_id.isdigit() or (v["source"] == "scm" and job not in (f"{app}-dev", f"{app}-release")):
+    if not build_id.isdigit() or (v["source"] == "scm" and job not in _jobs(app)):
         abort(404)
     from .quality_views import build_report  # noqa: PLC0415
     summary, gate = build_report(v, app, job, build_id)
@@ -336,7 +388,7 @@ def build_log(vendor, app, job, build_id):
     try:
         services.require_source(v)
         if v["source"] == "scm":
-            if job not in (f"{app}-dev", f"{app}-release"):
+            if job not in _jobs(app):
                 abort(404)
             text, nxt, more = services.Jenkins().log(vendor, job, build_id, request.args.get("start", 0, type=int))
             return jsonify(text=text, next=nxt, more=more, append=True)
@@ -476,16 +528,27 @@ def app_new(vendor):
             errors.append("앱 ID는 영문 소문자·숫자·'-' (2~30자)이며 gitops는 쓸 수 없습니다.")
         if app_type not in TYPES:
             errors.append("언어/빌드 유형을 선택하세요.")
-        if health and not re.match(r"^/[A-Za-z0-9._/-]*$", health):
-            errors.append("헬스 체크 경로는 /로 시작해야 합니다.")
+        if health and health not in ("tcp", "none") and not re.match(r"^/[A-Za-z0-9._/~-]*$", health):
+            errors.append("헬스 체크는 /로 시작하는 경로, tcp 또는 none입니다.")
         env = {}
+        port, memory = form.get("port", "").strip(), form.get("memory", "").strip()
+        if port:
+            if not port.isdigit() or not 1 <= int(port) <= 65535:
+                errors.append("컨테이너 포트는 1~65535 숫자입니다.")
+            env["APP_PORT"] = port
+        if memory:
+            if not re.match(r"^[0-9]+(Mi|Gi)$", memory):
+                errors.append("메모리 상한은 512Mi, 1Gi 형식입니다.")
+            env["APP_MEMORY_LIMIT"] = memory
+        if app_type == "image" and v["source"] != "scm":
+            errors.append("이미지 배포 앱은 K-PaaS SCM + Jenkins 업체에서만 쓸 수 있습니다.")
         if form.get("skip_starter"):
             env["SKIP_STARTER"] = "1"
         if form.get("replace_ci"):
             env["REPLACE_CI"] = "1"
         if form.get("db") in ("dedicated", "shared"):
             env["DB"] = form["db"]
-        if v["source"] == "scm" and form.get("scm_create"):
+        if v["source"] == "scm" and form.get("scm_create") and app_type != "image":
             env["SCM_CREATE_REPO"] = "1"
             writers = form.get("scm_writers", "").replace(" ", "")
             if writers and not USERS_RE.match(writers):
