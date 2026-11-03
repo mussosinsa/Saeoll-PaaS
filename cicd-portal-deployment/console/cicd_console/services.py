@@ -563,6 +563,7 @@ def create_user(username, name, email):
     password = temp_password()
     kc.call("POST", "/users", {"username": username, "email": email, "emailVerified": True, "enabled": True,
                                "firstName": first, "lastName": last, "requiredActions": ["UPDATE_PASSWORD"],
+                               "attributes": {"cicd-portal-created": ["true"]},
                                "credentials": [{"type": "password", "value": password, "temporary": True}]})
     return password
 

@@ -371,6 +371,12 @@ step_console() {
     INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME" JENKINS_API_URL="$CONSOLE_JENKINS_API_URL" \
     GITLAB_API_URL="$CONSOLE_GITLAB_API_URL" SCM_API_URL="$CONSOLE_SCM_API_URL"
   kubectl apply -f "$VALUES_DIR/console.yaml"
+  # SCM-Manager restart for repository deletions that hit files in use (앱/업체 삭제, "SCM-Manager 재시작 허용")
+  if kubectl get namespace "${SCM_NAMESPACE:-cp-source-control}" >/dev/null 2>&1; then
+    render_file ../manifests/console-scm.yaml "$VALUES_DIR/console-scm.yaml" \
+      SCM_NAMESPACE="${SCM_NAMESPACE:-cp-source-control}" CONSOLE_NAMESPACE="$CONSOLE_NAMESPACE"
+    kubectl apply -f "$VALUES_DIR/console-scm.yaml" >/dev/null
+  fi
   # secrets, config map and image tag may have changed: start a new pod
   kubectl -n "$CONSOLE_NAMESPACE" rollout restart deployment/cicd-console >/dev/null
   kubectl -n "$CONSOLE_NAMESPACE" rollout status deployment/cicd-console --timeout=300s || \

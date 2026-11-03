@@ -1,0 +1,36 @@
+# 앱 삭제 / 업체 삭제 with "SCM-Manager 재시작 허용": SCM-Manager 1.x cannot delete a repository whose pack files it
+# still has open (NFS); the console restarts it once (kubectl rollout restart). Applied by
+# deploy-cicd-portal.sh console only when the K-PaaS source control namespace exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cicd-console-scm-restart
+  namespace: {SCM_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: cicd-portal
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, patch]
+  - apiGroups: [apps]
+    resources: [replicasets, controllerrevisions]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cicd-console-scm-restart
+  namespace: {SCM_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: cicd-portal
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cicd-console-scm-restart
+subjects:
+  - kind: ServiceAccount
+    name: cicd-console
+    namespace: {CONSOLE_NAMESPACE}

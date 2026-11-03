@@ -142,6 +142,7 @@ class Keycloak:
             return False
         self.call("POST", "/users", {"username": username, "email": email, "emailVerified": True, "enabled": True,
                                      "firstName": username, "lastName": "CI",
+                                     "attributes": {"cicd-portal-created": ["true"]},
                                      "credentials": [{"type": "password", "value": password, "temporary": False}]})
         log(f"[OK]   Keycloak user created: {username}")
         return True
@@ -616,43 +617,162 @@ class ScmDB:
         return True, pending
 
 
-def scm_delete_repo(repo):
-    """Delete a repository from SCM-Manager and from the K-PaaS source control DB (scm.<domain> list)."""
+def _scm_restart():
+    """Restart SCM-Manager (cp-source-control-manager) so it lets go of open git pack files, then wait for its API."""
+    ns = ENV.get("SCM_NAMESPACE", "cp-source-control")
+    out = subprocess.run(["kubectl", "-n", ns, "get", "deployments,statefulsets", "-o", "name"],
+                         capture_output=True, text=True, timeout=60)
+    names = [n for n in out.stdout.split() if "manager" in n.split("/", 1)[-1]]
+    if len(names) != 1:
+        log(f"[WARN] SCM-Manager workload not found in namespace {ns} ({out.stderr.strip()[:200] or names})")
+        return False
+    log(f"[INFO] Restarting SCM-Manager ({ns}/{names[0]}): git access pauses for about a minute")
+    for cmd in (["rollout", "restart", names[0]], ["rollout", "status", names[0], "--timeout=300s"]):
+        r = subprocess.run(["kubectl", "-n", ns, *cmd], capture_output=True, text=True, timeout=330)
+        if r.returncode != 0:
+            log(f"[WARN] kubectl {' '.join(cmd)}: {r.stderr.strip()[:300]}")
+            return False
     scm = SCM()
-    found = [r for r in scm.repositories() if r.get("name") == repo]
-    for r in found:
-        # SCM-Manager 1.x deletes the git directory itself. On NFS a pack file still open in its JGit cache
-        # leaves a .nfs* file behind ("could not delete file .../objects/pack", HTTP 500): retry once the
-        # cache has let go of it, then report it (exit 3) instead of failing the whole deletion.
-        for attempt in range(1, 5):
+    for _ in range(24):
+        try:
+            scm.repositories()
+            log("[OK]   SCM-Manager restarted")
+            return True
+        except (HTTPError, urllib.error.URLError, OSError):
+            time.sleep(5)
+    log("[WARN] SCM-Manager API did not answer after the restart")
+    return False
+
+
+def scm_delete_repos(repos, restart=False):
+    """Delete repositories from SCM-Manager and from the K-PaaS source control DB (scm.<domain> list).
+    SCM-Manager 1.x deletes the git directory itself; on NFS a pack file it still has open (JGit cache) leaves a
+    .nfs* file behind: HTTP 500 "could not delete file .../objects/pack". It is retried; with restart=True
+    SCM-Manager is restarted once (releases the files) and the rest is retried. Returns the repos not deleted."""
+    scm = SCM()
+    failed = []
+    restarted = False
+    for repo in repos:
+        done = False
+        for attempt in range(1, 4):
+            found = [r for r in scm.repositories() if r.get("name") == repo]
+            if not found:
+                done = True
+                if attempt == 1:
+                    log(f"[INFO] SCM repository not found: {repo}")
+                break
             try:
-                request("DELETE", f"{scm.base}/repositories/{q(r['id'])}", scm.headers)
+                request("DELETE", f"{scm.base}/repositories/{q(found[0]['id'])}", scm.headers)
+                log(f"[OK]   SCM repository deleted: {repo}")
+                done = True
                 break
             except HTTPError as e:
                 if e.code != 500:
                     raise
-                if not any(x.get("id") == r["id"] for x in scm.repositories()):
-                    break                     # deleted after all
-                if attempt == 4:
-                    log(f"[WARN] SCM-Manager could not delete repository {repo}: {str(e)[:200]}")
-                    log(f"[TODO] Delete {repo} by hand: in the SCM-Manager pod remove the directory\n"
-                        f"       repositories/git/{repo} (kubectl -n cp-source-control get pods | grep manager;\n"
-                        f"       kubectl -n cp-source-control exec <pod> -- rm -rf /root/.scm/repositories/git/{repo}),\n"
-                        f"       then run this again (or delete {repo} in the SCM-Manager admin UI).")
-                    sys.exit(3)
-                log(f"[INFO] SCM-Manager could not delete {repo} yet (files in use) - retry {attempt}/3 in 20s")
-                time.sleep(20)
-        log(f"[OK]   SCM repository deleted: {repo}")
-    if not found:
-        log(f"[INFO] SCM repository not found: {repo}")
-    if not ENV.get("DATABASE_USER_PASSWORD"):
-        log("[WARN] DATABASE_USER_PASSWORD not set: cp_scm rows not removed (scm.<domain> may still list " + repo + ")")
-        return
-    db = ScmDB()
-    for (repo_no,) in [row[:1] for row in db.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={db.lit(repo)}")]:
-        db.sql(f"DELETE FROM REPO_PERMITION WHERE REPO_NO={int(repo_no)}")
-        db.sql(f"DELETE FROM SC_REPOSITORY WHERE REPO_NO={int(repo_no)}")
-        log(f"[OK]   {repo} removed from the scm.<domain> list")
+                if attempt < 3:
+                    log(f"[INFO] SCM-Manager could not delete {repo} yet (files in use) - retry in 20s")
+                    time.sleep(20)
+                elif restart and not restarted:
+                    restarted = True
+                    if _scm_restart():
+                        try:
+                            request("DELETE", f"{scm.base}/repositories/{q(found[0]['id'])}", scm.headers)
+                            log(f"[OK]   SCM repository deleted: {repo}")
+                            done = True
+                        except HTTPError as e2:
+                            log(f"[WARN] {repo}: {str(e2)[:200]}")
+                else:
+                    log(f"[WARN] SCM-Manager could not delete {repo}: {str(e)[:200]}")
+        if not done:
+            failed.append(repo)
+            continue
+        if not ENV.get("DATABASE_USER_PASSWORD"):
+            log(f"[WARN] DATABASE_USER_PASSWORD not set: {repo} may still be listed in scm.<domain>")
+            continue
+        db = ScmDB()
+        for row in db.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={db.lit(repo)}"):
+            db.sql(f"DELETE FROM REPO_PERMITION WHERE REPO_NO={int(row[0])}")
+            db.sql(f"DELETE FROM SC_REPOSITORY WHERE REPO_NO={int(row[0])}")
+            log(f"[OK]   {repo} removed from the scm.<domain> list")
+    for repo in failed:
+        log(f"[TODO] SCM repository {repo} was not deleted (files in use on NFS). Either run the deletion again with\n"
+            f"       'SCM-Manager 재시작 허용' (SCM_RESTART=1), or restart SCM-Manager yourself\n"
+            f"       (kubectl -n {ENV.get('SCM_NAMESPACE', 'cp-source-control')} rollout restart deploy/<manager>) and delete {repo}\n"
+            f"       in the SCM-Manager admin UI (scm-manager.<domain>, Repositories > Remove).")
+    return failed
+
+
+def scm_vendor_repos(vendor, protect):
+    """SCM repositories of a vendor: <vendor>-gitops and <vendor>-<app> (SCM-Manager and the scm.<domain> DB),
+    without the repositories of other vendors whose names start the same way (protect)."""
+    names = {r.get("name", "") for r in SCM().repositories()}
+    if ENV.get("DATABASE_USER_PASSWORD"):
+        names |= {row[0] for row in ScmDB().sql("SELECT REPO_NAME FROM SC_REPOSITORY")}
+    others = [p for p in protect if p.endswith("-")]     # other vendors named <vendor>-...: all their repositories
+    return sorted(n for n in names if n.startswith(f"{vendor}-") and n not in protect
+                  and not any(n.startswith(p) for p in others))
+
+
+def vendor_accounts(vendor, ci_user, extra, apply):
+    """Accounts of a vendor to delete with it (Keycloak cp-realm, SCM-Manager, scm.<domain> DB): the portal CI
+    account jenkins-<vendor>, the members of cicd-<vendor> and the extra users - except operators, protected
+    accounts and users that belong to another group (another vendor, a K-PaaS group). Prints the decisions."""
+    kc = Keycloak()
+    group = f"cicd-{vendor}"
+    admin_group = ENV.get("KEYCLOAK_ADMIN_GROUP", "cicd-admins")
+    protected = {"admin", "scmadmin", ENV.get("KEYCLOAK_ADMIN_USERNAME", ""), ENV.get("SCM_ADMIN_USER", "")} - {""}
+    candidates = {}
+    if ci_user:
+        candidates[ci_user.lower()] = "CI account"
+    for m in kc.group_members(group):
+        candidates.setdefault(m.lower(), "member")
+    for e in extra:
+        candidates.setdefault(e.strip().lower(), "listed")
+    delete = []
+    for name, why in sorted(candidates.items()):
+        if not name:
+            continue
+        found = [u for u in kc.call("GET", f"/users?username={q(name)}&exact=true") or [] if u["username"] == name]
+        if name in protected:
+            log(f"  - keep  : account {name} (protected)")
+            continue
+        created = bool(found) and "true" in ((found[0].get("attributes") or {}).get("cicd-portal-created") or [])
+        if why == "CI account" and name != f"jenkins-{vendor}" and not created:
+            log(f"  - keep  : account {name} (an existing account used as the CI account)")
+            continue
+        if found:
+            groups = [g["name"] for g in kc.call("GET", f"/users/{found[0]['id']}/groups") or []]
+            others = [g for g in groups if g != group]
+            if admin_group in groups or others:
+                log(f"  - keep  : account {name} ({why}; also in {', '.join(others)})")
+                continue
+        log(f"  - delete: account {name} ({why}) - Keycloak{'' if found else ' (not found)'}, SCM-Manager, scm.<domain>")
+        delete.append((name, found[0]["id"] if found else None))
+    if not apply:
+        return [n for n, _ in delete]
+    scm = SCM() if ENV.get("SCM_ADMIN_PASSWORD") else None
+    scm_users = scm.users() if scm else set()
+    db = ScmDB() if ENV.get("DATABASE_USER_PASSWORD") else None
+    db_tables = []
+    if db:
+        for table in ("REPO_PERMITION", "SC_INSTANCE_USER", "SC_USER"):
+            try:
+                if any(col[0].upper() == "USER_ID" for col in db.sql(f"SHOW COLUMNS FROM {table}")):
+                    db_tables.append(table)
+            except SystemExit:
+                pass
+    for name, uid in delete:
+        if uid:
+            kc.call("DELETE", f"/users/{uid}")
+            log(f"[OK]   Keycloak user deleted: {name}")
+        if name in scm_users:
+            request("DELETE", f"{scm.base}/users/{q(name)}", scm.headers)
+            log(f"[OK]   SCM-Manager user deleted: {name}")
+        for table in db_tables:
+            db.sql(f"DELETE FROM {table} WHERE USER_ID={db.lit(name)}")
+        if db_tables:
+            log(f"[OK]   {name} removed from scm.<domain> ({', '.join(db_tables)})")
+    return [n for n, _ in delete]
 
 
 def policy_forget(prefix):
@@ -931,7 +1051,11 @@ def main():
     p = sub.add_parser("jenkins-delete"); p.add_argument("folder"); p.add_argument("name", nargs="?", default="")
     p = sub.add_parser("jenkins-jobs"); p.add_argument("folder"); p.add_argument("state", choices=["enable", "disable"])
     p.add_argument("--only", default="", help="comma separated job names (default: every job of the folder)")
-    p = sub.add_parser("scm-delete-repo"); p.add_argument("repo")
+    p = sub.add_parser("scm-delete-repo"); p.add_argument("repo", nargs="+")
+    p.add_argument("--restart", action="store_true", help="restart SCM-Manager once if files are in use")
+    p = sub.add_parser("scm-vendor-repos"); p.add_argument("vendor"); p.add_argument("--protect", default="")
+    p = sub.add_parser("vendor-accounts"); p.add_argument("vendor"); p.add_argument("--ci-user", default="")
+    p.add_argument("--extra", default=""); p.add_argument("--yes", action="store_true")
     p = sub.add_parser("kc-delete-group"); p.add_argument("name")
     p = sub.add_parser("gl-delete"); p.add_argument("path"); p.add_argument("--group", action="store_true")
     p = sub.add_parser("policy-forget"); p.add_argument("prefix")
@@ -1072,7 +1196,12 @@ def main():
                     request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(name)}/{a.state}", j.headers, form={})
                     log(f"[OK]   Jenkins job {a.state}d: {a.folder}/{name}")
         elif a.cmd == "scm-delete-repo":
-            scm_delete_repo(a.repo)
+            if scm_delete_repos(a.repo, a.restart):
+                sys.exit(3)
+        elif a.cmd == "scm-vendor-repos":
+            print("\n".join(scm_vendor_repos(a.vendor, set(filter(None, a.protect.split(","))))))
+        elif a.cmd == "vendor-accounts":
+            vendor_accounts(a.vendor, a.ci_user, [x for x in a.extra.split(",") if x.strip()], a.yes)
         elif a.cmd == "kc-delete-group":
             print(",".join(Keycloak().delete_group(a.name)))
         elif a.cmd == "gl-delete":

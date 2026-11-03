@@ -1,0 +1,8 @@
+  <label class="check"><input type="checkbox" name="delete_users" {{ 'checked' if form.get('delete_users') }}> 계정 삭제 — Keycloak·SCM-Manager·scm 목록에서
+    CI 계정 <code>jenkins-{{ v.name if v else '<업체>' }}</code>와 업체 구성원
+    <small>운영 관리자(cicd-admins), admin·scmadmin, <b>다른 그룹(다른 업체, K-PaaS 그룹)에도 속한 계정은 지우지 않습니다.</b>
+      K-PaaS 포털 등 다른 곳에서도 쓰는 계정인지 미리보기로 확인하세요.</small></label>
+  <label>추가로 삭제할 계정 <input name="users" value="{{ form.get('users', '') }}" placeholder="예: user11,user12 (그룹이 이미 지워진 경우)">
+    <small>'계정 삭제'를 선택했을 때만 적용, 같은 제외 규칙이 적용됩니다.</small></label>
+  <label class="check"><input type="checkbox" name="scm_restart" {{ 'checked' if form.get('scm_restart') }}> SCM-Manager 재시작 허용
+    <small>SCM-Manager가 사용 중인 파일 때문에 저장소를 못 지우면(NFS) 한 번 재시작하고 다시 지웁니다. 약 1분간 모든 업체의 git 접속이 멈춥니다.</small></label>

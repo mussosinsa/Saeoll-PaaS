@@ -22,7 +22,9 @@
     <small>보관하면 같은 앱 ID로 다시 추가하고 DB 연결할 때 데이터를 그대로 씁니다.</small></label>
   <label class="check"><input type="checkbox" name="delete_images" {{ 'checked' if form.get('delete_images') }}> Harbor 이미지 <code>{{ v.name }}/{{ a.app }}</code> 전체</label>
   {% if plan.repo %}<label class="check"><input type="checkbox" name="delete_repo" {{ 'checked' if form.get('delete_repo') }}> 소스 저장소 — {{ plan.repo }}
-    <small>소스 코드가 영구 삭제됩니다. 다른 곳에 백업이 있는지 확인하세요.</small></label>{% endif %}
+    <small>소스 코드가 영구 삭제됩니다. 다른 곳에 백업이 있는지 확인하세요.</small></label>
+  {% if v.source == 'scm' %}<label class="check"><input type="checkbox" name="scm_restart" {{ 'checked' if form.get('scm_restart') }}> SCM-Manager 재시작 허용
+    <small>사용 중인 파일 때문에 저장소를 못 지우면(NFS) 한 번 재시작하고 다시 지웁니다. 약 1분간 모든 업체의 git 접속이 멈춥니다.</small></label>{% endif %}{% endif %}
 
   <label>삭제 사유 (기록됨) <input name="reason" minlength="5" value="{{ form.get('reason', '') }}" placeholder="예: 서비스 종료, 다른 앱으로 통합"></label>
   <label>확인: 앱 ID <code>{{ a.app }}</code> 입력 <input name="confirm" autocomplete="off" value=""></label>

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}남은 업체 정리{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.jobs_page') }}">작업 이력</a> › 남은 업체 정리</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>남은 업체 정리</h1></div>
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+<form class="panel form danger-zone" method="post">
+  {{ csrf() }}
+  <p class="hint">업체 삭제가 중간에 멈춰 Argo CD 프로젝트는 없어졌지만 네임스페이스·Jenkins 폴더·Keycloak 그룹·저장소·계정이 남은 경우에 씁니다.
+    업체 화면이 없으므로 업체 ID로 실행합니다. <b>미리보기</b>로 남은 대상을 먼저 확인하세요.</p>
+  <label>업체 ID <input name="vendor" required pattern="[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?" value="{{ form.get('vendor', '') }}" placeholder="soft"></label>
+  <label class="check"><input type="checkbox" name="delete_data" {{ 'checked' if form.get('delete_data') }}> DB 데이터 (네임스페이스에 남은 볼륨)</label>
+  <label class="check"><input type="checkbox" name="delete_images" {{ 'checked' if form.get('delete_images') }}> Harbor 프로젝트 (모든 이미지·robot)</label>
+  <label class="check"><input type="checkbox" name="delete_repos" {{ 'checked' if form.get('delete_repos') }}> 저장소 — SCM <code>&lt;업체&gt;-*</code> 전체 (다른 업체 저장소 제외)</label>
+  {% include "_vendor_delete_options.html" %}
+  <label>정리 사유 (기록됨) <input name="reason" minlength="5" value="{{ form.get('reason', '') }}" placeholder="예: 업체 삭제 중단 후 정리"></label>
+  <label>확인: 업체 ID 다시 입력 <input name="confirm" autocomplete="off" value=""></label>
+  <div class="form-actions">
+    <a class="btn" href="{{ url_for('main.jobs_page') }}">취소</a>
+    <button class="btn" name="preview" value="1" formnovalidate>미리보기 (삭제 안 함)</button>
+    <button class="btn danger">정리</button>
+  </div>
+</form>
+{% endblock %}

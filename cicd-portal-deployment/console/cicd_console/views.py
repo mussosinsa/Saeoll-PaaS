@@ -326,7 +326,8 @@ def app_delete(vendor, app):
                     args.append(f"--{flag}")
             title = f"앱 삭제{' 미리보기' if preview else ''}: {vendor}/{app}"
             return _start(title, "remove-app.sh", args + [vendor, app],
-                          {"ACTOR": g.user["username"], "REASON": reason})
+                          {"ACTOR": g.user["username"], "REASON": reason,
+                           "SCM_RESTART": "1" if form.get("scm_restart") else "0"})
     return render_template("app_delete.html", v=v, a=a, plan=plan, form=form, errors=errors)
 
 
@@ -364,14 +365,59 @@ def vendor_delete(vendor):
                 errors.append("앱이 남아 있습니다. 앱을 먼저 삭제하거나 '모든 앱 함께 삭제'를 선택하세요.")
             if running:
                 errors.append(f"prod가 실행 중인 앱이 있습니다({', '.join(running)}). 먼저 업체를 중지하세요.")
+        args, env, opt_errors = _vendor_delete_options(form)
+        errors += opt_errors
         if not errors:
-            args = [] if preview else ["--yes"]
-            for flag in ("with-apps", "delete-data", "delete-images", "delete-repos"):
-                if form.get(flag.replace("-", "_")):
-                    args.append(f"--{flag}")
+            args = ([] if preview else ["--yes"]) + args
             title = f"업체 삭제{' 미리보기' if preview else ''}: {vendor}"
-            return _start(title, "remove-vendor.sh", args + [vendor], {"ACTOR": g.user["username"], "REASON": reason})
+            return _start(title, "remove-vendor.sh", args + [vendor], dict(env, REASON=reason))
     return render_template("vendor_delete.html", v=v, apps=apps, running=running, form=form, errors=errors)
+
+
+def _vendor_delete_options(form):
+    """remove-vendor.sh options of the 업체 삭제 / 남은 업체 정리 forms: (args, env, errors)."""
+    args, errors = [], []
+    for flag in ("with-apps", "delete-data", "delete-images", "delete-repos", "delete-users"):
+        if form.get(flag.replace("-", "_")):
+            args.append(f"--{flag}")
+    users = form.get("users", "").replace(" ", "")
+    if users:
+        if not USERS_RE.match(users):
+            errors.append("추가로 삭제할 계정은 쉼표로 구분한 ID입니다.")
+        elif "--delete-users" not in args:
+            errors.append("추가 계정을 지우려면 '계정 삭제'를 선택하세요.")
+        else:
+            args += ["--users", users]
+    env = {"ACTOR": g.user["username"], "SCM_RESTART": "1" if form.get("scm_restart") else "0"}
+    return args, env, errors
+
+
+@bp.route("/admin/vendors/cleanup", methods=["GET", "POST"])
+@auth.admin_required
+def vendor_cleanup():
+    """남은 업체 정리: an interrupted 업체 삭제 left namespaces, repositories or accounts behind (no Argo CD project)."""
+    form = request.form if request.method == "POST" else request.args
+    errors = []
+    if request.method == "POST":
+        vendor = form.get("vendor", "").strip()
+        preview = form.get("preview") == "1"
+        reason = _reason(form)
+        if not NAME_RE.match(vendor):
+            errors.append("업체 ID를 확인하세요.")
+        elif services.vendor(vendor) is not None:
+            errors.append(f"업체 {vendor}은(는) 아직 등록되어 있습니다. 업체 화면의 업체 삭제를 사용하세요.")
+        if not preview:
+            if form.get("confirm", "").strip() != vendor:
+                errors.append("확인을 위해 업체 ID를 한 번 더 정확히 입력하세요.")
+            if len(reason) < REASON_MIN:
+                errors.append(f"정리 사유를 {REASON_MIN}자 이상 입력하세요.")
+        args, env, opt_errors = _vendor_delete_options(form)
+        errors += opt_errors
+        if not errors:
+            args = ([] if preview else ["--yes"]) + args
+            title = f"남은 업체 정리{' 미리보기' if preview else ''}: {vendor}"
+            return _start(title, "remove-vendor.sh", args + [vendor], dict(env, REASON=reason))
+    return render_template("vendor_cleanup.html", form=form, errors=errors)
 
 
 # ------------------------------------------------- 컨테이너 이미지 등록 (upload) ---

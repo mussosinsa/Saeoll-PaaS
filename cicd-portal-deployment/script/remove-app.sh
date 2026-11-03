@@ -12,6 +12,7 @@
 #   --delete-images : Harbor repository <vendor>/<app>        (default: kept)
 #   --delete-repo   : source repository (scm: SCM_REPO, default <vendor>-<app>, and its scm.<domain> entry;
 #                     gitlab: project <vendor>/<app>)          (default: kept)
+#                     SCM_RESTART=1: restart SCM-Manager once when it cannot delete files still in use (NFS)
 # prod must not be running: stop it first (./app-state.sh <vendor> <app> prod stop) or it was never deployed.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -163,7 +164,8 @@ if ((DEL_REPO)) && [[ "$TYPE" != image ]]; then
   if [[ "$SOURCE" == scm ]]; then
     require_scm_admin
     rc=0
-    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$SCM_REPO" || rc=$?
+    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$SCM_REPO" \
+      $([[ "${SCM_RESTART:-0}" == 1 ]] && echo --restart) || rc=$?
     ((rc == 0)) || TODO+=("SCM repository $SCM_REPO was not deleted (see [TODO] above): fix it, then ./remove-app.sh --yes --delete-repo $VENDOR $APP")
     ((rc == 0 || rc == 3)) || die "Deleting SCM repository $SCM_REPO failed."
   else

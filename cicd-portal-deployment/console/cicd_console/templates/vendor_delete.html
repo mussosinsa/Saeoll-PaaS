@@ -15,7 +15,7 @@
     <li>Argo CD 프로젝트 <code>{{ v.name }}</code>, gitops 저장소 인증 정보</li>
     <li>네임스페이스 {% for ns in v.namespaces %}<code>{{ ns }}</code> {% endfor %}(안의 모든 리소스)</li>
     {% if v.source == 'scm' %}<li>Jenkins 폴더 <code>{{ v.name }}</code> (작업, 빌드 이력, 인증 정보)</li>{% endif %}
-    <li>Keycloak 그룹 <code>cicd-{{ v.name }}</code> — 사용자 계정은 지우지 않고 목록만 작업 로그에 남김</li>
+    <li>Keycloak 그룹 <code>cicd-{{ v.name }}</code> (계정은 아래 '계정 삭제'를 선택한 경우에만 삭제)</li>
     <li>품질 관리의 <code>{{ v.name }}/*</code> 프로파일·예외</li>
   </ul>
   <label class="check"><input type="checkbox" name="with_apps" {{ 'checked' if form.get('with_apps') }}> 모든 앱 함께 삭제
@@ -26,7 +26,9 @@
   <label class="check"><input type="checkbox" name="delete_images" {{ 'checked' if form.get('delete_images') }}> Harbor 프로젝트 <code>{{ v.name }}</code> (모든 이미지·robot 계정)
     <small>보관하면 robot 계정만 비활성화합니다.</small></label>
   <label class="check"><input type="checkbox" name="delete_repos" {{ 'checked' if form.get('delete_repos') }}> 저장소 —
-    {% if v.source == 'gitlab' %}GitLab 그룹 <code>{{ v.name }}</code> (gitops와 모든 프로젝트){% else %}gitops 저장소 <code>{{ v.name }}-gitops</code>와 앱 소스 저장소{% endif %}</label>
+    {% if v.source == 'gitlab' %}GitLab 그룹 <code>{{ v.name }}</code> (gitops와 모든 프로젝트){% else %}SCM 저장소 <code>{{ v.name }}-*</code> 전체 (gitops, 앱 소스 — 전에 삭제한 앱의 남은 저장소 포함, 다른 업체 저장소 제외){% endif %}</label>
+
+  {% include "_vendor_delete_options.html" %}
 
   <label>삭제 사유 (기록됨) <input name="reason" minlength="5" value="{{ form.get('reason', '') }}" placeholder="예: 유지보수 계약 종료"></label>
   <label>확인: 업체 ID <code>{{ v.name }}</code> 입력 <input name="confirm" autocomplete="off" value=""></label>

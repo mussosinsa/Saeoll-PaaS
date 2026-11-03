@@ -2,7 +2,8 @@
 {% from "macros.html" import badge with context %}
 {% block title %}작업 이력{% endblock %}
 {% block content %}
-<div class="page-head"><h1>작업 이력</h1></div>
+<div class="page-head"><h1>작업 이력</h1>
+  <div class="actions"><a class="btn" href="{{ url_for('main.vendor_cleanup') }}">남은 업체 정리</a></div></div>
 <section class="panel">
   <p class="hint">콘솔에서 실행한 스크립트(업체 등록, 앱 추가, DB 연결, 시스템 점검)입니다. 한 번에 하나씩 실행되며, 콘솔 Pod가 재시작되면 이력은 지워집니다.</p>
   <div class="table-wrap">
