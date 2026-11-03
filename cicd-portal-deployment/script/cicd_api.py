@@ -621,7 +621,27 @@ def scm_delete_repo(repo):
     scm = SCM()
     found = [r for r in scm.repositories() if r.get("name") == repo]
     for r in found:
-        request("DELETE", f"{scm.base}/repositories/{q(r['id'])}", scm.headers)
+        # SCM-Manager 1.x deletes the git directory itself. On NFS a pack file still open in its JGit cache
+        # leaves a .nfs* file behind ("could not delete file .../objects/pack", HTTP 500): retry once the
+        # cache has let go of it, then report it (exit 3) instead of failing the whole deletion.
+        for attempt in range(1, 5):
+            try:
+                request("DELETE", f"{scm.base}/repositories/{q(r['id'])}", scm.headers)
+                break
+            except HTTPError as e:
+                if e.code != 500:
+                    raise
+                if not any(x.get("id") == r["id"] for x in scm.repositories()):
+                    break                     # deleted after all
+                if attempt == 4:
+                    log(f"[WARN] SCM-Manager could not delete repository {repo}: {str(e)[:200]}")
+                    log(f"[TODO] Delete {repo} by hand: in the SCM-Manager pod remove the directory\n"
+                        f"       repositories/git/{repo} (kubectl -n cp-source-control get pods | grep manager;\n"
+                        f"       kubectl -n cp-source-control exec <pod> -- rm -rf /root/.scm/repositories/git/{repo}),\n"
+                        f"       then run this again (or delete {repo} in the SCM-Manager admin UI).")
+                    sys.exit(3)
+                log(f"[INFO] SCM-Manager could not delete {repo} yet (files in use) - retry {attempt}/3 in 20s")
+                time.sleep(20)
         log(f"[OK]   SCM repository deleted: {repo}")
     if not found:
         log(f"[INFO] SCM repository not found: {repo}")

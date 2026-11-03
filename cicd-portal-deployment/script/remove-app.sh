@@ -58,7 +58,7 @@ if [[ -n "$prod_replicas" && "$prod_replicas" != 0 ]]; then
 fi
 
 # What exists (plan) ------------------------------------------------------------------------------------------
-PLAN=() KEEP=()
+PLAN=() KEEP=() TODO=()
 for env in "${ENVS[@]}"; do PLAN+=("Argo CD application $VENDOR-$APP-$env and its resources"); done
 ((${#ENVS[@]})) || info "No Argo CD applications for $VENDOR/$APP (already deleted?) - cleaning up the rest"
 declare -A DBKIND
@@ -100,8 +100,9 @@ echo
 # 1. Argo CD applications with their resources -------------------------------------------------------------
 for env in "${ENVS[@]}"; do
   app_obj="$VENDOR-$APP-$env"
-  kubectl -n "$ARGOCD_NAMESPACE" patch applications.argoproj.io "$app_obj" --type merge \
-    -p '{"metadata":{"finalizers":["resources-finalizer.argocd.argoproj.io"]}}' >/dev/null
+  # (kubectl warns about Argo CD's own finalizer name: not an error, kept out of the log)
+  out=$(kubectl -n "$ARGOCD_NAMESPACE" patch applications.argoproj.io "$app_obj" --type merge \
+    -p '{"metadata":{"finalizers":["resources-finalizer.argocd.argoproj.io"]}}' 2>&1) || die "$out"
   kubectl -n "$ARGOCD_NAMESPACE" delete applications.argoproj.io "$app_obj" --wait=false >/dev/null
 done
 for env in "${ENVS[@]}"; do
@@ -123,7 +124,7 @@ if ((DEL_DATA)); then
     env_names "$env"
     case "${DBKIND[$env]}" in
       dedicated)
-        kubectl -n "$NS" delete pvc "data-$DB_POD" --ignore-not-found >/dev/null
+        kubectl -n "$NS" delete pvc "data-$DB_POD" --ignore-not-found --wait=false >/dev/null
         ok "Volume $NS/data-$DB_POD deleted" ;;
       shared)
         name=$(db_ident "${VENDOR}_${APP}_${env}")
@@ -133,7 +134,7 @@ DROP USER IF EXISTS '$name'@'%';
 SQL
         ok "Database and user $name dropped on the K-PaaS MariaDB" ;;
     esac
-    kubectl -n "$NS" delete secret "$SECRET" "$ROOT_SECRET" --ignore-not-found >/dev/null
+    kubectl -n "$NS" delete secret "$SECRET" "$ROOT_SECRET" --ignore-not-found --wait=false >/dev/null
     ok "Secrets $NS/$SECRET deleted"
   done
 fi
@@ -161,7 +162,10 @@ if ((DEL_IMAGES)); then $API harbor-delete-repo "$VENDOR" "$APP"; fi
 if ((DEL_REPO)) && [[ "$TYPE" != image ]]; then
   if [[ "$SOURCE" == scm ]]; then
     require_scm_admin
-    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$SCM_REPO"
+    rc=0
+    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$SCM_REPO" || rc=$?
+    ((rc == 0)) || TODO+=("SCM repository $SCM_REPO was not deleted (see [TODO] above): fix it, then ./remove-app.sh --yes --delete-repo $VENDOR $APP")
+    ((rc == 0 || rc == 3)) || die "Deleting SCM repository $SCM_REPO failed."
   else
     load_gitlab_token
     $API gl-delete "$VENDOR/$APP"
@@ -171,4 +175,8 @@ fi
 echo
 echo "Application $VENDOR/$APP deleted."
 ((${#KEEP[@]})) && printf '  kept: %s\n' "${KEEP[@]}"
+if ((${#TODO[@]})); then
+  printf '[TODO] %s\n' "${TODO[@]}"
+  exit 3
+fi
 exit 0

@@ -68,7 +68,7 @@ done
 if ((${#PVCS[@]})) && ((!DEL_DATA)); then
   die "Namespaces of $VENDOR hold volumes (DB data): ${PVCS[*]}. Back them up and run with --delete-data, or keep the vendor."
 fi
-PLAN=() KEEP=()
+PLAN=() KEEP=() TODO=()
 ((${#APPS[@]})) && PLAN+=("applications: ${APPS[*]} (./remove-app.sh each)")
 PLAN+=("Argo CD project $VENDOR and repository credentials repo-creds-$VENDOR-gitops")
 PLAN+=("namespaces ${NAMESPACES[*]}${PVCS:+ with volumes ${PVCS[*]}}")
@@ -96,12 +96,18 @@ app_opts=(--yes)
 ((DEL_REPOS)) && app_opts+=(--delete-repo)
 for app in "${APPS[@]}"; do
   info "Deleting application $VENDOR/$app"
-  ./remove-app.sh "${app_opts[@]}" "$VENDOR" "$app" </dev/null || die "Deleting $VENDOR/$app failed (see above). Fix it and run this again."
+  rc=0
+  ./remove-app.sh "${app_opts[@]}" "$VENDOR" "$app" </dev/null || rc=$?
+  if ((rc == 3)); then
+    TODO+=("$VENDOR/$app: a part was not deleted (see [TODO] above); after fixing it: ./remove-app.sh ${app_opts[*]} $VENDOR $app")
+  elif ((rc != 0)); then
+    die "Deleting $VENDOR/$app failed (see above). Fix it and run this again."
+  fi
 done
 
 # 2. Argo CD project, namespaces ------------------------------------------------------------------------------------------
 kubectl -n "$ARGOCD_NAMESPACE" delete appprojects.argoproj.io "$VENDOR" --ignore-not-found >/dev/null
-kubectl -n "$ARGOCD_NAMESPACE" delete secret "repo-creds-$VENDOR-gitops" --ignore-not-found >/dev/null
+kubectl -n "$ARGOCD_NAMESPACE" delete secret "repo-creds-$VENDOR-gitops" --ignore-not-found --wait=false >/dev/null
 ok "Argo CD project $VENDOR deleted"
 for ns in "${NAMESPACES[@]}"; do
   kubectl delete namespace "$ns" --ignore-not-found --wait=false >/dev/null
@@ -128,7 +134,9 @@ fi
 if ((DEL_REPOS)); then
   if [[ "$SOURCE" == scm ]]; then
     require_scm_admin
-    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$VENDOR-gitops"
+    rc=0
+    DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-delete-repo "$VENDOR-gitops" || rc=$?
+    ((rc == 0)) || TODO+=("SCM repository $VENDOR-gitops was not deleted (see [TODO] above): delete it by hand")
   elif [[ "$SOURCE" == gitlab ]]; then
     load_gitlab_token
     $API gl-delete "$VENDOR" --group
@@ -139,4 +147,8 @@ echo
 echo "Vendor $VENDOR deleted."
 ((${#KEEP[@]})) && printf '  kept: %s\n' "${KEEP[@]}"
 [[ -n "$members" ]] && echo "  Keycloak accounts of the former members (not deleted): $members"
+if ((${#TODO[@]})); then
+  printf '[TODO] %s\n' "${TODO[@]}"
+  exit 3
+fi
 exit 0
