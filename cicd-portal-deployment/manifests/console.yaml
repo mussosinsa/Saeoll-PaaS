@@ -15,12 +15,23 @@ metadata:
   labels:
     app.kubernetes.io/part-of: cicd-portal
 rules:
+  # delete: 업체 삭제 / 앱 삭제 (remove-vendor.sh, remove-app.sh --delete-data)
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list, create, patch, update]
+    verbs: [get, list, create, patch, update, delete]
   - apiGroups: [""]
-    resources: [secrets, resourcequotas, limitranges, persistentvolumeclaims]
+    resources: [secrets, persistentvolumeclaims]
+    verbs: [get, list, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
     verbs: [get, list, create, patch, update]
+  # 서비스 중지 / 재개 (app-state.sh): replicas of the application Deployments
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    verbs: [get, patch, update]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
@@ -33,7 +44,7 @@ rules:
     verbs: [get, list]
   - apiGroups: [argoproj.io]
     resources: [appprojects, applications]
-    verbs: [get, list, watch, create, patch, update]
+    verbs: [get, list, watch, create, patch, update, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

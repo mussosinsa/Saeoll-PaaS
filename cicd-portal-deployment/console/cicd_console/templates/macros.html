@@ -3,7 +3,10 @@
 {%- endmacro %}
 
 {% macro env_cell(e) -%}
-{% if e %}
+{% if e and e.stopped %}
+  <span class="badge s-stopped" title="{{ e.stopped_by }} {{ e.stopped_reason }}">중지됨</span>
+  {% if e.tag %}<code class="dim">{{ e.tag }}</code>{% endif %}
+{% elif e %}
   {{ badge(e.health) }} {{ badge(e.sync) }}
   {% if e.tag %}<code class="dim">{{ e.tag }}</code>{% endif %}
 {% else %}<span class="dim">-</span>{% endif %}

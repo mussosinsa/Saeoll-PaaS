@@ -10,7 +10,8 @@
   <h1>{{ a.app }} <span class="dim">{{ a.type }}</span> {{ source_label(v.source) }}</h1>
   <div class="actions">
     {% for name, url in links.items() %}<a class="btn" href="{{ url }}" target="_blank" rel="noopener">{{ {'argocd': 'Argo CD', 'harbor': 'Harbor', 'jenkins': 'Jenkins', 'scm': 'SCM', 'gitlab': 'GitLab'}[name] }} ↗</a>{% endfor %}
-    {% if is_admin %}<a class="btn" href="{{ url_for('main.app_db', vendor=v.name, app=a.app) }}">DB 연결</a>{% endif %}
+    {% if is_admin %}<a class="btn" href="{{ url_for('main.app_db', vendor=v.name, app=a.app) }}">DB 연결</a>
+    <a class="btn danger" href="{{ url_for('main.app_delete', vendor=v.name, app=a.app) }}">앱 삭제…</a>{% endif %}
     <form method="post" action="{{ url_for('main.app_refresh', vendor=v.name, app=a.app) }}">{{ csrf() }}<button class="btn">상태 새로 고침</button></form>
   </div>
 </div>
@@ -174,8 +175,29 @@
 <div class="two">
 {% for env_name in ('dev', 'prod') %}{% set e = a.envs.get(env_name) %}{% if e %}
 <section class="panel">
-  <div class="panel-head"><h2>{{ env_name }} 환경</h2>{{ badge(e.health) }} {{ badge(e.sync) }}
-    <span class="dim">{{ '자동 Sync' if e.auto else '수동 Sync' }}</span></div>
+  <div class="panel-head"><h2>{{ env_name }} 환경</h2>{% if e.stopped %}<span class="badge s-stopped">중지됨</span>{% endif %}
+    {{ badge(e.health) }} {{ badge(e.sync) }}
+    <span class="dim">{{ '자동 Sync' if e.auto else '수동 Sync' }}</span>
+    {% if (env_name == 'dev' or is_admin) and (is_admin or not v.suspended) %}
+      {% if e.stopped %}
+      <form method="post" action="{{ url_for('main.app_state', vendor=v.name, app=a.app) }}" data-confirm="{{ env_name }} 서비스를 재개할까요?">
+        {{ csrf() }}<input type="hidden" name="env" value="{{ env_name }}"><input type="hidden" name="action" value="start">
+        <button class="btn small primary">서비스 재개</button></form>
+      {% else %}<button class="btn small danger" data-open="stop-{{ env_name }}-dialog">서비스 중지</button>{% endif %}
+    {% endif %}</div>
+  {% if e.stopped %}<div class="alert warn">서비스 중지됨 · {{ e.stopped_by }} · {{ e.stopped_at|dt }}{% if e.stopped_reason %} · {{ e.stopped_reason }}{% endif %}
+    — 접속 주소는 재개할 때까지 응답하지 않습니다(503).</div>{% endif %}
+  <dialog id="stop-{{ env_name }}-dialog" class="dialog">
+    <form method="post" action="{{ url_for('main.app_state', vendor=v.name, app=a.app) }}">
+      {{ csrf() }}<input type="hidden" name="env" value="{{ env_name }}"><input type="hidden" name="action" value="stop">
+      <h3>{{ a.app }} {{ env_name }} 서비스 중지</h3>
+      <p class="hint">gitops에 replicas 0을 기록하고 바로 멈춥니다. 데이터·설정·이미지는 그대로이며 <b>서비스 재개</b>로 이전 상태로 돌아갑니다.
+        {% if env_name == 'prod' %}prod는 재개할 때 지금 실행 중인 버전으로 돌아옵니다.{% endif %}</p>
+      <label>중지 사유 (기록됨) <input name="reason" required minlength="5" placeholder="예: 점검, 사용 종료 예정"></label>
+      {% if v.source == 'scm' %}<label class="check"><input type="checkbox" name="ci_disable"> Jenkins 빌드·배포 작업도 중지 (재개할 때 다시 켬)</label>{% endif %}
+      <div class="dialog-actions"><button type="button" class="btn" data-close>취소</button><button class="btn danger">중지</button></div>
+    </form>
+  </dialog>
   <dl class="kv">
     <dt>네임스페이스</dt><dd><code>{{ e.namespace }}</code></dd>
     <dt>이미지</dt><dd>{% for img in e.images %}<code>{{ img }}</code>{% else %}<span class="dim">-</span>{% endfor %}</dd>

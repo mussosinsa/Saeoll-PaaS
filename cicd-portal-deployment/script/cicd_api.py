@@ -152,6 +152,17 @@ class Keycloak:
                 return [u["username"] for u in self.call("GET", f"/groups/{g['id']}/members?max=500") or []]
         return []
 
+    def delete_group(self, group):
+        """Delete the group (users are kept); returns its former members."""
+        for g in self.call("GET", f"/groups?search={q(group)}") or []:
+            if g["name"] == group:
+                members = [u["username"] for u in self.call("GET", f"/groups/{g['id']}/members?max=500") or []]
+                self.call("DELETE", f"/groups/{g['id']}")
+                log(f"[OK]   Keycloak group deleted: {group} (users kept: {', '.join(members) or 'none'})")
+                return members
+        log(f"[INFO] Keycloak group not found: {group}")
+        return []
+
     def add_members(self, group, users):
         gid = self.ensure_group(group)
         for user in users:
@@ -339,6 +350,45 @@ class Harbor:
             "scope_selectors": {"repository": [{"kind": "doublestar", "decoration": "repoMatches", "pattern": "**"}]},
             "tag_selectors": [{"kind": "doublestar", "decoration": "matches", "pattern": pattern}]})
         log(f"[OK]   Harbor project {project}: tags {pattern} immutable")
+
+    def delete_repository(self, project, repo):
+        try:
+            self.call("DELETE", f"/projects/{q(project)}/repositories/{q(q(repo))}")
+            log(f"[OK]   Harbor repository deleted: {project}/{repo}")
+        except HTTPError as e:
+            if e.code != 404:
+                raise
+            log(f"[INFO] Harbor repository not found: {project}/{repo}")
+
+    def delete_project(self, project):
+        """Delete all repositories, the robots and the project."""
+        try:
+            pid = self.project_id(project)
+        except SystemExit:
+            log(f"[INFO] Harbor project not found: {project}")
+            return
+        while True:
+            repos = self.call("GET", f"/projects/{q(project)}/repositories?page_size=100") or []
+            if not repos:
+                break
+            for r in repos:
+                self.delete_repository(project, r["name"].split("/", 1)[1])
+        for name in ("cicd", "push", "upload"):
+            for r in self.find_robots(project, name):
+                self.call("DELETE", f"/robots/{r['id']}")
+        self.call("DELETE", f"/projects/{pid}")
+        log(f"[OK]   Harbor project deleted: {project}")
+
+    def robots_enabled(self, project, enabled):
+        """Enable / disable the project robots (cicd, push, upload) without changing their secrets."""
+        for name in ("cicd", "push", "upload"):
+            for r in self.find_robots(project, name):
+                full = self.call("GET", f"/robots/{r['id']}")
+                if bool(full.get("disable")) == (not enabled):
+                    continue
+                full["disable"] = not enabled
+                self.call("PUT", f"/robots/{r['id']}", full)
+                log(f"[OK]   Harbor robot {full.get('name')} {'enabled' if enabled else 'disabled'}")
 
     def tag_digest(self, project, repo, tag):
         """Digest of <project>/<repo>:<tag>, '' when the tag (or the repository) does not exist yet."""
@@ -564,6 +614,52 @@ class ScmDB:
                          f"({int(repo_no)}, {self.lit(user)}, {self.lit(value_of[level])})")
                 log(f"[OK]   참여자 {user}: {dict(OWNER='관리', WRITE='쓰기', READ='보기')[level]} 권한")
         return True, pending
+
+
+def scm_delete_repo(repo):
+    """Delete a repository from SCM-Manager and from the K-PaaS source control DB (scm.<domain> list)."""
+    scm = SCM()
+    found = [r for r in scm.repositories() if r.get("name") == repo]
+    for r in found:
+        request("DELETE", f"{scm.base}/repositories/{q(r['id'])}", scm.headers)
+        log(f"[OK]   SCM repository deleted: {repo}")
+    if not found:
+        log(f"[INFO] SCM repository not found: {repo}")
+    if not ENV.get("DATABASE_USER_PASSWORD"):
+        log("[WARN] DATABASE_USER_PASSWORD not set: cp_scm rows not removed (scm.<domain> may still list " + repo + ")")
+        return
+    db = ScmDB()
+    for (repo_no,) in [row[:1] for row in db.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={db.lit(repo)}")]:
+        db.sql(f"DELETE FROM REPO_PERMITION WHERE REPO_NO={int(repo_no)}")
+        db.sql(f"DELETE FROM SC_REPOSITORY WHERE REPO_NO={int(repo_no)}")
+        log(f"[OK]   {repo} removed from the scm.<domain> list")
+
+
+def policy_forget(prefix):
+    """Remove apps entries and exceptions of '<vendor>/<app>' (or every app of '<vendor>/') from the security
+    policy ConfigMaps (cicd-security-policy in the CI namespaces)."""
+    for ns in (ENV.get("JENKINS_NAMESPACE", "cicd-jenkins"), ENV.get("RUNNER_NAMESPACE", "cicd-runner")):
+        out = subprocess.run(["kubectl", "-n", ns, "get", "configmap", "cicd-security-policy", "-o", "json"],
+                             capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            continue
+        cm = json.loads(out.stdout)
+        pol = json.loads((cm.get("data") or {}).get("policy.json") or "{}")
+        hit = (lambda k: k.startswith(prefix)) if prefix.endswith("/") else (lambda k: k == prefix)
+        apps = {k: v for k, v in (pol.get("apps") or {}).items() if not hit(k)}
+        excs = [e for e in pol.get("exceptions") or [] if not hit(e.get("app", ""))]
+        removed = len(pol.get("apps") or {}) - len(apps) + len(pol.get("exceptions") or []) - len(excs)
+        if not removed:
+            continue
+        pol["apps"], pol["exceptions"] = apps, excs
+        cm["data"]["policy.json"] = json.dumps(pol, ensure_ascii=False, indent=1)
+        ann = cm["metadata"].setdefault("annotations", {})
+        ann.update({"cicd.k-paas.org/updated-by": "cicd-portal", "cicd.k-paas.org/change": f"{prefix} 삭제"})
+        rep = subprocess.run(["kubectl", "replace", "-f", "-"], input=json.dumps(cm), capture_output=True,
+                             text=True, timeout=60)
+        if rep.returncode != 0:
+            raise SystemExit(f"[ERROR] {ns}/cicd-security-policy: {rep.stderr.strip()[:300]}")
+        log(f"[OK]   security policy {ns}: {removed} entries of {prefix} removed")
 
 
 def scm_app_repo(repo, description, ci_user, writers, owner):
@@ -809,6 +905,16 @@ def main():
     p = sub.add_parser("jenkins-deploy-job"); p.add_argument("folder"); p.add_argument("name")
     p.add_argument("--script-file", required=True); p.add_argument("--description", default="")
     p = sub.add_parser("harbor-immutable"); p.add_argument("project"); p.add_argument("--pattern", default="v*")
+    p = sub.add_parser("harbor-delete-repo"); p.add_argument("project"); p.add_argument("repo")
+    p = sub.add_parser("harbor-delete-project"); p.add_argument("project")
+    p = sub.add_parser("harbor-robots"); p.add_argument("project"); p.add_argument("state", choices=["enable", "disable"])
+    p = sub.add_parser("jenkins-delete"); p.add_argument("folder"); p.add_argument("name", nargs="?", default="")
+    p = sub.add_parser("jenkins-jobs"); p.add_argument("folder"); p.add_argument("state", choices=["enable", "disable"])
+    p.add_argument("--only", default="", help="comma separated job names (default: every job of the folder)")
+    p = sub.add_parser("scm-delete-repo"); p.add_argument("repo")
+    p = sub.add_parser("kc-delete-group"); p.add_argument("name")
+    p = sub.add_parser("gl-delete"); p.add_argument("path"); p.add_argument("--group", action="store_true")
+    p = sub.add_parser("policy-forget"); p.add_argument("prefix")
     p = sub.add_parser("harbor-tag-digest"); p.add_argument("project"); p.add_argument("repo"); p.add_argument("tag")
     p = sub.add_parser("harbor-authfile"); p.add_argument("project"); p.add_argument("name")
     p.add_argument("--file", required=True)
@@ -915,6 +1021,50 @@ def main():
                 j.put_job(a.folder, a.name, j.deploy_job_xml(a.description, fh.read()))
         elif a.cmd == "harbor-immutable":
             Harbor().immutable(a.project, a.pattern)
+        elif a.cmd == "harbor-delete-repo":
+            Harbor().delete_repository(a.project, a.repo)
+        elif a.cmd == "harbor-delete-project":
+            Harbor().delete_project(a.project)
+        elif a.cmd == "harbor-robots":
+            Harbor().robots_enabled(a.project, a.state == "enable")
+        elif a.cmd == "jenkins-delete":
+            j = Jenkins()
+            path = f"/job/{q(a.folder)}" + (f"/job/{q(a.name)}" if a.name else "")
+            if j.exists(path):
+                request("POST", f"{j.base}{path}/doDelete", j.headers, form={})
+                log(f"[OK]   Jenkins {'job' if a.name else 'folder'} deleted: {a.folder}{'/' + a.name if a.name else ''}")
+            else:
+                log(f"[INFO] Jenkins {'job' if a.name else 'folder'} not found: {a.folder}{'/' + a.name if a.name else ''}")
+        elif a.cmd == "jenkins-jobs":
+            j = Jenkins()
+            if a.only:
+                names = [n for n in a.only.split(",") if n]
+            else:
+                try:
+                    names = [x["name"] for x in request("GET", f"{j.base}/job/{q(a.folder)}/api/json?tree=jobs[name]",
+                                                        j.headers)[1].get("jobs") or []]
+                except HTTPError as e:
+                    if e.code != 404:
+                        raise
+                    names = []
+            for name in names:
+                if j.exists(f"/job/{q(a.folder)}/job/{q(name)}"):
+                    request("POST", f"{j.base}/job/{q(a.folder)}/job/{q(name)}/{a.state}", j.headers, form={})
+                    log(f"[OK]   Jenkins job {a.state}d: {a.folder}/{name}")
+        elif a.cmd == "scm-delete-repo":
+            scm_delete_repo(a.repo)
+        elif a.cmd == "kc-delete-group":
+            print(",".join(Keycloak().delete_group(a.name)))
+        elif a.cmd == "gl-delete":
+            gl = GitLab()
+            kind = "groups" if a.group else "projects"
+            if gl.get(f"/{kind}/{q(a.path)}") is None:
+                log(f"[INFO] GitLab {kind[:-1]} not found: {a.path}")
+            else:
+                gl.call("DELETE", f"/{kind}/{q(a.path)}")
+                log(f"[OK]   GitLab {kind[:-1]} deleted: {a.path}")
+        elif a.cmd == "policy-forget":
+            policy_forget(a.prefix)
         elif a.cmd == "harbor-tag-digest":
             print(Harbor().tag_digest(a.project, a.repo, a.tag))
         elif a.cmd == "harbor-authfile":

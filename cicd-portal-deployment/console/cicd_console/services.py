@@ -91,7 +91,12 @@ def vendors():
         labels = meta.get("labels") or {}
         ns_mode = labels.get(f"{LABEL}/ns-mode", "split")
         name = meta["name"]
+        ann = meta.get("annotations") or {}
         result.append({
+            "suspended": labels.get(f"{LABEL}/suspended") == "true",
+            "suspended_by": ann.get(f"{LABEL}/suspended-by", ""),
+            "suspended_at": parse_time(ann.get(f"{LABEL}/suspended-at")),
+            "suspended_reason": ann.get(f"{LABEL}/suspended-reason", ""),
             "name": name,
             "source": labels.get(f"{LABEL}/source") or _source_from_repos(p),
             "ns_mode": ns_mode,
@@ -132,8 +137,14 @@ def env_summary(obj):
     harbor = os.environ.get("HARBOR_HOST", "")
     app_images = [i for i in images if harbor and i.startswith(harbor + "/")] or images
     app_image = app_images[0] if app_images else ""
+    labels = obj["metadata"].get("labels") or {}
+    ann = obj["metadata"].get("annotations") or {}
     return {
         "name": obj["metadata"]["name"],
+        "stopped": labels.get(f"{LABEL}/stopped") == "true",
+        "stopped_by": ann.get(f"{LABEL}/stopped-by", ""),
+        "stopped_at": parse_time(ann.get(f"{LABEL}/stopped-at")),
+        "stopped_reason": ann.get(f"{LABEL}/stopped-reason", ""),
         "namespace": (spec.get("destination") or {}).get("namespace", ""),
         "auto": bool((spec.get("syncPolicy") or {}).get("automated")),
         "sync": (st.get("sync") or {}).get("status") or "Unknown",

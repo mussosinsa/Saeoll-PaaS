@@ -4,7 +4,7 @@
 {% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › {{ v.name }}</div>{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>{{ v.name }} {{ source_label(v.source) }}</h1>
+  <h1>{{ v.name }} {{ source_label(v.source) }}{% if v.suspended %} <span class="badge s-stopped">업체 중지</span>{% endif %}</h1>
   <div class="actions">
     {% for name, url in links.items() %}<a class="btn" href="{{ url }}" target="_blank" rel="noopener">{{ {'argocd': 'Argo CD', 'harbor': 'Harbor', 'jenkins': 'Jenkins', 'scm': 'SCM', 'gitlab': 'GitLab'}[name] }} ↗</a>{% endfor %}
     {% if v.source == 'scm' %}<a class="btn" href="{{ url_for('main.image_upload_page', vendor=v.name) }}">컨테이너 이미지 등록</a>{% endif %}
@@ -12,6 +12,10 @@
   </div>
 </div>
 
+{% if v.suspended %}
+<div class="alert warn"><b>업체가 중지되어 있습니다</b> ({{ v.suspended_by }} · {{ v.suspended_at|dt }}{% if v.suspended_reason %} · {{ v.suspended_reason }}{% endif %}).
+  앱 서비스가 멈춰 있고, 구성원은 조회만 할 수 있습니다. {% if is_admin %}재개: 업체 정보 탭 → 업체 재개{% else %}재개는 운영 관리자에게 요청하세요.{% endif %}</div>
+{% endif %}
 {% if v.source not in ('scm', 'gitlab') %}
 <div class="alert warn">이 업체는 소스(scm|gitlab)가 기록되어 있지 않아 빌드 조회·실행을 할 수 없습니다.
   CI/CD 포털로 등록한 업체라면 <code>./onboard-vendor.sh --source &lt;scm|gitlab&gt; {{ v.name }}</code>를 다시 실행하고,
@@ -108,6 +112,24 @@
       {{ csrf() }}<button class="btn primary">push 계정 발급 · 재발급</button></form>
   </div>
   <p class="hint">업체 설정 재실행(구성원 일괄 추가, SCM CI 비밀번호 등록 등): <a href="{{ url_for('main.vendor_new', vendor=v.name, source=v.source, ns_mode=v.ns_mode) }}">업체 등록 화면</a>에서 같은 업체 ID로 다시 실행합니다.</p>
+  <div class="panel danger-zone">
+    <div class="panel-head"><h2>업체 중지 · 삭제</h2></div>
+    {% if v.suspended %}
+    <p>업체를 재개하면 Argo CD Sync·Jenkins 작업·Harbor 계정이 다시 열리고, <b>업체 중지로 멈춘 앱만</b> 다시 시작합니다
+      (그 전에 따로 중지한 앱은 그대로 중지).</p>
+    <form method="post" action="{{ url_for('main.vendor_state', vendor=v.name) }}" data-confirm="업체 {{ v.name }}을(를) 재개할까요?">
+      {{ csrf() }}<input type="hidden" name="action" value="resume"><button class="btn primary">업체 재개</button></form>
+    {% else %}
+    <p><b>업체 중지</b>: 모든 앱의 dev·prod 서비스를 멈추고(replicas 0), Argo CD Sync·Jenkins 작업·Harbor 계정(cicd, push, upload)을 막습니다.
+      구성원은 콘솔에서 조회만 할 수 있습니다. 데이터와 설정은 그대로이며 <b>업체 재개</b>로 되돌립니다.</p>
+    <form class="inline-form" method="post" action="{{ url_for('main.vendor_state', vendor=v.name) }}" data-confirm="업체 {{ v.name }}의 모든 서비스를 중지할까요?">
+      {{ csrf() }}<input type="hidden" name="action" value="suspend">
+      <label>중지 사유 <input name="reason" required minlength="5" placeholder="예: 유지보수 계약 종료(2026-12-31)"></label>
+      <button class="btn danger">업체 중지</button></form>
+    {% endif %}
+    <p><b>업체 삭제</b>: 네임스페이스·Argo CD 프로젝트·Jenkins 폴더·Keycloak 그룹을 지웁니다. 미리보기로 삭제 대상을 먼저 확인합니다.
+      <a class="btn danger small" href="{{ url_for('main.vendor_delete', vendor=v.name) }}">업체 삭제…</a></p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

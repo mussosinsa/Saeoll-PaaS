@@ -88,7 +88,7 @@ td form, .stage form { display: inline; margin: 0; }
 .s-warn, .s-high { background: var(--warn-bg); color: var(--warn); }
 .s-fail, .s-critical { background: var(--bad-bg); color: var(--bad); }
 .s-medium { background: #fff8db; color: #8a6d00; }
-.s-low, .s-info, .s-none { background: var(--mute-bg); color: var(--dim); }
+.s-low, .s-info, .s-none, .s-stopped { background: var(--mute-bg); color: var(--dim); }
 .src { font-size: 12px; border-radius: 3px; padding: 1px 7px; border: 1px solid var(--line); color: var(--dim); font-weight: normal; }
 .src.gitlab { border-color: #f3b98a; color: #c4521a; }
 .src.scm { border-color: #a5c8ec; color: #2468a8; }
@@ -195,3 +195,6 @@ a.stat:hover { text-decoration: none; border-color: var(--accent); }
 
 .upload-progress { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
 .upload-progress progress { flex: 1; height: 14px; }
+.danger-zone { border-color: var(--bad); }
+.danger-zone h2 { color: var(--bad); }
+.plan li { margin: 2px 0; }

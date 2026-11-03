@@ -44,17 +44,6 @@ if [[ "$MODE" == external ]]; then
   done
 fi
 NS_MODE=$(vendor_ns_mode "$VENDOR")
-# Names per environment. Single namespace layout (dev and prod share <vendor>): the names carry the env,
-# and kustomize's -<env> suffix makes the dedicated MariaDB <app>-mariadb-<env>.
-env_names() { # env -> NS SECRET ROOT_SECRET DB_SERVICE DB_POD
-  NS=$(env_namespace "$VENDOR" "$1" "$NS_MODE")
-  if [[ "$NS_MODE" == single ]]; then
-    SECRET="$APP-$1-db" ROOT_SECRET="$APP-$1-mariadb-root" DB_SERVICE="$APP-mariadb-$1"
-  else
-    SECRET="$APP-db" ROOT_SECRET="$APP-mariadb-root" DB_SERVICE="$APP-mariadb"
-  fi
-  DB_POD="$DB_SERVICE-0"
-}
 # Volume of a dedicated MariaDB: DB_STORAGECLASS, else K8S_STORAGECLASS if it exists, else the cluster default
 if [[ "$MODE" == dedicated ]]; then
   DB_STORAGECLASS=${DB_STORAGECLASS:-$K8S_STORAGECLASS}
@@ -86,17 +75,6 @@ print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
                                "labels": {"app.kubernetes.io/managed-by": "cicd-portal", "cicd.k-paas.org/app": app}},
                   "data": {"password": base64.b64encode(os.environ["S_PASSWORD"].encode()).decode()}}))
 PY
-}
-# MariaDB identifier: letters, digits, _ (max 64)
-db_ident() { local s=${1//-/_}; echo "${s:0:64}"; }
-
-# Run SQL as root on the K-PaaS MariaDB; the root password goes through stdin (first line)
-platform_sql() { # sql on stdin
-  local pod
-  pod=$(kubectl -n mariadb get pods -l app.kubernetes.io/name=mariadb -o name 2>/dev/null | head -n 1)
-  [[ -n "$DATABASE_USER_PASSWORD" ]] || die "DATABASE_USER_PASSWORD not found in $PORTAL_VARS (K-PaaS MariaDB root)."
-  { printf '%s\n' "$DATABASE_USER_PASSWORD"; cat; } | kubectl -n mariadb exec -i "${pod:-mariadb-0}" -- \
-    sh -c 'IFS= read -r MYSQL_PWD; export MYSQL_PWD; c=$(command -v mariadb || command -v mysql); "$c" -uroot'
 }
 
 # 1. Secrets per environment ----------------------------------------------------------------------
@@ -144,20 +122,7 @@ SQL
 done
 
 # 2. gitops: MariaDB (dedicated) and envFrom on the Deployment ---------------------------------------
-if [[ "$SOURCE" == scm ]]; then
-  require_scm_admin
-  gdir=$(scm_clone "$VENDOR-gitops")
-else
-  load_gitlab_token
-  gdir="$(mktemp -d)/repo"
-  GIT_SSL_CAINFO=$CA_FILE GIT_TERMINAL_PROMPT=0 \
-    git -c credential.helper='!f() { echo username=oauth2; echo "password=$GITLAB_TOKEN"; }; f' \
-    clone -q -b main "$GITLAB_GIT_URL/$VENDOR/gitops.git" "$gdir" || die "Cannot clone GitLab $VENDOR/gitops"
-  git -C "$gdir" config credential.helper '!f() { echo username=oauth2; echo "password=$GITLAB_TOKEN"; }; f'
-  git -C "$gdir" config http.sslCAInfo "$CA_FILE"
-  git -C "$gdir" config user.name "cicd-portal"
-  git -C "$gdir" config user.email "cicd-portal@${HOST_DOMAIN}"
-fi
+gdir=$(gitops_clone "$VENDOR" "$SOURCE") || die "Cannot clone the gitops repository of $VENDOR."
 for env in "${ENVS[@]}"; do
   env_names "$env"
   overlay="$gdir/apps/$APP/overlays/$env"
@@ -209,7 +174,7 @@ if scm_commit_push "$gdir" main "Connect $APP ($envs_text) to MariaDB: $MODE (ci
 else
   info "gitops apps/$APP already connected to $SECRET"
 fi
-if [[ "$SOURCE" == scm ]]; then scm_cleanup "$gdir"; else rm -rf "$(dirname "$gdir")"; fi
+gitops_cleanup "$gdir" "$SOURCE"
 
 echo
 echo "Database for $VENDOR/$APP ($MODE, ${envs_text}):"

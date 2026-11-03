@@ -27,7 +27,7 @@
   <div class="stat"><b>{{ stats.apps }}</b><span>애플리케이션</span></div>
   <div class="stat"><b>{{ stats.dev_healthy }}</b><span>dev 정상</span></div>
   <div class="stat {{ 'warn' if stats.prod_outofsync }}"><b>{{ stats.prod_outofsync }}</b><span>prod 배포 대기</span></div>
-  <div class="stat {{ 'bad' if stats.degraded }}"><b>{{ stats.degraded }}</b><span>오류 환경</span></div>
+  <div class="stat {{ 'bad' if stats.degraded }}"><b>{{ stats.degraded }}</b><span>오류 환경{% if stats.stopped %} <small class="dim">· 중지 {{ stats.stopped }}</small>{% endif %}</span></div>
   {% if stats.security_bad is defined %}<a class="stat {{ 'warn' if stats.security_bad }}" href="{{ url_for('quality.issues') }}"><b>{{ stats.security_bad }}</b><span>보안 게이트 미통과</span></a>{% endif %}
 </section>
 
@@ -35,7 +35,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2><a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a></h2>
-    {{ source_label(v.source) }}
+    {{ source_label(v.source) }}{% if v.suspended %} <span class="badge s-stopped">업체 중지</span>{% endif %}
     <span class="dim">네임스페이스 {{ v.namespaces|join(', ') }}</span>
     <a class="more" href="{{ url_for('main.vendor_page', vendor=v.name) }}">상세 ›</a>
   </div>

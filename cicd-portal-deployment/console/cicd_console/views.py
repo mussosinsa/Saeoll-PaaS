@@ -53,6 +53,9 @@ def _vendor_or_404(name):
     v = services.vendor(name)
     if v is None:
         abort(404, f"업체 {name}이(가) 등록되어 있지 않습니다.")
+    # 업체 중지: vendor members can only look (operators keep every action, e.g. 업체 재개)
+    if request.method == "POST" and v.get("suspended") and not auth.is_admin():
+        abort(403, f"업체 {name}은(는) 중지되어 있습니다. 빌드·배포·등록은 운영 관리자가 업체를 재개한 뒤 할 수 있습니다.")
     return v
 
 
@@ -104,8 +107,11 @@ def dashboard():
     stats = {
         "vendors": len(vendors), "apps": len(apps),
         "dev_healthy": sum(1 for a in apps if a["envs"].get("dev", {}).get("health") == "Healthy"),
-        "prod_outofsync": sum(1 for a in apps if a["envs"].get("prod", {}).get("sync") == "OutOfSync"),
-        "degraded": sum(1 for a in apps for e in a["envs"].values() if e["health"] in ("Degraded", "Missing")),
+        "prod_outofsync": sum(1 for a in apps if a["envs"].get("prod", {}).get("sync") == "OutOfSync"
+                              and not a["envs"]["prod"].get("stopped")),
+        "degraded": sum(1 for a in apps for e in a["envs"].values()
+                        if e["health"] in ("Degraded", "Missing") and not e.get("stopped")),
+        "stopped": sum(1 for a in apps for e in a["envs"].values() if e.get("stopped")),
     }
     by_vendor = {v["name"]: [a for a in apps if a["vendor"] == v["name"]] for v in vendors}
     security = {}
@@ -256,6 +262,116 @@ def vendor_push_account(vendor):
                                          harbor_host=os.environ.get("HARBOR_HOST", "")))
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+# ------------------------------------------------ 서비스 중지 / 삭제 (app, vendor) ---
+REASON_MIN = 5
+
+
+def _reason(form):
+    return " ".join(form.get("reason", "").split())[:300]
+
+
+@bp.route("/vendors/<vendor>/apps/<app>/state", methods=["POST"])
+def app_state(vendor, app):
+    """서비스 중지 / 재개 of dev (vendor members) or prod (operators): app-state.sh (gitops replicas 0)."""
+    v = _vendor_or_404(vendor)
+    a = _app_or_404(v, app)
+    env_name, action, reason = request.form.get("env"), request.form.get("action"), _reason(request.form)
+    if env_name not in a["envs"] or action not in ("stop", "start"):
+        abort(400)
+    if env_name == "prod" and not auth.is_admin():
+        abort(403, "prod 서비스 중지·재개는 운영 관리자만 할 수 있습니다.")
+    if action == "stop" and len(reason) < REASON_MIN:
+        flash(f"중지 사유를 {REASON_MIN}자 이상 입력하세요.", "error")
+        return redirect(url_for("main.app_page", vendor=vendor, app=app))
+    env = {"ACTOR": g.user["username"], "REASON": reason,
+           "CI": "disable" if request.form.get("ci_disable") and v["source"] == "scm" else "keep"}
+    title = f"서비스 {'중지' if action == 'stop' else '재개'}: {vendor}/{app} {env_name}"
+    return _start(title, "app-state.sh", [vendor, app, env_name, action], env)
+
+
+def _app_plan(v, a):
+    """What 앱 삭제 removes / may keep (the job log shows what was really found)."""
+    prod = a["envs"].get("prod")
+    prod_running = bool(prod and not prod.get("stopped") and prod.get("health") not in ("Missing", "Unknown"))
+    repo = None if a["type"] == "image" else (
+        f"SCM 저장소 {v['name']}-{a['app']}" if v["source"] == "scm" else f"GitLab 프로젝트 {v['name']}/{a['app']}")
+    return {"envs": sorted(a["envs"]), "prod_running": prod_running, "repo": repo,
+            "jobs": [f"{a['app']}-{j}" for j in ("dev", "release", "deploy")] if v["source"] == "scm" else []}
+
+
+@bp.route("/vendors/<vendor>/apps/<app>/delete", methods=["GET", "POST"])
+@auth.admin_required
+def app_delete(vendor, app):
+    v = _vendor_or_404(vendor)
+    a = _app_or_404(v, app)
+    plan = _app_plan(v, a)
+    form = request.form if request.method == "POST" else {}
+    errors = []
+    if request.method == "POST":
+        preview = request.form.get("preview") == "1"
+        reason = _reason(form)
+        if not preview:
+            if form.get("confirm", "").strip() != app:
+                errors.append(f"확인을 위해 앱 ID '{app}'를 정확히 입력하세요.")
+            if len(reason) < REASON_MIN:
+                errors.append(f"삭제 사유를 {REASON_MIN}자 이상 입력하세요.")
+            if plan["prod_running"]:
+                errors.append("prod가 실행 중입니다. 먼저 prod 서비스를 중지하세요.")
+        if not errors:
+            args = [] if preview else ["--yes"]
+            for flag in ("delete-data", "delete-images", "delete-repo"):
+                if form.get(flag.replace("-", "_")):
+                    args.append(f"--{flag}")
+            title = f"앱 삭제{' 미리보기' if preview else ''}: {vendor}/{app}"
+            return _start(title, "remove-app.sh", args + [vendor, app],
+                          {"ACTOR": g.user["username"], "REASON": reason})
+    return render_template("app_delete.html", v=v, a=a, plan=plan, form=form, errors=errors)
+
+
+@bp.route("/vendors/<vendor>/state", methods=["POST"])
+@auth.admin_required
+def vendor_state(vendor):
+    _vendor_or_404(vendor)
+    action, reason = request.form.get("action"), _reason(request.form)
+    if action not in ("suspend", "resume"):
+        abort(400)
+    if action == "suspend" and len(reason) < REASON_MIN:
+        flash(f"중지 사유를 {REASON_MIN}자 이상 입력하세요.", "error")
+        return redirect(url_for("main.vendor_page", vendor=vendor) + "#info")
+    title = f"업체 {'중지' if action == 'suspend' else '재개'}: {vendor}"
+    return _start(title, "vendor-state.sh", [vendor, action], {"ACTOR": g.user["username"], "REASON": reason})
+
+
+@bp.route("/vendors/<vendor>/delete", methods=["GET", "POST"])
+@auth.admin_required
+def vendor_delete(vendor):
+    v = _vendor_or_404(vendor)
+    apps = services.applications(vendor)
+    running = [a["app"] for a in apps if _app_plan(v, a)["prod_running"]]
+    form = request.form if request.method == "POST" else {}
+    errors = []
+    if request.method == "POST":
+        preview = request.form.get("preview") == "1"
+        reason = _reason(form)
+        if not preview:
+            if form.get("confirm", "").strip() != vendor:
+                errors.append(f"확인을 위해 업체 ID '{vendor}'를 정확히 입력하세요.")
+            if len(reason) < REASON_MIN:
+                errors.append(f"삭제 사유를 {REASON_MIN}자 이상 입력하세요.")
+            if apps and not form.get("with_apps"):
+                errors.append("앱이 남아 있습니다. 앱을 먼저 삭제하거나 '모든 앱 함께 삭제'를 선택하세요.")
+            if running:
+                errors.append(f"prod가 실행 중인 앱이 있습니다({', '.join(running)}). 먼저 업체를 중지하세요.")
+        if not errors:
+            args = [] if preview else ["--yes"]
+            for flag in ("with-apps", "delete-data", "delete-images", "delete-repos"):
+                if form.get(flag.replace("-", "_")):
+                    args.append(f"--{flag}")
+            title = f"업체 삭제{' 미리보기' if preview else ''}: {vendor}"
+            return _start(title, "remove-vendor.sh", args + [vendor], {"ACTOR": g.user["username"], "REASON": reason})
+    return render_template("vendor_delete.html", v=v, apps=apps, running=running, form=form, errors=errors)
 
 
 # ------------------------------------------------- 컨테이너 이미지 등록 (upload) ---

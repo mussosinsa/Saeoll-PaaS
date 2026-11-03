@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}업체 삭제 · {{ v.name }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › 삭제</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>업체 삭제 <span class="dim">{{ v.name }}</span></h1></div>
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+{% if running %}
+<div class="alert error"><b>prod가 실행 중인 앱이 있습니다:</b> {{ running|join(', ') }}. 업체 정보 탭에서 <b>업체 중지</b>를 먼저 하세요.</div>
+{% endif %}
+<form class="panel form danger-zone" method="post">
+  {{ csrf() }}
+  <h2>항상 삭제</h2>
+  <ul class="plan">
+    <li>Argo CD 프로젝트 <code>{{ v.name }}</code>, gitops 저장소 인증 정보</li>
+    <li>네임스페이스 {% for ns in v.namespaces %}<code>{{ ns }}</code> {% endfor %}(안의 모든 리소스)</li>
+    {% if v.source == 'scm' %}<li>Jenkins 폴더 <code>{{ v.name }}</code> (작업, 빌드 이력, 인증 정보)</li>{% endif %}
+    <li>Keycloak 그룹 <code>cicd-{{ v.name }}</code> — 사용자 계정은 지우지 않고 목록만 작업 로그에 남김</li>
+    <li>품질 관리의 <code>{{ v.name }}/*</code> 프로파일·예외</li>
+  </ul>
+  <label class="check"><input type="checkbox" name="with_apps" {{ 'checked' if form.get('with_apps') }}> 모든 앱 함께 삭제
+    ({{ apps|length }}개{% if apps %}: {% for a in apps %}<code>{{ a.app }}</code> {% endfor %}{% endif %}) — 아래 선택 항목도 앱마다 적용</label>
+  <h2>선택 삭제 <small class="dim">체크하지 않으면 보관</small></h2>
+  <label class="check"><input type="checkbox" name="delete_data" {{ 'checked' if form.get('delete_data') }}> DB 데이터 (볼륨·DB)
+    <small>네임스페이스에 볼륨(PVC)이 있으면 이 항목 없이는 삭제가 멈춥니다. 필요한 데이터는 먼저 백업하세요.</small></label>
+  <label class="check"><input type="checkbox" name="delete_images" {{ 'checked' if form.get('delete_images') }}> Harbor 프로젝트 <code>{{ v.name }}</code> (모든 이미지·robot 계정)
+    <small>보관하면 robot 계정만 비활성화합니다.</small></label>
+  <label class="check"><input type="checkbox" name="delete_repos" {{ 'checked' if form.get('delete_repos') }}> 저장소 —
+    {% if v.source == 'gitlab' %}GitLab 그룹 <code>{{ v.name }}</code> (gitops와 모든 프로젝트){% else %}gitops 저장소 <code>{{ v.name }}-gitops</code>와 앱 소스 저장소{% endif %}</label>
+
+  <label>삭제 사유 (기록됨) <input name="reason" minlength="5" value="{{ form.get('reason', '') }}" placeholder="예: 유지보수 계약 종료"></label>
+  <label>확인: 업체 ID <code>{{ v.name }}</code> 입력 <input name="confirm" autocomplete="off" value=""></label>
+  <div class="form-actions">
+    <a class="btn" href="{{ url_for('main.vendor_page', vendor=v.name) }}#info">취소</a>
+    <button class="btn" name="preview" value="1" formnovalidate>미리보기 (삭제 안 함)</button>
+    <button class="btn danger" {{ 'disabled' if running }}>삭제</button>
+  </div>
+  <p class="hint">미리보기는 실제로 찾은 대상(볼륨 등)을 작업 로그에 보여 주고 아무것도 바꾸지 않습니다.</p>
+</form>
+{% endblock %}

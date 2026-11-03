@@ -302,3 +302,55 @@ security_installed() {
   done
   return 1
 }
+
+# gitops repository of a vendor (scm: <vendor>-gitops as the SCM admin, gitlab: <vendor>/gitops with the
+# automation token) cloned into a temp dir on branch main; prints the dir. gitops_cleanup removes it.
+gitops_clone() { # vendor source
+  local gdir
+  if [[ "$2" == scm ]]; then
+    require_scm_admin
+    scm_clone "$1-gitops"
+    return
+  fi
+  load_gitlab_token
+  gdir="$(mktemp -d)/repo"
+  GIT_SSL_CAINFO=$CA_FILE GIT_TERMINAL_PROMPT=0 \
+    git -c credential.helper='!f() { echo username=oauth2; echo "password=$GITLAB_TOKEN"; }; f' \
+    clone -q -b main "$GITLAB_GIT_URL/$1/gitops.git" "$gdir" >&2 || { echo "[ERROR] Cannot clone GitLab $1/gitops" >&2; return 1; }
+  git -C "$gdir" config credential.helper '!f() { echo username=oauth2; echo "password=$GITLAB_TOKEN"; }; f'
+  git -C "$gdir" config http.sslCAInfo "$CA_FILE"
+  git -C "$gdir" config user.name "cicd-portal"
+  git -C "$gdir" config user.email "cicd-portal@${HOST_DOMAIN}"
+  echo "$gdir"
+}
+gitops_cleanup() { # dir source
+  if [[ "$2" == scm ]]; then scm_cleanup "$1"; else rm -rf "$(dirname "$1")"; fi
+}
+
+# Database names of an application per environment (add-db.sh). Single namespace layout (dev and prod
+# share <vendor>): the names carry the env, and kustomize's -<env> suffix makes the MariaDB <app>-mariadb-<env>.
+env_names() { # env  (uses VENDOR APP NS_MODE) -> NS SECRET ROOT_SECRET DB_SERVICE DB_POD
+  NS=$(env_namespace "$VENDOR" "$1" "$NS_MODE")
+  if [[ "$NS_MODE" == single ]]; then
+    SECRET="$APP-$1-db" ROOT_SECRET="$APP-$1-mariadb-root" DB_SERVICE="$APP-mariadb-$1"
+  else
+    SECRET="$APP-db" ROOT_SECRET="$APP-mariadb-root" DB_SERVICE="$APP-mariadb"
+  fi
+  DB_POD="$DB_SERVICE-0"
+}
+# Name of the application Deployment in its namespace (single layout: kustomize suffix -<env>)
+app_deployment() { # env  (uses APP NS_MODE)
+  if [[ "$NS_MODE" == single ]]; then echo "$APP-$1"; else echo "$APP"; fi
+}
+
+# MariaDB identifier: letters, digits, _ (max 64)
+db_ident() { local s=${1//-/_}; echo "${s:0:64}"; }
+
+# Run SQL as root on the K-PaaS MariaDB; the root password goes through stdin (first line)
+platform_sql() { # sql on stdin
+  local pod
+  pod=$(kubectl -n mariadb get pods -l app.kubernetes.io/name=mariadb -o name 2>/dev/null | head -n 1)
+  [[ -n "$DATABASE_USER_PASSWORD" ]] || die "DATABASE_USER_PASSWORD not found in $PORTAL_VARS (K-PaaS MariaDB root)."
+  { printf '%s\n' "$DATABASE_USER_PASSWORD"; cat; } | kubectl -n mariadb exec -i "${pod:-mariadb-0}" -- \
+    sh -c 'IFS= read -r MYSQL_PWD; export MYSQL_PWD; c=$(command -v mariadb || command -v mysql); "$c" -uroot'
+}

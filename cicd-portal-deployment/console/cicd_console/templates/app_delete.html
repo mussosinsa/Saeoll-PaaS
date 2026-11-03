@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}앱 삭제 · {{ v.name }}/{{ a.app }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › <a href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">{{ a.app }}</a> › 삭제</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>앱 삭제 <span class="dim">{{ v.name }}/{{ a.app }}</span></h1></div>
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+{% if plan.prod_running %}
+<div class="alert error"><b>prod가 실행 중입니다.</b> 운영 서비스를 실수로 지우지 않도록, 앱 화면의 prod 환경에서 <b>서비스 중지</b>를 먼저 하세요.</div>
+{% endif %}
+<form class="panel form danger-zone" method="post">
+  {{ csrf() }}
+  <h2>항상 삭제</h2>
+  <ul class="plan">
+    {% for env in plan.envs %}<li>Argo CD 앱 <code>{{ v.name }}-{{ a.app }}-{{ env }}</code>과 배포된 리소스 (Deployment, Service, Ingress, 전용 MariaDB StatefulSet)</li>{% endfor %}
+    <li>gitops <code>apps/{{ a.app }}/</code> (삭제 커밋 — git 이력에는 남음)</li>
+    {% if plan.jobs %}<li>Jenkins 작업 {% for j in plan.jobs %}<code>{{ j }}</code> {% endfor %}(빌드 이력 포함)</li>{% endif %}
+    <li>품질 관리의 앱 프로파일·보안 예외 (DefectDojo 결과는 보관)</li>
+  </ul>
+  <h2>선택 삭제 <small class="dim">체크하지 않으면 보관</small></h2>
+  <label class="check"><input type="checkbox" name="delete_data" {{ 'checked' if form.get('delete_data') }}> DB 데이터 — 전용 MariaDB 볼륨, 공용 MariaDB의 DB·사용자, DB Secret
+    <small>보관하면 같은 앱 ID로 다시 추가하고 DB 연결할 때 데이터를 그대로 씁니다.</small></label>
+  <label class="check"><input type="checkbox" name="delete_images" {{ 'checked' if form.get('delete_images') }}> Harbor 이미지 <code>{{ v.name }}/{{ a.app }}</code> 전체</label>
+  {% if plan.repo %}<label class="check"><input type="checkbox" name="delete_repo" {{ 'checked' if form.get('delete_repo') }}> 소스 저장소 — {{ plan.repo }}
+    <small>소스 코드가 영구 삭제됩니다. 다른 곳에 백업이 있는지 확인하세요.</small></label>{% endif %}
+
+  <label>삭제 사유 (기록됨) <input name="reason" minlength="5" value="{{ form.get('reason', '') }}" placeholder="예: 서비스 종료, 다른 앱으로 통합"></label>
+  <label>확인: 앱 ID <code>{{ a.app }}</code> 입력 <input name="confirm" autocomplete="off" value=""></label>
+  <div class="form-actions">
+    <a class="btn" href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">취소</a>
+    <button class="btn" name="preview" value="1" formnovalidate>미리보기 (삭제 안 함)</button>
+    <button class="btn danger" {{ 'disabled' if plan.prod_running }}>삭제</button>
+  </div>
+  <p class="hint">미리보기는 실제로 찾은 대상(DB 종류, 볼륨 등)을 작업 로그에 보여 주고 아무것도 바꾸지 않습니다.</p>
+</form>
+{% endblock %}
