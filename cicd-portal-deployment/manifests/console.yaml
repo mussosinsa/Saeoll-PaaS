@@ -32,6 +32,13 @@ rules:
   - apiGroups: [apps]
     resources: [deployments/scale]
     verbs: [get, patch, update]
+  # 자동 확장 (scale-app.sh): HPA status, metrics-server check (kubectl top)
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]

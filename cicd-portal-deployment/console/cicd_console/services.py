@@ -580,6 +580,48 @@ def reset_password(vendor_name, username):
     return password
 
 
+# --------------------------------------------------------------- autoscaling ---
+AUTOSCALE_DEFAULTS = {"min": 2, "max": 6, "cpu": 70, "memory": 0, "cpu_request": "200m", "sticky": False}
+
+
+def millicores(value):
+    """'200m' / '1' / '1.5' -> 200 / 1000 / 1500 (None if not a CPU quantity)."""
+    value = str(value or "").strip()
+    if re.match(r"^[0-9]+m$", value):
+        return int(value[:-1])
+    if re.match(r"^[0-9]+(\.[0-9]+)?$", value):
+        return int(float(value) * 1000)
+    return None
+
+
+def autoscalers():
+    """HPAs of the vendor namespaces: {(namespace, name): status} (empty if the API is not readable)."""
+    try:
+        data = get_json("horizontalpodautoscalers.autoscaling", "-A") or {"items": []}
+    except KubeError:
+        return {}
+    result = {}
+    for h in data["items"]:
+        spec, st = h.get("spec") or {}, h.get("status") or {}
+        target = next((m["resource"]["target"].get("averageUtilization") for m in spec.get("metrics") or []
+                       if m.get("type") == "Resource" and m["resource"].get("name") == "cpu"), None)
+        cpu = next((m["resource"]["current"].get("averageUtilization") for m in st.get("currentMetrics") or []
+                    if m.get("type") == "Resource" and (m.get("resource") or {}).get("name") == "cpu"), None)
+        conditions = {c.get("type"): c for c in st.get("conditions") or []}
+        limited = conditions.get("ScalingLimited", {})
+        active = conditions.get("ScalingActive", {})
+        result[(h["metadata"]["namespace"], h["metadata"]["name"])] = {
+            "min": spec.get("minReplicas", 1), "max": spec.get("maxReplicas"),
+            "current": st.get("currentReplicas", 0), "desired": st.get("desiredReplicas", 0),
+            "cpu": cpu, "cpu_target": target,
+            "at_max": st.get("currentReplicas", 0) >= (spec.get("maxReplicas") or 0) > 0,
+            "limited": limited.get("status") == "True" and limited.get("reason") == "TooManyReplicas",
+            "inactive": active.get("status") == "False",
+            "message": (active.get("message") if active.get("status") == "False" else limited.get("message")) or "",
+        }
+    return result
+
+
 def namespace_quota(namespace):
     """ResourceQuota usage of a vendor namespace (vendor-quota from onboard-vendor.sh)."""
     try:

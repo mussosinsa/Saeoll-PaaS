@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf with context %}
+{% block title %}자동 확장 · {{ v.name }}/{{ a.app }} {{ env_name }}{% endblock %}
+{% block crumbs %}<div class="crumbs"><a href="{{ url_for('main.dashboard') }}">대시보드</a> › <a href="{{ url_for('main.vendor_page', vendor=v.name) }}">{{ v.name }}</a> › <a href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">{{ a.app }}</a> › 자동 확장</div>{% endblock %}
+{% block content %}
+<div class="page-head"><h1>자동 확장 <span class="dim">{{ v.name }}/{{ a.app }}</span></h1>
+  <div class="actions">{% for name in a.envs %}<a class="btn {{ 'primary' if name == env_name }}" href="{{ url_for('main.app_autoscale', vendor=v.name, app=a.app, env=name) }}">{{ name }}</a>{% endfor %}</div></div>
+{% for err in errors %}<div class="alert error">{{ err }}</div>{% endfor %}
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ env_name }} 현재 상태</h2></div>
+  {% if hpa %}
+  <dl class="kv">
+    <dt>Pod 수</dt><dd><b>{{ hpa.current }}</b> (목표 {{ hpa.desired }}, 범위 {{ hpa.min }}~{{ hpa.max }}){% if hpa.at_max %} <span class="badge s-warn">최대 도달</span>{% endif %}</dd>
+    <dt>CPU 사용률</dt><dd>{{ hpa.cpu ~ '%' if hpa.cpu is not none else '수집 전 (metrics-server)' }} / 목표 {{ hpa.cpu_target }}%</dd>
+    {% if hpa.message %}<dt>상태</dt><dd class="dim">{{ hpa.message }}</dd>{% endif %}
+  </dl>
+  {% else %}
+  <p class="dim">이 환경에는 자동 확장(HPA)이 없습니다{% if env_name == 'prod' %} (설정 후 prod Sync 전에도 이렇게 보입니다){% endif %}. 고정 Pod 수로 실행 중입니다.</p>
+  {% endif %}
+  {% if hard_cpu %}<p class="hint">네임스페이스 <code>{{ e.namespace }}</code> 쿼터: CPU 요청 {{ hard_cpu }}, Pod {{ hard_pods }} — 같은 업체의 다른 앱과 함께 씁니다.</p>{% endif %}
+</section>
+
+<form class="panel form" method="post">
+  {{ csrf() }}<input type="hidden" name="env" value="{{ env_name }}"><input type="hidden" name="action" value="on">
+  <h2>{{ env_name }} 자동 확장 설정</h2>
+  <p class="hint">CPU 사용률이 목표를 넘으면 Pod를 늘리고(1분에 최대 2개), 낮아지면 5분 뒤부터 2분에 1개씩 줄입니다.
+    gitops에 기록되며 {% if env_name == 'prod' %}<b>prod Sync</b>로 반영됩니다{% else %}Argo CD가 자동 반영합니다{% endif %}.</p>
+  <div class="row-fields">
+    <label>최소 Pod <input name="min" inputmode="numeric" value="{{ form.get('min', '') }}" required></label>
+    <label>최대 Pod <input name="max" inputmode="numeric" value="{{ form.get('max', '') }}" required></label>
+  </div>
+  <div class="row-fields">
+    <label>CPU 목표 사용률 % <input name="cpu" inputmode="numeric" value="{{ form.get('cpu', '') }}" required></label>
+    <label>메모리 목표 % <input name="memory" inputmode="numeric" value="{{ form.get('memory', 0) }}"><small>0 = CPU만 사용 (권장: 메모리는 잘 줄지 않음)</small></label>
+  </div>
+  <label>Pod당 CPU 요청값 <input name="cpu_request" value="{{ form.get('cpu_request', '') }}" required>
+    <small>사용률(%)의 기준입니다. 부하 테스트로 Pod 1개가 평소 쓰는 CPU에 맞추세요(기본 배포값 50m은 너무 작아 바로 최대치로 늘어남).</small></label>
+  <label class="check"><input type="checkbox" name="sticky" {{ 'checked' if form.get('sticky') }}> 세션 고정 (sticky cookie)
+    <small>로그인 세션을 Pod 메모리·로컬 파일에 두는 앱(PHP 기본 세션 등)은 켜세요. DB·Redis 세션을 쓰면 끄는 것이 부하 분산에 좋습니다.</small></label>
+  <label>사유 (기록됨) <input name="reason" value="{{ form.get('reason', '') }}" placeholder="예: 신청 기간 접속 증가 대비"></label>
+  <div class="form-actions"><a class="btn" href="{{ url_for('main.app_page', vendor=v.name, app=a.app) }}">취소</a><button class="btn primary">{{ '변경' if hpa else '자동 확장 켜기' }}</button></div>
+  <p class="hint">앱이 여러 Pod로 떠도 되는지 확인하세요: 세션, 업로드 파일(Pod 로컬 저장 금지), DB 커넥션 수(Pod 수 × 풀 크기), 스케줄러 중복 실행.</p>
+</form>
+
+{% if hpa %}
+<form class="panel" method="post" data-confirm="{{ env_name }} 자동 확장을 끌까요? 최소 Pod 수 이전의 고정 Pod 수로 돌아갑니다.">
+  {{ csrf() }}<input type="hidden" name="env" value="{{ env_name }}"><input type="hidden" name="action" value="off">
+  <div class="panel-head"><h2>자동 확장 끄기</h2></div>
+  <p class="hint">켜기 전의 고정 Pod 수로 돌아갑니다{% if env_name == 'prod' %} (prod Sync 후){% endif %}.</p>
+  <button class="btn danger">자동 확장 끄기</button>
+</form>
+{% endif %}
+{% endblock %}

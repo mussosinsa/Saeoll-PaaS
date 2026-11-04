@@ -28,6 +28,7 @@
   <div class="stat"><b>{{ stats.dev_healthy }}</b><span>dev 정상</span></div>
   <div class="stat {{ 'warn' if stats.prod_outofsync }}"><b>{{ stats.prod_outofsync }}</b><span>prod 배포 대기</span></div>
   <div class="stat {{ 'bad' if stats.degraded }}"><b>{{ stats.degraded }}</b><span>오류 환경{% if stats.stopped %} <small class="dim">· 중지 {{ stats.stopped }}</small>{% endif %}</span></div>
+  {% if stats.autoscaled %}<div class="stat {{ 'warn' if stats.at_max }}"><b>{{ stats.at_max }}</b><span>자동 확장 최대 도달 <small class="dim">· 확장 {{ stats.autoscaled }}</small></span></div>{% endif %}
   {% if stats.security_bad is defined %}<a class="stat {{ 'warn' if stats.security_bad }}" href="{{ url_for('quality.issues') }}"><b>{{ stats.security_bad }}</b><span>보안 게이트 미통과</span></a>{% endif %}
 </section>
 

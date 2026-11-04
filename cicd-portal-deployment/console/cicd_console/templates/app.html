@@ -199,6 +199,10 @@
     </form>
   </dialog>
   <dl class="kv">
+    <dt>자동 확장</dt><dd>{% if e.hpa %}Pod <b>{{ e.hpa.current }}</b> / {{ e.hpa.min }}~{{ e.hpa.max }}
+      · CPU {{ e.hpa.cpu ~ '%' if e.hpa.cpu is not none else '-' }} (목표 {{ e.hpa.cpu_target }}%){% if e.hpa.at_max %} <span class="badge s-warn">최대 도달</span>{% endif %}
+      {% else %}<span class="dim">사용 안 함</span>{% endif %}
+      {% if is_admin %} <a class="btn small" href="{{ url_for('main.app_autoscale', vendor=v.name, app=a.app, env=env_name) }}">설정</a>{% endif %}</dd>
     <dt>네임스페이스</dt><dd><code>{{ e.namespace }}</code></dd>
     <dt>이미지</dt><dd>{% for img in e.images %}<code>{{ img }}</code>{% else %}<span class="dim">-</span>{% endfor %}</dd>
     <dt>접속 주소</dt><dd>{% for u in e.urls %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a> {% else %}<span class="dim">-</span>{% endfor %}</dd>

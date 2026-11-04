@@ -8,6 +8,7 @@
 #   start : the former replicas count is restored in gitops and on the Deployment.
 #   The image is not changed: prod restarts the version it ran (pending prod changes still need prod Sync).
 #   A dedicated MariaDB keeps running (its data is not touched).
+#   Autoscaled environments (자동 확장, scale-app.sh): the HPA is paused with replicas 0 and resumes at minReplicas.
 # env: REASON (shown in the console), ACTOR (who), CI=disable|keep (default keep): stop/start also disables /
 #      enables the Jenkins jobs of the app (scm vendors), STOPPED_BY_VENDOR=1 (used by vendor-state.sh)
 set -euo pipefail
@@ -49,6 +50,11 @@ declare -A COUNT
 for env in "${ENVS[@]}"; do
   file="$gdir/apps/$APP/overlays/$env/kustomization.yaml"
   [[ -f "$file" ]] || die "gitops apps/$APP/overlays/$env/kustomization.yaml not found."
+  if grep -q "# cicd-portal autoscale replicas" "$file"; then
+    # autoscaled (HPA): replicas 0 stops it (an HPA does nothing at 0), start scales back to minReplicas
+    COUNT[$env]=$(python3 autoscale_overlay.py "$ACTION" "$(dirname "$file")" "$APP") || die "autoscale overlay of $env"
+    continue
+  fi
   COUNT[$env]=$(python3 - "$file" "$APP" "$ACTION" <<'PY'
 import re, sys
 path, app, action = sys.argv[1:]

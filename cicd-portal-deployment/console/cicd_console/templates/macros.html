@@ -8,6 +8,7 @@
   {% if e.tag %}<code class="dim">{{ e.tag }}</code>{% endif %}
 {% elif e %}
   {{ badge(e.health) }} {{ badge(e.sync) }}
+  {% if e.hpa %}<span class="badge {{ 's-warn' if e.hpa.at_max else 's-none' }}" title="자동 확장 {{ e.hpa.min }}~{{ e.hpa.max }}">×{{ e.hpa.current }}</span>{% endif %}
   {% if e.tag %}<code class="dim">{{ e.tag }}</code>{% endif %}
 {% else %}<span class="dim">-</span>{% endif %}
 {%- endmacro %}

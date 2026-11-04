@@ -97,13 +97,24 @@ def _audit(action, target):
     current_app.logger.info("audit user=%s action=%s target=%s", g.user["username"], action, target)
 
 
+def _attach_hpa(vendors, apps):
+    """env["hpa"]: status of the environment's HPA (자동 확장), None without one."""
+    hpas = services.autoscalers()
+    modes = {v["name"]: v.get("ns_mode", "split") for v in vendors}
+    for a in apps:
+        for env_name, e in a["envs"].items():
+            name = f"{a['app']}-{env_name}" if modes.get(a["vendor"]) == "single" else a["app"]
+            e["hpa"] = hpas.get((e.get("namespace"), name))
+    return apps
+
+
 # --------------------------------------------------------------- dashboard ---
 @bp.route("/")
 def dashboard():
     allowed = auth.user_vendors()
     vendors = [v for v in services.vendors() if allowed is None or v["name"] in allowed]
     names = {v["name"] for v in vendors}
-    apps = [a for a in services.applications() if a["vendor"] in names]
+    apps = _attach_hpa(vendors, [a for a in services.applications() if a["vendor"] in names])
     stats = {
         "vendors": len(vendors), "apps": len(apps),
         "dev_healthy": sum(1 for a in apps if a["envs"].get("dev", {}).get("health") == "Healthy"),
@@ -112,6 +123,8 @@ def dashboard():
         "degraded": sum(1 for a in apps for e in a["envs"].values()
                         if e["health"] in ("Degraded", "Missing") and not e.get("stopped")),
         "stopped": sum(1 for a in apps for e in a["envs"].values() if e.get("stopped")),
+        "autoscaled": sum(1 for a in apps for e in a["envs"].values() if e.get("hpa")),
+        "at_max": sum(1 for a in apps for e in a["envs"].values() if (e.get("hpa") or {}).get("at_max")),
     }
     by_vendor = {v["name"]: [a for a in apps if a["vendor"] == v["name"]] for v in vendors}
     security = {}
@@ -137,7 +150,7 @@ def _last_builds(vendor_info, apps):
 @bp.route("/vendors/<vendor>")
 def vendor_page(vendor):
     v = _vendor_or_404(vendor)
-    apps = services.applications(vendor)
+    apps = _attach_hpa([v], services.applications(vendor))
     last = _last_builds(v, apps) if apps else {}
     members, members_err = _try(services.members, vendor)
     quotas = {ns: services.namespace_quota(ns) for ns in v["namespaces"]}
@@ -180,7 +193,7 @@ def vendor_members(vendor):
 @bp.route("/vendors/<vendor>/apps/<app>")
 def app_page(vendor, app):
     v = _vendor_or_404(vendor)
-    a = _app_or_404(v, app)
+    a = _attach_hpa([v], [_app_or_404(v, app)])[0]
     build_list, builds_err = _try(services.builds, v, app)
     tags, tags_err = (None, None)
     if can_release(v):
@@ -289,6 +302,60 @@ def app_state(vendor, app):
            "CI": "disable" if request.form.get("ci_disable") and v["source"] == "scm" else "keep"}
     title = f"서비스 {'중지' if action == 'stop' else '재개'}: {vendor}/{app} {env_name}"
     return _start(title, "app-state.sh", [vendor, app, env_name, action], env)
+
+
+@bp.route("/vendors/<vendor>/apps/<app>/autoscale", methods=["GET", "POST"])
+@auth.admin_required
+def app_autoscale(vendor, app):
+    """자동 확장 (HPA) of dev / prod: scale-app.sh writes it to gitops (prod: applied by the prod Sync)."""
+    v = _vendor_or_404(vendor)
+    a = _attach_hpa([v], [_app_or_404(v, app)])[0]
+    env_name = request.values.get("env", "prod")
+    if env_name not in a["envs"]:
+        abort(404)
+    e = a["envs"][env_name]
+    current = e.get("hpa")
+    defaults = dict(services.AUTOSCALE_DEFAULTS, **({"min": current["min"], "max": current["max"],
+                                                     "cpu": current["cpu_target"] or 70} if current else {}))
+    form = request.form if request.method == "POST" else {}
+    quota = services.namespace_quota(e["namespace"]) or []
+    hard_cpu = next((q["hard"] for q in quota if q["name"] == "requests.cpu"), "")
+    hard_pods = next((q["hard"] for q in quota if q["name"] == "pods"), "")
+    errors = []
+    if request.method == "POST":
+        action, reason = form.get("action"), _reason(form)
+        env = {"ACTOR": g.user["username"], "REASON": reason}
+        if action == "on":
+            try:
+                values = {k: int(form.get(k, "") or 0) for k in ("min", "max", "cpu", "memory")}
+            except ValueError:
+                values = None
+                errors.append("숫자를 확인하세요.")
+            cpu_request = form.get("cpu_request", "").strip()
+            req = services.millicores(cpu_request)
+            if values is not None:
+                if not 1 <= values["min"] <= values["max"] <= 50:
+                    errors.append("최소·최대 Pod 수는 1 ≤ 최소 ≤ 최대 ≤ 50입니다.")
+                if not 10 <= values["cpu"] <= 95 or (values["memory"] and not 10 <= values["memory"] <= 95):
+                    errors.append("목표 사용률은 10~95%입니다 (메모리 0 = 사용 안 함).")
+                if req is None or not 10 <= req <= 8000 or not re.match(r"^[0-9]+m?$", cpu_request):
+                    errors.append("CPU 요청값은 200m, 500m, 1 형식입니다.")
+                elif services.millicores(hard_cpu) and values["max"] * req > services.millicores(hard_cpu):
+                    errors.append(f"최대 {values['max']}개 × CPU {cpu_request} = {values['max'] * req}m가 "
+                                  f"네임스페이스 쿼터(requests.cpu {hard_cpu})를 넘습니다. 최대 Pod 수나 CPU 요청값을 줄이세요.")
+                if hard_pods and str(hard_pods).isdigit() and values["max"] > int(hard_pods):
+                    errors.append(f"최대 Pod 수가 쿼터(pods {hard_pods})를 넘습니다.")
+            if not errors:
+                env.update(MIN=str(values["min"]), MAX=str(values["max"]), CPU_TARGET=str(values["cpu"]),
+                           MEMORY_TARGET=str(values["memory"]), CPU_REQUEST=cpu_request,
+                           STICKY="1" if form.get("sticky") else "0")
+        elif action != "off":
+            abort(400)
+        if not errors:
+            title = f"자동 확장 {'설정' if action == 'on' else '해제'}: {vendor}/{app} {env_name}"
+            return _start(title, "scale-app.sh", [vendor, app, env_name, action], env)
+    return render_template("app_autoscale.html", v=v, a=a, e=e, env_name=env_name, hpa=current,
+                           form=form or defaults, errors=errors, hard_cpu=hard_cpu, hard_pods=hard_pods)
 
 
 def _app_plan(v, a):
