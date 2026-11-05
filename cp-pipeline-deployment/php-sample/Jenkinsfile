@@ -9,6 +9,24 @@
 //   <vendor>-harbor-robot      Username/Password (Harbor robot account)
 //   <vendor>-kubeconfig-dev    Secret file
 //   <vendor>-kubeconfig-prod   Secret file
+//
+// 품질 관리 (security scan of the CI/CD portal, SECURITY_SCAN=on):
+//   Security scan : source code (Semgrep), secrets (Gitleaks), dependencies (Trivy), personal information
+//   Security gate : image (Trivy) + the gate of the policy -> pass / UNSTABLE (report mode) / FAILED (no deploy)
+//   The scanner image (cicd-portal/security-scanner) runs with buildah; the policy, rules, exceptions and the
+//   DefectDojo settings are read at run time from the CI/CD console's ConfigMaps / Secrets in SECURITY_NAMESPACE
+//   (cicd-jenkins), so changes made in the console (품질 관리) apply to this pipeline too.
+//   One-time setup: cp-pipeline-deployment/script/enable-cicd-security.sh (read access for this Jenkins).
+//   Not set up / SECURITY_SCAN=off: the stages are skipped and the build continues.
+
+// Run a cicd-scan command in the scanner container (workspace at /workspace, settings at /cicd-security)
+def scanner(String args) {
+  return sh(returnStatus: true, script: """
+    buildah run --isolation chroot -v "\$WORKSPACE:/workspace" -v "\$SEC_DIR:/cicd-security" \
+      "\$(cat "\$SEC_DIR/container")" -- sh /cicd-security/run.sh ${args}
+  """)
+}
+
 pipeline {
   agent any
   options {
@@ -24,6 +42,9 @@ pipeline {
     string(name: 'RELEASE_TAG', defaultValue: '',                      description: 'prod only: release tag, e.g. v1.2.0')
     string(name: 'APPROVERS',   defaultValue: 'admin',                 description: 'prod only: Jenkins users/groups allowed to approve')
     string(name: 'BASE_PROJECT', defaultValue: 'base-images',          description: 'Harbor project with mirrored base images (empty: Docker Hub)')
+    choice(name: 'SECURITY_SCAN', choices: ['on', 'off'],              description: '품질 관리 security scan and gate (CI/CD portal)')
+    string(name: 'SECURITY_IMAGE', defaultValue: 'auto',               description: "scanner image; auto = harbor.<BASE_DOMAIN>/cicd-portal/security-scanner:1.0.0")
+    string(name: 'SECURITY_NAMESPACE', defaultValue: 'cicd-jenkins',   description: 'namespace of the policy ConfigMaps (CI/CD console 품질 관리)')
   }
 
   environment {
@@ -35,6 +56,8 @@ pipeline {
     PULL_SECRET  = 'harbor-regcred'
     STORAGE_DRIVER    = 'vfs'
     BUILDAH_ISOLATION = 'chroot'
+    SCANNER_IMAGE = "${params.SECURITY_IMAGE == 'auto' ? "harbor.${params.BASE_DOMAIN}/cicd-portal/security-scanner:1.0.0" : params.SECURITY_IMAGE}"
+    SEC_DIR       = "${env.WORKSPACE}@cicd-security"   // outside the workspace: never scanned, never archived
   }
 
   stages {
@@ -92,6 +115,78 @@ pipeline {
       }
     }
 
+    stage('Security scan') {
+      when { expression { params.SECURITY_SCAN == 'on' } }
+      steps {
+        script {
+          // settings of the CI/CD console (품질 관리) + the scanner container
+          def ready = sh(returnStatus: true, script: '''
+            set -e
+            rm -rf "$SEC_DIR" security
+            mkdir -p "$SEC_DIR/policy" "$SEC_DIR/rules" && chmod 700 "$SEC_DIR"
+            if ! kubectl -n "$SECURITY_NAMESPACE" get configmap cicd-security-policy \
+                   -o jsonpath='{.data.policy\\.json}' > "$SEC_DIR/policy/policy.json" 2>/dev/null; then
+              echo "[security] cannot read $SECURITY_NAMESPACE/cicd-security-policy - not set up"
+              echo "           (CI/CD portal: ./deploy-cicd-portal.sh security; then cp-pipeline-deployment/script/enable-cicd-security.sh)"
+              exit 3
+            fi
+            kubectl -n "$SECURITY_NAMESPACE" get configmap cicd-security-rules -o json > "$SEC_DIR/rules.json" 2>/dev/null || echo '{}' > "$SEC_DIR/rules.json"
+            kubectl -n "$SECURITY_NAMESPACE" get secret cicd-security-defectdojo -o json > "$SEC_DIR/dojo.json" 2>/dev/null || echo '{}' > "$SEC_DIR/dojo.json"
+            kubectl -n "$SECURITY_NAMESPACE" get secret cicd-ca -o jsonpath='{.data.ca\\.crt}' 2>/dev/null | base64 -d > "$SEC_DIR/ca.crt" || true
+            kubectl -n "$SECURITY_NAMESPACE" get secret cicd-security-pull -o jsonpath='{.data.\\.dockerconfigjson}' 2>/dev/null | base64 -d > "$SEC_DIR/auth.json" || true
+            [ -s "$SEC_DIR/auth.json" ] || echo '{"auths":{}}' > "$SEC_DIR/auth.json"
+            cat > "$SEC_DIR/env" <<EOF
+CICD_APP=$VENDOR/$APP_NAME
+CICD_ENV=$DEPLOY_ENV
+CICD_APP_TYPE=php
+CICD_REF=$IMAGE_TAG
+CICD_COMMIT=$(git rev-parse HEAD)
+CICD_BUILD_URL=$BUILD_URL
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+EOF
+            # entry point in the container: settings from the files above (secrets never on a command line)
+            cat > "$SEC_DIR/run.sh" <<'EOF'
+set -e
+set -a; . /cicd-security/env; set +a
+export CICD_SECURITY_POLICY_DIR=/cicd-security/policy CICD_SECURITY_RULES_DIR=/cicd-security/rules
+python3 - <<'PY'
+import base64, json, os, shlex
+rules = json.load(open("/cicd-security/rules.json")).get("data") or {}
+for name, text in rules.items():
+    if "/" not in name:
+        open(os.path.join("/cicd-security/rules", name), "w").write(text)
+dojo = json.load(open("/cicd-security/dojo.json")).get("data") or {}
+with open("/cicd-security/secrets.sh", "w") as fh:
+    for key in ("DEFECTDOJO_URL", "DEFECTDOJO_TOKEN"):
+        if dojo.get(key):
+            fh.write(f"export {key}={shlex.quote(base64.b64decode(dojo[key]).decode())}\\n")
+    for key, path in (("TRIVY_USERNAME", "/cicd-security/trivy-user"), ("TRIVY_PASSWORD", "/cicd-security/trivy-pass")):
+        if os.path.exists(path):
+            fh.write(f"export {key}={shlex.quote(open(path).read())}\\n")
+PY
+. /cicd-security/secrets.sh
+if [ -s /cicd-security/ca.crt ]; then export CICD_CA_FILE=/cicd-security/ca.crt; else export TRIVY_INSECURE=true; fi
+rc=0
+"$@" || rc=$?
+chown -R "$HOST_UID:$HOST_GID" /workspace/security 2>/dev/null || true
+exit $rc
+EOF
+            buildah from --tls-verify=false --authfile "$SEC_DIR/auth.json" "$SCANNER_IMAGE" > "$SEC_DIR/container"
+          ''')
+          env.SECURITY_READY = ready == 0 ? '1' : '0'
+          if (ready != 0) {
+            echo 'Security scan skipped (not set up or scanner image not available - see above)'
+            return
+          }
+          if (scanner('cicd-scan source --dir /workspace --out /workspace/security') != 0) {
+            echo 'Security scan could not run completely - see the log'
+            currentBuild.result = 'UNSTABLE'
+          }
+        }
+      }
+    }
+
     stage('Build image') {
       steps {
         sh '''
@@ -117,11 +212,46 @@ pipeline {
       }
     }
 
+    // Gate: image scan + policy of the CI/CD console. exit 0 pass, 10 limits exceeded in report mode
+    // (UNSTABLE, deployment continues), otherwise FAILED = no deployment.
+    stage('Security gate') {
+      when { expression { env.SECURITY_READY == '1' } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: "${params.VENDOR}-harbor-robot",
+                                          usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASS')]) {
+          sh '''
+            umask 077
+            printf '%s' "$HARBOR_USER" > "$SEC_DIR/trivy-user"
+            printf '%s' "$HARBOR_PASS" > "$SEC_DIR/trivy-pass"
+          '''
+        }
+        script {
+          scanner("cicd-scan image --image '${env.IMAGE}' --out /workspace/security")
+          def gate = scanner('cicd-scan gate --out /workspace/security')
+          scanner('cicd-scan upload --out /workspace/security')
+          sh 'rm -f "$SEC_DIR/trivy-user" "$SEC_DIR/trivy-pass" "$SEC_DIR/secrets.sh"'
+          env.SECURITY_GATE = gate == 0 ? '통과' : gate == 10 ? '경고 (report mode)' : '차단'
+          if (gate == 10) {
+            // report mode: limits exceeded, the deployment continues (currentBuild.result: old Jenkins has no unstable step)
+            echo 'Security limits exceeded (report mode) - security/summary.json, DefectDojo'
+            currentBuild.result = 'UNSTABLE'
+          } else if (gate != 0) {
+            error('Security gate failed: deployment blocked - security/summary.json, DefectDojo')
+          }
+        }
+      }
+      post {
+        always { archiveArtifacts artifacts: 'security/**', allowEmptyArchive: true }
+      }
+    }
+
     stage('Approval') {
       when { expression { params.DEPLOY_ENV == 'prod' } }
       steps {
         timeout(time: 1, unit: 'HOURS') {
-          input message: "Deploy ${env.IMAGE} to ${env.TARGET_NS}?", ok: 'Deploy', submitter: params.APPROVERS
+          input message: "Deploy ${env.IMAGE} to ${env.TARGET_NS}?" +
+                         (env.SECURITY_GATE ? " (보안 게이트: ${env.SECURITY_GATE})" : ' (보안 검사 안 함)'),
+                ok: 'Deploy', submitter: params.APPROVERS
         }
       }
     }
@@ -159,6 +289,12 @@ pipeline {
 
   post {
     success { echo "Deployed ${env.IMAGE} -> https://${env.APP_HOST}" }
-    always  { sh 'rm -f k8s-rendered.yaml' }
+    always  {
+      sh '''
+        rm -f k8s-rendered.yaml
+        if [ -f "$SEC_DIR/container" ]; then buildah rm "$(cat "$SEC_DIR/container")" >/dev/null 2>&1 || true; fi
+        rm -rf "$SEC_DIR"
+      '''
+    }
   }
 }

@@ -111,10 +111,39 @@ Jenkins 폴더·credential·dev/prod job은 `script/register-php-jenkins-job.sh 
 
 | 파일 | 역할 |
 | --- | --- |
-| `Jenkinsfile` | composer → lint/test → buildah build/push → (prod 승인) → kubectl 배포 → smoke test |
+| `Jenkinsfile` | composer → lint/test → 보안 검사 → buildah build/push → 보안 게이트 → (prod 승인) → kubectl 배포 → smoke test |
 | `Dockerfile` | composer 멀티스테이지 + `php:8.3-apache`(8080 포트, `public/` DocumentRoot) |
 | `k8s/app.yaml` | Deployment/Service/Ingress(TLS) 템플릿 |
 | `public/` | 웹 루트 (`index.php`, `healthz.php`) |
+
+### 3-4. 품질 관리 (보안 검사) 적용
+
+`php-sample/Jenkinsfile`은 CI/CD 포털의 보안 검사(Semgrep, Gitleaks, Trivy, 개인정보)와 보안 게이트를 실행한다.
+정책·규칙·예외는 CI/CD 콘솔 **품질 관리**에서 관리하는 것을 그대로 쓴다(프로파일 `php`, 앱 키 `<업체>/<앱>`).
+
+1. CI/CD 포털에 보안 검사 설치 (`cicd-portal-deployment`):
+
+   ```bash
+   ./deploy-cicd-portal.sh security-image security
+   ```
+
+2. 이 Jenkins가 정책을 읽을 권한 부여 (1회):
+
+   ```bash
+   ./enable-cicd-security.sh
+   ```
+
+3. 저장소의 `Jenkinsfile`을 새 `php-sample/Jenkinsfile`로 바꾼다(기존 저장소는 파일만 교체).
+
+| 단계 | 내용 |
+| --- | --- |
+| Security scan | 소스 검사. 스캐너 이미지(`cicd-portal/security-scanner`)를 buildah로 실행 |
+| Security gate | 이미지 검사 + 게이트: 통과 / **UNSTABLE**(report 모드 초과, 배포 계속) / **실패**(배포 안 함) |
+| Approval (prod) | 승인 화면에 보안 게이트 결과 표시 |
+| 결과 | Jenkins 빌드의 `security/` 아티팩트(`summary.json`), DefectDojo(설정한 경우) |
+
+- 파라미터 `SECURITY_SCAN=off`이거나 설정이 안 되어 있으면 보안 단계는 건너뛰고 빌드는 계속된다.
+- 이 Jenkins의 빌드는 CI/CD 콘솔의 **보안 이슈** 목록에는 나오지 않는다(콘솔은 cicd-jenkins 빌드만 조회). 결과는 Jenkins 아티팩트와 DefectDojo에서 본다.
 
 베이스 이미지(`php:8.3-apache`, `composer:2`)는 `script/mirror-base-images.sh`로 Harbor
 `base-images` 프로젝트에 등록하고, 파이프라인이 `BASE_REGISTRY` build-arg로 Harbor 경로를 지정한다.

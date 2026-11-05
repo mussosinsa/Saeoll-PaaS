@@ -349,6 +349,10 @@ curl -sk https://homepage-vendor-a.192.168.40.216.nip.io/healthz.php
 | Pod `Pending`, `exceeded quota` | ResourceQuota 초과 | 쿼터 상향 또는 replicas/resources 조정 |
 | `Checked-out commit ... is not tag` | 운영 job 브랜치 설정 오류 | Branch Specifier `refs/tags/${RELEASE_TAG}`, Lightweight checkout 해제 |
 | deployer token 만료(기본 1년) | ServiceAccount token 기간 종료 | `onboard-php-vendor.sh <vendor>` 재실행 후 kubeconfig credential 교체 |
+| `Security scan skipped (not set up ...)` | 보안 검사 미설치 또는 정책 읽기 권한 없음 | CI/CD 포털 `deploy-cicd-portal.sh security-image security`, `script/enable-cicd-security.sh` (README 3-4) |
+| `Security gate failed: deployment blocked` | 보안 게이트 차단(Critical 취약점·비밀정보 등) | 빌드 아티팩트 `security/summary.json` 확인 후 수정, 오탐이면 CI/CD 콘솔 품질 관리 → 예외 요청 |
+| 빌드 `UNSTABLE` | report 모드에서 허용치 초과(배포는 됨) | 위와 같이 확인·조치 |
+| `buildah from ... unauthorized` (스캐너 이미지) | 스캐너 pull 계정 없음 | CI/CD 포털 `deploy-cicd-portal.sh security` 재실행 (`cicd-security-pull` 생성) |
 
 ---
 
