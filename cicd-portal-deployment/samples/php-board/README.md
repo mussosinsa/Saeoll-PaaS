@@ -105,7 +105,7 @@ kubectl -n $NS get secret php-service-db php-service-mariadb-root
 `saeoll-gitops` 쓰기 권한이 있는 계정(CI 계정 `saeoll` 또는 운영 관리자)으로:
 
 ```bash
-git clone https://scm-manager.192.168.20.151.nip.io/scm/git/saeoll-gitops && cd saeoll-gitops
+git clone https://scm-manager.kpaas.example.co.kr/scm/git/saeoll-gitops && cd saeoll-gitops
 cp ~/Saeoll-PaaS/cicd-portal-deployment/samples/php-board/gitops/overlays/dev/mariadb.yaml apps/php-service/overlays/dev/
 vi apps/php-service/overlays/dev/kustomization.yaml
 ```
@@ -166,8 +166,8 @@ Jenkins `saeoll/php-service-dev`가 5분 안에 빌드(또는 **Build Now**) →
 
 | 확인 | 방법 | 기대 결과 |
 | --- | --- | --- |
-| DB 연결 | `https://php-service-saeoll-dev.192.168.20.151.nip.io/dbcheck.php` | `"status": "ok"`, `server_version` 11.4.x, `posts` 개수 |
-| 목록 | `https://php-service-saeoll-dev.192.168.20.151.nip.io/` | "게시글이 없습니다" |
+| DB 연결 | `https://php-service-saeoll-dev.kpaas.example.co.kr/dbcheck.php` | `"status": "ok"`, `server_version` 11.4.x, `posts` 개수 |
+| 목록 | `https://php-service-saeoll-dev.kpaas.example.co.kr/` | "게시글이 없습니다" |
 | 쓰기 | **글쓰기** → 제목·작성자·비밀번호·내용 → 등록 | 보기 화면으로 이동 |
 | 조회수 | 보기 화면 새로고침 | 조회 수 증가 |
 | 수정 | **수정** → 틀린 비밀번호 / 맞는 비밀번호 | "비밀번호가 일치하지 않습니다" / 저장 |

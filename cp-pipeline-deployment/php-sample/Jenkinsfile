@@ -38,7 +38,7 @@ pipeline {
     choice(name: 'DEPLOY_ENV', choices: ['dev', 'prod'], description: 'dev: develop branch, prod: release tag')
     string(name: 'VENDOR',      defaultValue: 'vendor-a',              description: 'Vendor id (namespace prefix, Harbor project)')
     string(name: 'APP_NAME',    defaultValue: 'php-sample',            description: 'Application name (lowercase, -)')
-    string(name: 'BASE_DOMAIN', defaultValue: '192.168.40.216.nip.io', description: 'Cluster HOST_DOMAIN')
+    string(name: 'BASE_DOMAIN', defaultValue: 'kpaas.example.co.kr', description: 'Cluster HOST_DOMAIN')
     string(name: 'RELEASE_TAG', defaultValue: '',                      description: 'prod only: release tag, e.g. v1.2.0')
     string(name: 'APPROVERS',   defaultValue: 'admin',                 description: 'prod only: Jenkins users/groups allowed to approve')
     string(name: 'BASE_PROJECT', defaultValue: 'base-images',          description: 'Harbor project with mirrored base images (empty: Docker Hub)')

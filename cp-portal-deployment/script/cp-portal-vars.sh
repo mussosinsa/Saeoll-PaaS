@@ -3,7 +3,8 @@ K8S_MASTER_NODE_IP="{k8s master node public ip}"                          # Kube
 K8S_CLUSTER_API_SERVER="https://${K8S_MASTER_NODE_IP}:6443"               # kubernetes API Server (e.g. https://${K8S_MASTER_NODE_IP}:6443)
 K8S_STORAGECLASS="cp-storageclass"                                        # Kubernetes StorageClass Name (e.g. cp-storageclass)
 HOST_CLUSTER_IAAS_TYPE="1"                                                # Kubernetes Cluster IaaS Type ([1] AWS, [2] OPENSTACK, [3] NAVER, [4] NHN, [5] KT)
-HOST_DOMAIN="{host domain}"                                               # Host Domain (e.g. xx.xxx.xxx.xx.nip.io)
+HOST_DOMAIN="{host domain}"                                               # Host Domain (e.g. kpaas.example.co.kr; DNS *.domain -> INGRESS_LB_IP)
+INGRESS_LB_IP=""                                                          # Ingress LoadBalancer IP the domain resolves to (empty: taken from <ip>.nip.io)
 
 # The belows are the default values.
 # If you change the values below, there will be a problem with the deploy. Please keep the values.

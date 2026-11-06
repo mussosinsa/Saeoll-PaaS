@@ -80,9 +80,22 @@ validate_portal_configuration() {
     invalid=1
   fi
 
+  if [[ -n "${INGRESS_LB_IP:-}" && ! "$INGRESS_LB_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "[ERROR] INGRESS_LB_IP is not an IPv4 address: '$INGRESS_LB_IP'" >&2
+    invalid=1
+  fi
+  if [[ "$HOST_DOMAIN" != *.nip.io && -z "${INGRESS_LB_IP:-}" ]]; then
+    echo "[ERROR] HOST_DOMAIN $HOST_DOMAIN is a DNS domain: set INGRESS_LB_IP (the Ingress IP *.$HOST_DOMAIN resolves to)." >&2
+    invalid=1
+  fi
+
   if ((invalid)); then
     echo "[ERROR] Run configure-from-cluster-env.sh or edit cp-portal-vars.sh before deployment." >&2
     return 1
+  fi
+  if [[ "$HOST_DOMAIN" == *.nip.io ]]; then
+    echo "[WARN] HOST_DOMAIN $HOST_DOMAIN: the internal IP is visible in every address and names are resolved by the" >&2
+    echo "[WARN] public nip.io service. Use a DNS domain for production (configure-from-cluster-env.sh <cluster.env> <domain>)." >&2
   fi
   if ! kubectl get storageclass "$K8S_STORAGECLASS" >/dev/null 2>&1; then
     echo "[ERROR] StorageClass does not exist in the current cluster: $K8S_STORAGECLASS" >&2
@@ -96,13 +109,46 @@ ingress_controller_running() {
 
 # ingress-nginx must exist before OpenBao/Harbor/Keycloak Ingresses are created
 # and before SECMG_BOUND_CIDR is derived from the controller pod IPs.
+# A DNS domain (not nip.io) must resolve to the Ingress IP: wildcard record *.<domain>.
+# Checked on this node and inside the cluster (CoreDNS), where Harbor, Keycloak and the pipelines are called
+# by name. SKIP_DNS_CHECK=1 skips it (e.g. no image pull for the test pod).
+check_domain_dns() {
+  [[ "$HOST_DOMAIN" == *.nip.io || "${SKIP_DNS_CHECK:-0}" == 1 ]] && return 0
+  local name ip failed=0 probe="dns-check-$RANDOM.$HOST_DOMAIN"
+  for name in "portal.$HOST_DOMAIN" "harbor.$HOST_DOMAIN" "keycloak.$HOST_DOMAIN" "$probe"; do
+    ip=$(getent ahostsv4 "$name" 2>/dev/null | awk 'NR==1{print $1}')
+    if [[ "$ip" == "$INGRESS_LB_IP" ]]; then
+      echo "[OK] DNS (this node): $name -> $ip"
+    else
+      echo "[ERROR] DNS (this node): $name -> ${ip:-not found} (expected $INGRESS_LB_IP)" >&2
+      failed=1
+    fi
+  done
+  if ((failed)); then
+    echo "[ERROR] Add the wildcard record *.$HOST_DOMAIN -> $INGRESS_LB_IP to the DNS server and point this node to it" >&2
+    echo "[ERROR] (docs/install-with-domain.md, 1-2). A random name ($probe) is tested to make sure it is a wildcard." >&2
+    return 1
+  fi
+  ip=$(kubectl run "dns-check-$RANDOM" -n default --rm -i --restart=Never --quiet \
+         --image="${DNS_CHECK_IMAGE:-busybox:1.36}" --command -- \
+         sh -c "nslookup portal.$HOST_DOMAIN 2>/dev/null | awk '/^Address/ && !/#/ {print \$2}' | tail -n1" 2>/dev/null || true)
+  if [[ "$ip" == "$INGRESS_LB_IP" ]]; then
+    echo "[OK] DNS (cluster/CoreDNS): portal.$HOST_DOMAIN -> $ip"
+  else
+    echo "[ERROR] DNS (cluster/CoreDNS): portal.$HOST_DOMAIN -> ${ip:-not found} (expected $INGRESS_LB_IP)" >&2
+    echo "[ERROR] Pods must resolve the domain: the nodes' DNS server, or a CoreDNS forward for $HOST_DOMAIN" >&2
+    echo "[ERROR] (docs/install-with-domain.md, 3-3). SKIP_DNS_CHECK=1 skips this check." >&2
+    return 1
+  fi
+}
+
 ensure_ingress_controller() {
   local manifest=${INGRESS_MANIFEST:-"$SCRIPT_DIR/../../applications/ingress-nginx-1.13.3/deploy.yaml"}
   local service=${INGRESS_SERVICE:-ingress-nginx-controller}
   local lb_ip=${INGRESS_LB_IP:-}
   local ip attempt
 
-  # HOST_DOMAIN such as 192.168.40.216.nip.io must resolve to the ingress LB IP.
+  # INGRESS_LB_IP (cp-portal-vars.sh) or, for HOST_DOMAIN such as 192.168.40.216.nip.io, the IP in the name.
   if [[ -z "$lb_ip" && "$HOST_DOMAIN" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})\.nip\.io$ ]]; then
     lb_ip=${BASH_REMATCH[1]}
   fi
@@ -364,6 +410,7 @@ main_pre_cp_portal() {
   ### EXECUTION ########################################
   validate_portal_configuration || return 1
   ensure_ingress_controller || return 1
+  check_domain_dns || return 1
   ensure_metrics_server || return 1
 
   # Create cluster-admin token

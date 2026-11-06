@@ -5,13 +5,13 @@
 
 | 항목 | 값 |
 | --- | --- |
-| HOST_DOMAIN | `192.168.20.151.nip.io` |
+| HOST_DOMAIN | `kpaas.example.co.kr` |
 | 업체 ID (`VENDOR`) | `saeoll` → namespace `saeoll-dev`, `saeoll-prod`, Harbor 프로젝트 `saeoll` |
 | 앱 이름 (`APP_NAME`) | `homepage` |
 | SCM 저장소 | `saeoll-homepage` |
 | 개발자 SCM 계정 | `saeoll` (쓰기) |
 | Jenkins SCM 계정 | `jenkins-saeoll` (보기) |
-| 개발 URL | `https://homepage-saeoll-dev.192.168.20.151.nip.io` |
+| 개발 URL | `https://homepage-saeoll-dev.kpaas.example.co.kr` |
 
 ```text
 0 사전 점검 → 1 Jenkins PHP 이미지 → 2 베이스 이미지 → 3 업체 온보딩 → 4 SCM 계정·저장소
@@ -57,9 +57,9 @@ cat ../vendors/saeoll/jenkins-credentials.txt
 
 ## 4. SCM 계정과 저장소
 
-1. **Jenkins용 계정**: Keycloak 관리 콘솔(`https://keycloak.192.168.20.151.nip.io/admin`) → realm `cp-realm`
+1. **Jenkins용 계정**: Keycloak 관리 콘솔(`https://keycloak.kpaas.example.co.kr/admin`) → realm `cp-realm`
    → Users → Add user `jenkins-saeoll` → Credentials에서 비밀번호 설정(**Temporary 끔**)
-2. `jenkins-saeoll`로 `https://scm.192.168.20.151.nip.io` **최초 로그인** → 내정보 관리에서 **git 비밀번호 변경**
+2. `jenkins-saeoll`로 `https://scm.kpaas.example.co.kr` **최초 로그인** → 내정보 관리에서 **git 비밀번호 변경**
    (로그아웃 후 다음 단계 진행. 시크릿 창 사용 권장)
 3. `saeoll` 계정도 `scm.`에 로그인한 적이 있고 git 비밀번호를 변경했는지 확인
 4. **저장소 생성**: `scm.` 화면 → 레파지토리 목록 → **➕ 나의 레파지토리** 또는 **신규생성**
@@ -80,13 +80,13 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_CHECK_USER=saeoll,jenkins-saeol
 ## 5. 샘플 소스 push (개발자 `saeoll`)
 
 ```bash
-cd ~ && git -c http.sslVerify=false clone https://scm-manager.192.168.20.151.nip.io/scm/git/saeoll-homepage
+cd ~ && git -c http.sslVerify=false clone https://scm-manager.kpaas.example.co.kr/scm/git/saeoll-homepage
 cd saeoll-homepage
 cp -r ~/Saeoll-PaaS/cp-pipeline-deployment/php-sample/. .
 sed -i -e "s/defaultValue: 'vendor-a'/defaultValue: 'saeoll'/" \
        -e "s/defaultValue: 'php-sample'/defaultValue: 'homepage'/" \
-       -e "s/defaultValue: '192.168.40.216.nip.io'/defaultValue: '192.168.20.151.nip.io'/" Jenkinsfile
-grep -n "defaultValue" Jenkinsfile | head -4     # saeoll / homepage / 192.168.20.151.nip.io 확인
+       -e "s/defaultValue: 'kpaas.example.co.kr'/defaultValue: '<도메인>'/" Jenkinsfile   # <도메인>: HOST_DOMAIN 값
+grep -n "defaultValue" Jenkinsfile | head -4     # saeoll / homepage / <도메인> 확인
 
 git config user.name saeoll && git config user.email saeoll@example.com
 git add . && git commit -m "init php homepage"
@@ -150,7 +150,7 @@ New Item → **Folder** `saeoll` → 폴더 → Credentials → (folder) Global 
 
 Jenkins는 클러스터 안에서 동작하므로 **서비스 주소(http)**로 clone한다. 사설 인증서 검증 오류
 (`SSL certificate problem`)와 외부 ingress 경유를 피할 수 있다. 외부 주소를 쓰려면
-`https://scm-manager.192.168.20.151.nip.io/scm/git/saeoll-homepage`를 쓰고 Jenkins에 CA를 등록해야 한다.
+`https://scm-manager.kpaas.example.co.kr/scm/git/saeoll-homepage`를 쓰고 Jenkins에 CA를 등록해야 한다.
 
 ## 7. 첫 빌드
 
@@ -163,11 +163,11 @@ Jenkins는 클러스터 안에서 동작하므로 **서비스 주소(http)**로 
 
 ```bash
 kubectl -n saeoll-dev get deploy,pod,svc,ingress
-curl -sk https://homepage-saeoll-dev.192.168.20.151.nip.io/healthz.php
+curl -sk https://homepage-saeoll-dev.kpaas.example.co.kr/healthz.php
 ```
 
-- Harbor: `https://harbor.192.168.20.151.nip.io` → Projects → `saeoll` → `homepage:dev-<commit>-<빌드번호>`
-- 브라우저: `https://homepage-saeoll-dev.192.168.20.151.nip.io`
+- Harbor: `https://harbor.kpaas.example.co.kr` → Projects → `saeoll` → `homepage:dev-<commit>-<빌드번호>`
+- 브라우저: `https://homepage-saeoll-dev.kpaas.example.co.kr`
 
 ## 자주 나는 오류
 

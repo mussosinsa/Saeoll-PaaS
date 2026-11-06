@@ -28,7 +28,7 @@ Argo CD, Harbor, namespace, 배포 구조는 두 소스가 같다. 이 문서의
                                      <업체>-dev, <업체>-prod namespace
 ```
 
-| 시스템 | 주소 (예: `<도메인>` = `192.168.20.151.nip.io`) |
+| 시스템 | 주소 (예: `<도메인>` = `kpaas.example.co.kr`) |
 | --- | --- |
 | GitLab | `https://gitlab.<도메인>` |
 | Argo CD | `https://argocd.<도메인>` |

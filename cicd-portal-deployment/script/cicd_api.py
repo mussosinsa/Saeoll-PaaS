@@ -1053,6 +1053,9 @@ def main():
     p.add_argument("--only", default="", help="comma separated job names (default: every job of the folder)")
     p = sub.add_parser("scm-delete-repo"); p.add_argument("repo", nargs="+")
     p.add_argument("--restart", action="store_true", help="restart SCM-Manager once if files are in use")
+    p = sub.add_parser("scm-repos")
+    p = sub.add_parser("scm-permissions")
+    p = sub.add_parser("kc-group-members"); p.add_argument("name")
     p = sub.add_parser("scm-vendor-repos"); p.add_argument("vendor"); p.add_argument("--protect", default="")
     p = sub.add_parser("vendor-accounts"); p.add_argument("vendor"); p.add_argument("--ci-user", default="")
     p.add_argument("--extra", default=""); p.add_argument("--yes", action="store_true")
@@ -1198,6 +1201,15 @@ def main():
         elif a.cmd == "scm-delete-repo":
             if scm_delete_repos(a.repo, a.restart):
                 sys.exit(3)
+        elif a.cmd == "scm-repos":
+            print("\n".join(sorted(r.get("name", "") for r in SCM().repositories() if r.get("name"))))
+        elif a.cmd == "scm-permissions":
+            # scm.<domain> 참여자: repository, user, permission (backup-before-reinstall.sh)
+            for row in ScmDB().sql("SELECT r.REPO_NAME, p.USER_ID, p.PERMISSION FROM SC_REPOSITORY r "
+                                   "JOIN REPO_PERMITION p ON p.REPO_NO = r.REPO_NO ORDER BY r.REPO_NAME, p.USER_ID"):
+                print("\t".join(row))
+        elif a.cmd == "kc-group-members":
+            print(",".join(Keycloak().group_members(a.name)))
         elif a.cmd == "scm-vendor-repos":
             print("\n".join(scm_vendor_repos(a.vendor, set(filter(None, a.protect.split(","))))))
         elif a.cmd == "vendor-accounts":

@@ -1,7 +1,7 @@
 # Jenkins · Argo CD 웹 화면 사용 가이드 (초보자용)
 
 CI/CD 포털의 **Jenkins**(빌드)와 **Argo CD**(배포) 웹 화면을 처음 쓰는 사람을 위한 안내다.
-예시는 업체 `saeoll`, 앱 `php-service`, 도메인 `192.168.20.151.nip.io` 기준이다.
+예시는 업체 `saeoll`, 앱 `php-service`, 도메인 `kpaas.example.co.kr` 기준이다.
 
 ```text
 소스 push ──▶ Jenkins: 빌드·테스트·이미지 생성 ──▶ Harbor: 이미지 보관
@@ -112,7 +112,7 @@ push 후 5분을 기다리기 싫거나 다시 빌드하고 싶을 때.
 
 성공 시 끝부분에서 꼭 확인할 두 줄:
 ```text
-Pushed harbor.192.168.20.151.nip.io/saeoll/php-service:dev-e8ad2d85-4      ← 이미지가 Harbor에 올라감
+Pushed harbor.kpaas.example.co.kr/saeoll/php-service:dev-e8ad2d85-4      ← 이미지가 Harbor에 올라감
 gitops apps/php-service/overlays/dev/kustomization.yaml -> dev-e8ad2d85-4  ← 배포 버전이 바뀜(Argo CD가 반영)
 ```
 
@@ -278,7 +278,7 @@ saeoll-php-service-dev ─┬─ svc  php-service            (서비스 주소)
 ### 4-2. 지금 어떤 버전이 배포되어 있나
 
 - 목록 화면에서 앱 카드 → 이름 클릭 → **pod** 상자 클릭 → **SUMMARY** 탭의 **IMAGES**
-  예: `harbor.192.168.20.151.nip.io/saeoll/php-service:dev-e8ad2d85-4`
+  예: `harbor.kpaas.example.co.kr/saeoll/php-service:dev-e8ad2d85-4`
 - 또는 **APP DETAILS** → **SUMMARY**의 Images 항목
 
 Jenkins 빌드 이름(`#4 dev dev-e8ad2d85-4`)의 태그와 같으면 그 빌드가 배포된 것이다.

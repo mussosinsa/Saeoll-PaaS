@@ -18,7 +18,8 @@ CP-Portal 단일 클러스터 구성을 배포하는 절차를 설명한다. 배
   네트워크 연결
 - 비밀번호 없는 `sudo` 또는 배포 중 sudo 암호를 입력할 수 있는 계정
 - 포털 호스트 이름(`portal`, `harbor`, `keycloak`, `openbao`, `chartmuseum`)이
-  Ingress IP로 해석되는 DNS 또는 `nip.io` 도메인
+  Ingress IP로 해석되는 DNS 와일드카드 레코드(`*.<도메인>`, 운영) 또는 `nip.io` 도메인(시험용).
+  배포 스크립트가 관리 노드와 클러스터(CoreDNS)에서 해석되는지 먼저 검사한다(`SKIP_DNS_CHECK=1`로 생략)
 
 클러스터 상태와 StorageClass를 먼저 확인한다.
 
@@ -86,12 +87,15 @@ CLUSTER_ENV_FILE=/실제/경로/cluster.env ./deploy-cp-portal.sh
 | `CONTROL_PLANE_VIP` | `K8S_MASTER_NODE_IP` | `192.168.20.150` |
 | `CONTROL_PLANE_VIP` + `HAPROXY_PORT` | `K8S_CLUSTER_API_SERVER` | `https://192.168.20.150:8443` |
 | `DEFAULT_STORAGE_CLASS` | `K8S_STORAGECLASS` | `nfs-client` |
-| `METALLB_POOL`의 첫 IP | `HOST_DOMAIN` | `192.168.20.155.nip.io` |
+| `METALLB_POOL`의 첫 IP | `INGRESS_LB_IP` | `192.168.20.155` |
+| 두 번째 인자 (도메인) | `HOST_DOMAIN` | `kpaas.example.co.kr` (생략하면 `192.168.20.155.nip.io` — 시험용) |
 
-다른 DNS 도메인을 사용할 때는 두 번째 인자로 전달한다.
+운영 환경은 **DNS 도메인**을 두 번째 인자로 전달한다. nip.io는 주소에 내부 IP가 드러나고 외부 DNS 서비스에 의존하므로
+시험용으로만 쓴다. DNS 와일드카드 레코드(`*.<도메인>` → Ingress IP)와 인증서 준비, 서버 초기화부터의 전체 절차는
+[도메인 방식 재설치 가이드](../docs/install-with-domain.md)를 따른다.
 
 ```bash
-./configure-from-cluster-env.sh /path/to/cluster.env portal.example.com
+./configure-from-cluster-env.sh /path/to/cluster.env kpaas.example.co.kr
 ```
 
 현재 CP-Portal chart에는 온프레미스 IaaS 유형이 없으므로 기본 호환 값은 AWS(`1`)를
@@ -119,7 +123,8 @@ vi cp-portal-vars.sh
 | `K8S_CLUSTER_API_SERVER` | Kubernetes API URL | `https://192.168.20.10:6443` |
 | `K8S_STORAGECLASS` | PVC에 사용할 StorageClass | `cp-storageclass` |
 | `HOST_CLUSTER_IAAS_TYPE` | AWS 1, OpenStack 2, Naver 3, NHN 4, KT 5 | `1` |
-| `HOST_DOMAIN` | Ingress IP로 해석되는 기본 도메인 | `192.168.20.155.nip.io` |
+| `HOST_DOMAIN` | Ingress IP로 해석되는 기본 도메인 (`*.<도메인>` DNS 레코드) | `kpaas.example.co.kr` |
+| `INGRESS_LB_IP` | 도메인이 가리키는 ingress-nginx LoadBalancer IP | `192.168.20.155` |
 | `REPOSITORY_PASSWORD` | Harbor 관리자 비밀번호 | 안전한 값 |
 | `DATABASE_USER_PASSWORD` | 포털 DB 비밀번호 | 안전한 값 |
 | `DATABASE_TERRAMAN_PASSWORD` | Terraman DB 비밀번호 | 안전한 값 |

@@ -191,7 +191,7 @@ credential은 반드시 **업체 폴더 범위**로 등록한다. 전역(Global)
 | `DEPLOY_ENV` | `dev` |
 | `VENDOR` | `vendor-a` |
 | `APP_NAME` | `homepage` |
-| `BASE_DOMAIN` | `192.168.40.216.nip.io` |
+| `BASE_DOMAIN` | `kpaas.example.co.kr` |
 
 > 저장소의 Jenkinsfile 기본값(`VENDOR`, `APP_NAME`)을 업체·앱에 맞게 수정해 두면 SCM 폴링으로
 > 시작되는 자동 빌드에도 올바른 값이 적용된다.
@@ -242,7 +242,7 @@ git push origin develop
 
 ### 2-4. 개발 환경 확인
 
-- URL: `https://homepage-vendor-a-dev.192.168.40.216.nip.io`
+- URL: `https://homepage-vendor-a-dev.kpaas.example.co.kr`
 - 빌드 결과 전달: 업체가 Jenkins에 직접 접속하지 않는 경우 운영 관리자가 콘솔 로그를 전달하거나,
   Jenkins에 알림(메일 등)을 설정한다.
 - 업체가 포털 계정으로 `vendor-a-dev` namespace의 Pod·로그를 조회해야 하면 운영 관리자가
@@ -308,7 +308,7 @@ git push origin develop
 ```bash
 kubectl -n vendor-a-prod get deploy,pods,ingress
 kubectl -n vendor-a-prod rollout history deployment/homepage
-curl -sk https://homepage-vendor-a.192.168.40.216.nip.io/healthz.php
+curl -sk https://homepage-vendor-a.kpaas.example.co.kr/healthz.php
 ```
 
 `rollout history`의 CHANGE-CAUSE에 `jenkins #<빌드번호> <태그>`가 기록된다.

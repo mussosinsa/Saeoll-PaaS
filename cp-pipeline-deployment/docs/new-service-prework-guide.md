@@ -25,16 +25,16 @@
 [업체] 소스 등록(push) → develop 자동 배포(개발) → 릴리스 태그 → [운영] 승인 → 운영 배포
 ```
 
-### 0-3. 접속 주소 (HOST_DOMAIN = `192.168.40.216.nip.io` 기준)
+### 0-3. 접속 주소 (HOST_DOMAIN = `kpaas.example.co.kr` 기준)
 
 | 시스템 | 주소 | 비고 |
 | --- | --- | --- |
-| CP-Portal | `https://portal.192.168.40.216.nip.io` | 포털 계정 |
-| Keycloak 관리 콘솔 | `https://keycloak.192.168.40.216.nip.io/admin` | 운영 관리자 전용 |
-| Harbor | `https://harbor.192.168.40.216.nip.io` | 운영 관리자 전용 |
-| 소스컨트롤(SCM) | `https://scm.192.168.40.216.nip.io` | `cp-source-control-deployment`로 설치 |
-| SCM git 클론 URL | `https://scm-manager.192.168.40.216.nip.io/scm/git/<저장소명>` | 업체·Jenkins가 clone/push에 사용 |
-| Pipeline | `https://pipeline.192.168.40.216.nip.io` | 포털 계정 |
+| CP-Portal | `https://portal.kpaas.example.co.kr` | 포털 계정 |
+| Keycloak 관리 콘솔 | `https://keycloak.kpaas.example.co.kr/admin` | 운영 관리자 전용 |
+| Harbor | `https://harbor.kpaas.example.co.kr` | 운영 관리자 전용 |
+| 소스컨트롤(SCM) | `https://scm.kpaas.example.co.kr` | `cp-source-control-deployment`로 설치 |
+| SCM git 클론 URL | `https://scm-manager.kpaas.example.co.kr/scm/git/<저장소명>` | 업체·Jenkins가 clone/push에 사용 |
+| Pipeline | `https://pipeline.kpaas.example.co.kr` | 포털 계정 |
 | Jenkins | `kubectl -n cp-pipeline port-forward svc/cp-pipeline-jenkins-service 8080:8080` | 운영 관리자 전용 |
 
 ### 0-4. 명명 규칙
@@ -47,7 +47,7 @@
 | namespace | `<업체ID>-dev`, `<업체ID>-prod` | `vendor-a-dev` |
 | SCM 저장소 | `<업체ID>-<서비스>` | `vendor-a-homepage` |
 | Harbor 프로젝트 | 업체 `<업체ID>`, 공통 `base-images` | `vendor-a` |
-| 서비스 URL | 개발 `<서비스>-<업체ID>-dev.<도메인>`, 운영 `<서비스>-<업체ID>.<도메인>` | `homepage-vendor-a.192.168.40.216.nip.io` |
+| 서비스 URL | 개발 `<서비스>-<업체ID>-dev.<도메인>`, 운영 `<서비스>-<업체ID>.<도메인>` | `homepage-vendor-a.kpaas.example.co.kr` |
 
 ### 0-5. 서비스 등록 신청서 (업체 → 운영 관리자)
 
@@ -191,7 +191,7 @@ SCM_ADMIN_PASSWORD='<scmadmin 비밀번호>' SCM_CHECK_USER=vendor-a-hong,jenkin
    | 운영 관리자 | 관리 |
 
 3. **레파지토리 클론**에서 URL을 복사하여 업체에 전달한다.
-   형식: `https://scm-manager.<도메인>/scm/git/<저장소명>` (예: `https://scm-manager.192.168.40.216.nip.io/scm/git/vendor-a-homepage`)
+   형식: `https://scm-manager.<도메인>/scm/git/<저장소명>` (예: `https://scm-manager.kpaas.example.co.kr/scm/git/vendor-a-homepage`)
 4. 사내 Git을 사용하는 경우 `main` 브랜치를 보호(직접 push 금지, merge만 허용)한다.
 
 ### 3-3. 확인
@@ -299,8 +299,8 @@ Jenkins → New Item → **Folder** `vendor-a` → 폴더의 Credentials에 등�
 [신규 서비스 사전작업 완료]
 포털 계정 / 권한     : vendor-a-hong - vendor-a-dev 권한 부여
 SCM 저장소          : <클론 URL> (쓰기 권한)
-개발 URL            : https://homepage-vendor-a-dev.192.168.40.216.nip.io
-운영 URL            : https://homepage-vendor-a.192.168.40.216.nip.io
+개발 URL            : https://homepage-vendor-a-dev.kpaas.example.co.kr
+운영 URL            : https://homepage-vendor-a.kpaas.example.co.kr
 사용 가능 베이스 이미지 : base-images/php:8.3-apache, base-images/composer:2
 자원 한도(namespace) : CPU 4, 메모리 8Gi, Pod 30
 ```

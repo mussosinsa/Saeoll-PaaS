@@ -1,5 +1,5 @@
 # COMMON VARIABLE (Please change the value of the variables below.)
-HOST_DOMAIN="{host domain}"                               # Host Domain (e.g. xx.xxx.xxx.xx.nip.io)
+HOST_DOMAIN="{host domain}"                               # Host Domain (e.g. kpaas.example.co.kr), same as cp-portal-vars.sh
 K8S_STORAGECLASS="cp-storageclass"                        # Kubernetes StorageClass Name (e.g. cp-storageclass)
 IS_MULTI_CLUSTER="N"                                      # Please enter "Y" if deploy in a multi-cluster environment
 

@@ -9,7 +9,7 @@ resources:
   - mariadb.yaml                                   # + MariaDB (방식 A only; omit for 방식 B)
 images:
   - name: app
-    newName: harbor.192.168.20.151.nip.io/saeoll/php-service
+    newName: harbor.kpaas.example.co.kr/saeoll/php-service
     newTag: dev-e8ad2d85-4                         # keep the current value
 replicas:
   - name: php-service
@@ -21,10 +21,10 @@ patches:
     patch: |-
       - op: replace
         path: /spec/rules/0/host
-        value: php-service-saeoll-dev.192.168.20.151.nip.io
+        value: php-service-saeoll-dev.kpaas.example.co.kr
       - op: replace
         path: /spec/tls/0/hosts/0
-        value: php-service-saeoll-dev.192.168.20.151.nip.io
+        value: php-service-saeoll-dev.kpaas.example.co.kr
   - target:                                        # + MariaDB: DB_* environment from Secret php-service-db
       kind: Deployment
       name: php-service
