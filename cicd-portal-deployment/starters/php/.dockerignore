@@ -6,3 +6,4 @@ tests
 phpunit-report.xml
 k8s-rendered.yaml
 .phpunit.result.cache
+.cicd-deps

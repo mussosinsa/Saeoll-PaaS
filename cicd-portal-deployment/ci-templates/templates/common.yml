@@ -18,6 +18,7 @@
 stages: [build, test, package, security, deploy]
 
 variables:
+  NEXUS_URL: $CICD_NEXUS_URL           # company Nexus (closed network): cicd-deps.sh, Dockerfile build-arg
   APP_NAME: $CI_PROJECT_NAME
   IMAGE_REPO: $HARBOR_HOST/$CI_PROJECT_ROOT_NAMESPACE/$CI_PROJECT_NAME
   DOCKERFILE: Dockerfile
@@ -56,6 +57,7 @@ image:
         --dockerfile "$CI_PROJECT_DIR/$DOCKERFILE" \
         --destination "$IMAGE_REPO:$IMAGE_TAG" \
         --build-arg "BASE_REGISTRY=$CICD_BASE_REGISTRY" \
+        --build-arg "NEXUS_URL=$NEXUS_URL" \
         --registry-certificate "$HARBOR_HOST=$CICD_CA_FILE" \
         --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
         --label "org.opencontainers.image.source=$CI_PROJECT_URL"

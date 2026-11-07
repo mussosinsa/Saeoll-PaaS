@@ -10,6 +10,8 @@ variables:
 
 .php:
   image: $PHP_BUILD_IMAGE
+  before_script:
+    - if [ -f cicd-deps.sh ]; then . ./cicd-deps.sh; fi
   cache:
     key: composer-$CI_PROJECT_ID
     paths: [.composer-cache]

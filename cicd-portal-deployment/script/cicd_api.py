@@ -1105,6 +1105,11 @@ def main():
             gl = GitLab()
             for pair in a.pairs:
                 k, v = pair.split("=", 1)
+                if not v:   # empty (e.g. CICD_NEXUS_URL not used): no variable, the templates fall back
+                    if gl.get(f"/admin/ci/variables/{q(k)}") is not None:
+                        gl.call("DELETE", f"/admin/ci/variables/{q(k)}")
+                        log(f"[OK]   instance CI variable {k} removed")
+                    continue
                 gl.set_variable("/admin/ci", k, v, False)
                 log(f"[OK]   instance CI variable {k}")
         elif a.cmd == "gl-instance-secret":

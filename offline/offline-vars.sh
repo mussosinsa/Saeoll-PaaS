@@ -19,7 +19,10 @@ RPM_EXTRA_REPOS=${RPM_EXTRA_REPOS:-""}
 
 # Images not running in the online cluster but pulled later (build pods, tools). Added to the images of the
 # running cluster by collect-bundle.sh. {CICD_DOCKERHUB} images of the starters are added automatically.
+NEXUS_IMAGE=${NEXUS_IMAGE:-"docker.io/sonatype/nexus3:3.70.1"}       # pin the current Nexus 3 release before collecting
+NEXUS_PORT=${NEXUS_PORT:-8081}                                         # http://<bootstrap>:8081 (company repositories)
 EXTRA_IMAGES=${EXTRA_IMAGES:-"
+$NEXUS_IMAGE
 docker.io/library/registry:2.8.3
 docker.io/library/nginx:1.27-alpine
 docker.io/library/busybox:1.36

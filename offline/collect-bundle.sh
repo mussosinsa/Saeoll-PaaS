@@ -17,6 +17,8 @@
 #   files      kubectl, helm, step, istioctl, the helm-push plugin, the source control package -> files/
 #   rpms       Rocky Linux repositories (RPM_REPOS, dnf reposync, ~15 GB) -> rpms/<repo>/
 #   kubespray  Kubernetes binaries for kubespray (standalone/contrib/offline) -> files/kubespray/
+#   appdeps    build dependencies (Maven/Gradle/npm/Composer) of the starters, the samples and APP_SOURCES
+#              (directories or git URLs of the vendors' applications) for the company Nexus -> appdeps/
 #   repo       this repository (git bundle) -> Saeoll-PaaS.bundle
 # Needs: kubectl, helm, podman, skopeo, git, dnf-plugins-core (reposync), python3; internet access.
 # Before: rebuild the scanner image (fresh Trivy DB) and the console image with the current scripts:
@@ -29,7 +31,7 @@ source "$SCRIPT_DIR/offline-vars.sh"
 
 OUT=${1:-"$REPO/../offline-bundle-$(date +%Y%m%d)"}
 [[ $# -gt 0 ]] && shift
-STEPS=${*:-"images cicd charts files rpms kubespray repo"}
+STEPS=${*:-"images cicd charts files rpms kubespray appdeps repo"}
 mkdir -p "$OUT"/{images,charts,files,rpms}
 OUT=$(cd "$OUT" && pwd)
 info() { echo "[INFO] $*"; }
@@ -275,7 +277,18 @@ if has_step kubespray; then
   fi
 fi
 
-# 7. this repository --------------------------------------------------------------------------------------------------
+# 7. application dependencies for the company Nexus -------------------------------------------------------------------
+if has_step appdeps; then
+  sources=()
+  for d in "$REPO"/cicd-portal-deployment/starters/{java-gradle,java-maven,node,php,vue} "$REPO"/cicd-portal-deployment/samples/*/; do
+    [[ -d "$d" ]] && sources+=("$d")
+  done
+  for s in ${APP_SOURCES:-}; do sources+=("$s"); done
+  CICD_DOCKERHUB=$(cicd_vars CICD_DOCKERHUB) "$SCRIPT_DIR/collect-app-deps.sh" "$OUT/appdeps" "${sources[@]}" || \
+    FAILED+=("application dependencies (see above)")
+fi
+
+# 8. this repository --------------------------------------------------------------------------------------------------
 if has_step repo; then
   git -C "$REPO" bundle create "$OUT/Saeoll-PaaS.bundle" --all >/dev/null 2>&1 && ok "repository -> Saeoll-PaaS.bundle" || FAILED+=("repository")
 fi

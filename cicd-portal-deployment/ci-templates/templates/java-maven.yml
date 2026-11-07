@@ -11,6 +11,7 @@ variables:
 .maven:
   image: $JAVA_BUILD_IMAGE
   before_script:
+    - if [ -f cicd-deps.sh ]; then . ./cicd-deps.sh; fi
     - if [ -x ./mvnw ]; then MVN=./mvnw; else MVN=mvn; fi
   cache:
     key: maven-$CI_PROJECT_ID

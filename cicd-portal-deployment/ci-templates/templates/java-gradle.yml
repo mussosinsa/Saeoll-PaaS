@@ -12,6 +12,7 @@ variables:
 .gradle:
   image: $JAVA_BUILD_IMAGE
   before_script:
+    - if [ -f cicd-deps.sh ]; then . ./cicd-deps.sh; fi
     - if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
   cache:
     key: gradle-$CI_PROJECT_ID

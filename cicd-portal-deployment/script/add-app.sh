@@ -96,7 +96,7 @@ SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE
        DEV_NAMESPACE="$DEV_NS" PROD_NAMESPACE="$PROD_NS"
        DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT"
        SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE"
-       APP_PORT="$APP_PORT" APP_MEMORY_LIMIT="$APP_MEMORY_LIMIT" PROBES="$PROBES")
+       APP_PORT="$APP_PORT" APP_MEMORY_LIMIT="$APP_MEMORY_LIMIT" PROBES="$PROBES" CICD_NEXUS_URL="$CICD_NEXUS_URL")
 
 
 SCM_PENDING=""
@@ -138,6 +138,8 @@ elif [[ "$SOURCE" == scm ]]; then
     ci_file=$(mktemp)
     render_file "../starters/$TYPE/Jenkinsfile" "$ci_file" "${SUBST[@]}"
     cp "$ci_file" "$dir/Jenkinsfile"
+    # dependency repositories of the build (company Nexus, closed network): added when missing
+    [[ -f "$dir/cicd-deps.sh" || ! -f "../starters/$TYPE/cicd-deps.sh" ]] || cp "../starters/$TYPE/cicd-deps.sh" "$dir/"
   fi
   if [[ "${SKIP_STARTER:-0}" != 1 || -n "$ci_file" ]]; then
     added=0

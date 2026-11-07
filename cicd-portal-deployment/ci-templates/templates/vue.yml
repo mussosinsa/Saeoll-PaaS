@@ -11,6 +11,7 @@ variables:
 .node:
   image: $NODE_BUILD_IMAGE
   before_script:
+    - if [ -f cicd-deps.sh ]; then . ./cicd-deps.sh; fi
     - if [ -f package-lock.json ]; then npm ci; else npm install; fi
   cache:
     key: npm-$CI_PROJECT_ID

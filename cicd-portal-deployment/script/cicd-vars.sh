@@ -23,6 +23,9 @@ SCM_ADMIN_USER=${SCM_ADMIN_USER:-scmadmin}      # SCM-Manager admin used by K-Pa
 CICD_CHART_DIR=${CICD_CHART_DIR:-""}            # e.g. /opt/offline/charts (jenkins-<v>.tgz, argo-cd-<v>.tgz, gitlab-runner-<v>.tgz)
 JENKINS_IMAGE=${JENKINS_IMAGE:-""}              # e.g. harbor.<domain>/cicd-portal/jenkins:2.479.3-plugins (plugins built in)
 
+CICD_NEXUS_URL=${CICD_NEXUS_URL:-""}            # company Nexus for application dependencies, e.g. http://bootstrap.<domain>:8081
+                                                #   (Maven/Gradle/npm/Composer of the builds, cicd-deps.sh); empty: internet
+
 # JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
 JENKINS_NAMESPACE="cicd-jenkins"
 JENKINS_CHART_VERSION=""                        # empty: latest chart; pin after the first install

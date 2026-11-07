@@ -4,9 +4,13 @@
 ARG BASE_REGISTRY=docker.io/library
 
 FROM ${BASE_REGISTRY}/composer:2 AS vendor
+# NEXUS_URL (build-arg): packages from the company Nexus (cicd-deps.sh); empty: packagist.org
+ARG NEXUS_URL
+ENV CICD_DEPS_DIR=/tmp/cicd-deps
 WORKDIR /app
+COPY cicd-deps.sh /tmp/cicd-deps.sh
 COPY composer.json composer.lock* ./
-RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --no-scripts
+RUN . /tmp/cicd-deps.sh && composer install --no-dev --no-interaction --no-progress --prefer-dist --no-scripts
 
 # bookworm: the trixie images' xz (Landlock sandbox) fails under kaniko in docker-php-ext-install
 #   ("xz: Failed to enable the sandbox")
@@ -17,7 +21,7 @@ RUN docker-php-ext-install pdo_mysql opcache \
 WORKDIR /var/www/html
 COPY --from=vendor /app/vendor ./vendor
 COPY . .
-RUN rm -rf k8s Jenkinsfile Dockerfile \
+RUN rm -rf k8s Jenkinsfile Dockerfile cicd-deps.sh \
  && chown -R www-data:www-data /var/www/html
 USER www-data
 EXPOSE 8080

@@ -10,6 +10,11 @@ def harborHost = '{HARBOR_HOST}'
 def gitopsRepo = '{GITOPS_REPO_URL}'
 def baseRegistry = '{BASE_REGISTRY}'
 def kanikoImage = '{KANIKO_IMAGE}'
+// Company Nexus (CI/CD portal CICD_NEXUS_URL, closed network): cicd-deps.sh points Maven/Gradle/npm/Composer
+// to it in the build container and in the Dockerfile (build-arg NEXUS_URL). Empty: the public repositories.
+def nexusUrl = '{CICD_NEXUS_URL}'.startsWith('{') ? '' : '{CICD_NEXUS_URL}'
+def depsEnv = ["NEXUS_URL=${nexusUrl}"]
+def depsInit = '[ -f cicd-deps.sh ] && . ./cicd-deps.sh\n'
 def buildImage = '{CICD_DOCKERHUB}/maven:3.9-eclipse-temurin-17'
 
 def buildScript = '''
@@ -118,12 +123,12 @@ spec:
     }
 
     stage('Build') {
-      container('build') { withEnv(gitSafeDir) { sh buildScript } }
+      container('build') { withEnv(gitSafeDir + depsEnv) { sh depsInit + buildScript } }
     }
 
     stage('Test') {
       try {
-        container('build') { withEnv(gitSafeDir) { sh testScript } }
+        container('build') { withEnv(gitSafeDir + depsEnv) { sh depsInit + testScript } }
       } finally {
         if (junitReports) {
           try {
@@ -149,13 +154,13 @@ spec:
       container('kaniko') {
         withCredentials([usernamePassword(credentialsId: "${vendor}-harbor",
                                           usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASSWORD')]) {
-          withEnv(["IMAGE=${image}", "REGISTRY_HOST=${harborHost}", "BASE_REGISTRY=${baseRegistry}"]) {
+          withEnv(["IMAGE=${image}", "REGISTRY_HOST=${harborHost}", "BASE_REGISTRY=${baseRegistry}"] + depsEnv) {
             sh '''
               AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASSWORD" | base64 | tr -d '\\n')
               mkdir -p /kaniko/.docker
               printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY_HOST" "$AUTH" > /kaniko/.docker/config.json
               /kaniko/executor --context "$WORKSPACE" --dockerfile "$WORKSPACE/Dockerfile" \
-                --destination "$IMAGE" --build-arg "BASE_REGISTRY=$BASE_REGISTRY" \
+                --destination "$IMAGE" --build-arg "BASE_REGISTRY=$BASE_REGISTRY" --build-arg "NEXUS_URL=$NEXUS_URL" \
                 --registry-certificate "$REGISTRY_HOST=/etc/cicd-ca/ca.crt"
             '''
           }
