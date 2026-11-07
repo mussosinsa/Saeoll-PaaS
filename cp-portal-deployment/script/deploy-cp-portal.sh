@@ -578,7 +578,17 @@ main_pre_cp_portal() {
     fi
     sleep 5
   done
-  helm plugin install https://github.com/chartmuseum/helm-push.git
+  # helm-push (cm-push): already installed, from the offline bundle, else GitHub. HELM_PUSH_PLUGIN=<dir> is an
+  # installed plugin directory (with its bin/, the install hook would download it): copied, not installed.
+  if helm plugin list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx cm-push; then
+    echo "[SKIP] helm plugin cm-push is already installed"
+  elif [[ -n "${HELM_PUSH_PLUGIN:-}" ]]; then
+    [[ -x "$HELM_PUSH_PLUGIN/bin/helm-cm-push" ]] || { echo "[ERROR] $HELM_PUSH_PLUGIN/bin/helm-cm-push not found" >&2; return 1; }
+    mkdir -p "$(helm env HELM_PLUGINS)"
+    cp -r "$HELM_PUSH_PLUGIN" "$(helm env HELM_PLUGINS)/helm-push"
+  else
+    helm plugin install https://github.com/chartmuseum/helm-push.git
+  fi
   helm repo add $CHART_REPOSITORY_NAME $CHART_REPOSITORY_URL
 
   # Deploy the chaos-mesh

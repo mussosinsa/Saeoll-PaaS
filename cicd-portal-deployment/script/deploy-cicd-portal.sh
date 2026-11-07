@@ -31,6 +31,26 @@ if ((${#STEPS[@]} == 0)); then
 fi
 RUNNER_DESCRIPTION="cicd-k8s"
 
+
+# Helm chart reference: the online repository, or (closed network) CICD_CHART_DIR/<chart>-<version>.tgz from the
+# offline bundle (docs/install-offline.md). chart_ref <repo-name> <repo-url> <chart> <version>
+chart_ref() {
+  if [[ -n "${CICD_CHART_DIR:-}" ]]; then
+    [[ -n "$4" ]] || die "Closed network: pin the $3 chart version in cicd-vars.sh (CICD_CHART_DIR=$CICD_CHART_DIR)."
+    [[ -f "$CICD_CHART_DIR/$3-$4.tgz" ]] || die "$CICD_CHART_DIR/$3-$4.tgz not found (offline bundle charts/)."
+    echo "$CICD_CHART_DIR/$3-$4.tgz"
+    return
+  fi
+  helm repo add "$1" "$2" >/dev/null 2>&1 || true
+  helm repo update "$1" >/dev/null
+  echo "$1/$3"
+}
+# --version for a repository chart (a chart file from the bundle has its version in the name)
+online_version() {
+  [[ -z "${CICD_CHART_DIR:-}" && -n "$1" ]] && echo "--version $1"
+  return 0
+}
+
 step_preflight() {
   info "Preflight"
   local failed=0 cmd
@@ -194,9 +214,8 @@ step_runner() {
     RUNNER_NAMESPACE="$RUNNER_NAMESPACE" CICD_DOCKERHUB="$CICD_DOCKERHUB" \
     RUNNER_BUILD_MEMORY_LIMIT="$RUNNER_BUILD_MEMORY_LIMIT" CA_SECRET_NAME="$CA_SECRET_NAME" \
     SECURITY_PULL_SECRETS="$sec_pull" SECURITY_VOLUMES="$sec_volumes"
-  helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
-  helm repo update gitlab >/dev/null
-  helm upgrade --install gitlab-runner gitlab/gitlab-runner --version "$GITLAB_RUNNER_CHART_VERSION" \
+  helm upgrade --install gitlab-runner "$(chart_ref gitlab https://charts.gitlab.io gitlab-runner "$GITLAB_RUNNER_CHART_VERSION")" \
+    $(online_version "$GITLAB_RUNNER_CHART_VERSION") \
     -n "$RUNNER_NAMESPACE" -f "$VALUES_DIR/gitlab-runner.yaml"
   # The registration secret changed: restart so the runner picks it up
   kubectl -n "$RUNNER_NAMESPACE" rollout restart deployment/gitlab-runner >/dev/null
@@ -230,10 +249,16 @@ step_jenkins() {
   else
     warn "JENKINS_SSO=false: local admin (kubectl -n $JENKINS_NAMESPACE get secret jenkins -o jsonpath='{.data.jenkins-admin-password}' | base64 -d)"
   fi
-  helm repo add jenkins https://charts.jenkins.io >/dev/null 2>&1 || true
-  helm repo update jenkins >/dev/null
-  helm upgrade --install jenkins jenkins/jenkins ${JENKINS_CHART_VERSION:+--version "$JENKINS_CHART_VERSION"} \
-    -n "$JENKINS_NAMESPACE" "${values[@]}"
+  if [[ -n "${JENKINS_IMAGE:-}" ]]; then
+    # Closed network: controller image with the plugins built in (offline bundle) - no plugin download
+    local img=${JENKINS_IMAGE%:*} tag=${JENKINS_IMAGE##*:}
+    printf 'controller:\n  image:\n    registry: "%s"\n    repository: "%s"\n    tag: "%s"\n  installPlugins: false\n  installLatestPlugins: false\n  additionalPlugins: []\n' \
+      "${img%%/*}" "${img#*/}" "$tag" > "$VALUES_DIR/jenkins-image.yaml"
+    values+=(-f "$VALUES_DIR/jenkins-image.yaml")
+    info "Jenkins controller image $JENKINS_IMAGE (plugins built in)"
+  fi
+  helm upgrade --install jenkins "$(chart_ref jenkins https://charts.jenkins.io jenkins "$JENKINS_CHART_VERSION")" \
+    $(online_version "$JENKINS_CHART_VERSION") -n "$JENKINS_NAMESPACE" "${values[@]}"
   # A crash-looping StatefulSet pod is not replaced by the upgrade (and keeps old JCasC
   # files in its emptyDir): recreate it so the new configuration is used.
   local restarts
@@ -278,9 +303,8 @@ step_argocd() {
   secret_values=$(mktemp)
   chmod 600 "$secret_values"
   printf 'configs:\n  secret:\n    extra:\n      oidc.keycloak.clientSecret: "%s"\n' "$oidc_secret" >"$secret_values"
-  helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
-  helm repo update argo >/dev/null
-  helm upgrade --install argocd argo/argo-cd --version "$ARGOCD_CHART_VERSION" \
+  helm upgrade --install argocd "$(chart_ref argo https://argoproj.github.io/argo-helm argo-cd "$ARGOCD_CHART_VERSION")" \
+    $(online_version "$ARGOCD_CHART_VERSION") \
     -n "$ARGOCD_NAMESPACE" -f "$VALUES_DIR/argocd.yaml" -f "$secret_values" || { rm -f "$secret_values"; exit 1; }
   rm -f "$secret_values"
   # Wait for every component (server, repo-server, controller, redis), not only the UI

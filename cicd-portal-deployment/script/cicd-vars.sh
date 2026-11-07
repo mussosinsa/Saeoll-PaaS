@@ -19,6 +19,10 @@ SCM_NAMESPACE="cp-source-control"
 SCM_INTERNAL_URL="http://cp-source-control-manager-service.cp-source-control.svc.cluster.local:8080/scm"
 SCM_ADMIN_USER=${SCM_ADMIN_USER:-scmadmin}      # SCM-Manager admin used by K-PaaS; password: env SCM_ADMIN_PASSWORD
 
+# CLOSED NETWORK (docs/install-offline.md): charts and the Jenkins image come from the offline bundle
+CICD_CHART_DIR=${CICD_CHART_DIR:-""}            # e.g. /opt/offline/charts (jenkins-<v>.tgz, argo-cd-<v>.tgz, gitlab-runner-<v>.tgz)
+JENKINS_IMAGE=${JENKINS_IMAGE:-""}              # e.g. harbor.<domain>/cicd-portal/jenkins:2.479.3-plugins (plugins built in)
+
 # JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
 JENKINS_NAMESPACE="cicd-jenkins"
 JENKINS_CHART_VERSION=""                        # empty: latest chart; pin after the first install
