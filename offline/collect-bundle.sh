@@ -295,6 +295,8 @@ fi
 
 # manifest ------------------------------------------------------------------------------------------------------------
 cp "$SCRIPT_DIR/offline-vars.sh" "$OUT/"
+# the offline scripts themselves: the bootstrap VM runs them from the bundle (no git needed there)
+mkdir -p "$OUT/scripts" && cp "$SCRIPT_DIR"/*.sh "$OUT/scripts/" && chmod 755 "$OUT"/scripts/*.sh
 (cd "$OUT" && find . -type f ! -name SHA256SUMS ! -path './images/oci/blobs/*' -print0 | xargs -0 sha256sum > SHA256SUMS)
 cat > "$OUT/README.txt" <<EOF
 Offline bundle for the K-PaaS + CI/CD portal closed-network installation

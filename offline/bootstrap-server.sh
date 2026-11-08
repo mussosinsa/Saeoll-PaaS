@@ -56,7 +56,11 @@ done
 if [[ -f "$BUNDLE/files/helm-push-plugin.tar.gz" ]]; then
   mkdir -p "$BOOTSTRAP_DATA/www/files/helm-push" && tar xzf "$BUNDLE/files/helm-push-plugin.tar.gz" -C "$BOOTSTRAP_DATA/www/files"
 fi
-ok "files, charts, repository bundle -> $BOOTSTRAP_DATA/www"
+# the node scripts, so new servers get them with curl before git is installed:
+#   curl -fO http://<bootstrap>:8080/offline/node-setup.sh -fO http://<bootstrap>:8080/offline/offline-vars.sh
+mkdir -p "$BOOTSTRAP_DATA/www/offline"
+cp "$SCRIPT_DIR/node-setup.sh" "$SCRIPT_DIR/offline-vars.sh" "$BOOTSTRAP_DATA/www/offline/"
+ok "files, charts, repository bundle, node scripts -> $BOOTSTRAP_DATA/www"
 
 # 3. registry and file server containers ----------------------------------------------------------------------------------
 load_local() { # image -> containers-storage from the bundle

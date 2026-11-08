@@ -1,7 +1,7 @@
 # 인터넷이 차단된 폐쇄망에 새로 설치하기
 
 K-PaaS(CP-Portal, 소스 컨트롤, 파이프라인)와 CI/CD 포털(Jenkins, **GitLab**, Argo CD, 콘솔, 보안 검사)을
-**인터넷이 없는 폐쇄망**에 새로 설치하는 절차다. 도메인 방식([도메인 방식 재설치 가이드](install-with-domain.md))과 함께 쓴다.
+**인터넷이 없는 폐쇄망**에 새로 설치하는 절차다. 처음 설치한다면 단계별 확인이 있는 [폐쇄망 설치 따라하기 (초보자용)](offline-install-beginner.md)를 따른다. 도메인 방식([도메인 방식 재설치 가이드](install-with-domain.md))과 함께 쓴다.
 
 ## 0. 구성과 원리
 
@@ -98,14 +98,10 @@ cd /data/offline-bundle && sha256sum -c --quiet SHA256SUMS && echo OK
 3. 묶음 안의 저장소에서 스크립트를 꺼내 실행한다.
 
 ```bash
-git clone /data/offline-bundle/Saeoll-PaaS.bundle ~/Saeoll-PaaS
+cd /data/offline-bundle/scripts
 ```
 
-`git`이 없으면 먼저 설치 DVD 저장소로 설치한다(`dnf install -y git`).
-
-```bash
-cd ~/Saeoll-PaaS/offline
-```
+(묶음의 `scripts/`에 offline 스크립트가 들어 있어 git 없이 실행한다.)
 
 ```bash
 sudo BOOTSTRAP_HOST=bootstrap.kpaas.example.co.kr ./bootstrap-server.sh /data/offline-bundle

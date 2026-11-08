@@ -5,7 +5,8 @@
 # the builds really download.
 #
 # Usage: ./collect-app-deps.sh <out-dir> <source> [source ...]
-#   source : a directory or a git URL (cloned) of an application; also the starters, e.g.
+#   source : a directory, a bare repository (backup repos/scm/*.git: main and develop) or a git URL of an
+#            application; also the starters, e.g.
 #            ../cicd-portal-deployment/starters/java-gradle
 #   out-dir/maven     Maven repository layout (Maven: verify, Gradle: build -> converted from the Gradle cache,
 #                     plus the Maven / Gradle wrapper distributions) -> maven-offline
@@ -38,11 +39,27 @@ run() { # image workdir command  (the work copy at /src, caches under $WORK)
 }
 mkdir -p "$WORK/cache"
 
-n=0
+# a bare repository (backup-before-reinstall.sh repos/scm/*.git): its main and develop branches
+expanded=()
 for source in "$@"; do
+  if [[ -d "$source" && -f "$source/HEAD" && -d "$source/objects" && ! -d "$source/.git" ]]; then
+    found=0
+    for b in main master develop; do
+      git --git-dir="$source" rev-parse -q --verify "refs/heads/$b" >/dev/null && { expanded+=("$source#$b"); found=1; }
+    done
+    ((found)) || expanded+=("$source#")
+  else
+    expanded+=("$source")
+  fi
+done
+n=0
+for source in "${expanded[@]}"; do
   n=$((n + 1))
   src="$WORK/src$n"
-  if [[ -d "$source" ]]; then
+  if [[ "$source" == *.git#* ]]; then
+    branch=${source##*#}; source=${source%#*}
+    git clone -q ${branch:+--branch "$branch"} "$source" "$src" 2>/dev/null || { FAILED+=("$source $branch (clone)"); continue; }
+  elif [[ -d "$source" ]]; then
     cp -a "$source" "$src"
   else
     git clone -q --depth 1 "$source" "$src" || { FAILED+=("$source (clone)"); continue; }
