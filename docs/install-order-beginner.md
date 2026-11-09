@@ -307,3 +307,5 @@ JENKINS_USER=admin JENKINS_API_TOKEN="$JENKINS_API_TOKEN" ./deploy-cicd-portal.s
 ```bash
 tail -50 cicd-portal-deploy.log
 ```
+
+> CI/CD 포털이 기존 K-PaaS에서 읽는 정보와 `cicd-vars.sh`·환경 변수 전체 목록: [CI/CD 포털 환경 정보와 환경 변수](cicd-portal-env-reference.md)
