@@ -1,6 +1,6 @@
 # CI/CD 포털 처음 설치하기 — 기존 K-PaaS 환경 (초보자용)
 
-**대상 환경**: `cp-portal-deployment`, `cp-source-control-deployment`, `cp-pipeline-deployment`가 이미 설치된 K-PaaS 클러스터.
+**대상 환경**: `cp-portal-deployment`(필수)와 `cp-source-control-deployment`(SCM + Jenkins 방식일 때)가 설치된 K-PaaS 클러스터. `cp-pipeline-deployment`는 선택이다. 전체 설치 순서·명령은 [설치 순서와 명령 정리](../../docs/install-order-beginner.md).
 여기에 `cicd-portal-deployment`(Jenkins + Argo CD + CI/CD 콘솔 + 보안 검사)를 **처음 설치하고 첫 서비스를 배포**하기까지를
 순서대로 설명한다.
 

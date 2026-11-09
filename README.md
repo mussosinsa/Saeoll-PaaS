@@ -79,6 +79,8 @@
 이 저장소에 포함된 CP-Portal 배포 파일을 사용하려면 Kubernetes 클러스터 구성 후
 [Rocky Linux 9.7 CP-Portal 배포 가이드](cp-portal-deployment/README.md)를 따른다.
 
+**설치 순서와 명령을 한눈에**: [설치 순서와 명령 정리 (초보자용)](docs/install-order-beginner.md) — ① CP-Portal → ② 소스 컨트롤 → ③ CI/CD 포털 (파이프라인은 선택).
+
 서버를 초기화하고 **자체 도메인**(주소에 IP가 드러나지 않는 방식)으로 전체를 다시 설치하려면
 [도메인 방식 재설치 가이드](docs/install-with-domain.md)를 따른다 (백업 → OS 재설치 → 설치 → 복원).
 인터넷이 차단된 **폐쇄망**에 설치하려면 [폐쇄망 설치 가이드](docs/install-offline.md)를 함께 따른다 (반입 묶음 → 부트스트랩 VM → 설치).
