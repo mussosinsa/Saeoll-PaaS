@@ -109,6 +109,8 @@ metadata:
     app: gitlab
 spec:
   replicas: 1
+  # first start (database migrations) can take 15 minutes: the default deadline (10 minutes) would fail the rollout
+  progressDeadlineSeconds: 1800
   strategy:
     type: Recreate
   selector:
@@ -122,6 +124,22 @@ spec:
         # K-PaaS Kyverno default NetworkPolicy (cp-default-pod-shared-policy)
         cp-role: shared
     spec:
+      # GitLab's reconfigure changes the mode of /etc/gitlab/trusted-certs/* (Errno::EROFS on a read-only
+      # Secret mount): the K-PaaS CA is copied into the writable config volume before GitLab starts.
+      initContainers:
+        - name: trusted-certs
+          image: {GITLAB_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "mkdir -p /etc/gitlab/trusted-certs && cp /etc/cicd-ca/ca.crt /etc/gitlab/trusted-certs/kpaas-ca.crt && chmod 644 /etc/gitlab/trusted-certs/kpaas-ca.crt"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gitlab
+            - name: ca
+              mountPath: /etc/cicd-ca
+              readOnly: true
       containers:
         - name: gitlab
           image: {GITLAB_IMAGE}
@@ -177,10 +195,6 @@ spec:
               mountPath: /var/opt/gitlab
             - name: omnibus-config
               mountPath: /etc/gitlab-omnibus
-              readOnly: true
-            - name: ca
-              mountPath: /etc/gitlab/trusted-certs/kpaas-ca.crt
-              subPath: ca.crt
               readOnly: true
             - name: shm
               mountPath: /dev/shm
