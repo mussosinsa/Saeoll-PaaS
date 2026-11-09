@@ -226,6 +226,9 @@ cd ~/Saeoll-PaaS/offline && ./load-to-harbor.sh /opt/offline
 Harbor에 `cicd-portal`(콘솔·스캐너), `cicd-mirror`(Jenkins + 플러그인), `base-images`(앱 base 이미지) 프로젝트가 생기고,
 마지막에 **CI/CD 포털 설정 값**이 출력된다(5-3에서 사용). 이 스크립트는 `/opt/offline`에 `images/`도 있어야 한다(묶음 전체 복사).
 
+> Harbor 이미지만 따로 옮길 때(이미 설치된 다른 K-PaaS로, DB·언어 base 이미지 포함)는
+> [Harbor 이미지 백업 → 다른 K-PaaS Harbor 등록](harbor-image-migration.md)의 `harbor-export.sh`를 쓴다.
+
 ### 5-2. 소스 컨트롤, 파이프라인
 
 ```bash
