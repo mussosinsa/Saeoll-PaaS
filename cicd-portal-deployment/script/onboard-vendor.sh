@@ -289,6 +289,12 @@ $(for ns in "${NAMESPACES[@]}"; do printf '    - server: https://kubernetes.defa
         - p, proj:$VENDOR:developer, logs, get, $VENDOR/*, allow
 EOF
 ok "Argo CD project $VENDOR (repo $GITOPS_URL)"
+if [[ "$SOURCE" == scm && -n "$ALL_USERS" ]]; then
+  # members -> 참여자 (쓰기) of the vendor's SCM repositories; members who never signed in to scm.<domain> are
+  # recorded as pending and the console applies it after their first login (members tab: SCM 저장소 권한)
+  DATABASE_USER_PASSWORD="$DATABASE_USER_PASSWORD" $API scm-member-sync "$VENDOR" "$ALL_USERS" --only-new \
+    --keep "$CI_USER" >/dev/null || warn "SCM permissions of the members not applied - use 'SCM 권한 다시 적용' in the console"
+fi
 
 echo
 if ((${#TODO[@]})); then

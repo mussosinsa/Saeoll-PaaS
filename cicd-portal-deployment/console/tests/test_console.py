@@ -23,7 +23,7 @@ os.environ.update({
     "JENKINS_HOST": "jenkins.10.0.0.1.nip.io", "JENKINS_URL": "https://jenkins.10.0.0.1.nip.io",
     "GITLAB_HOST": "gitlab.10.0.0.1.nip.io", "GITLAB_URL": "https://gitlab.10.0.0.1.nip.io",
     "HARBOR_URL": "https://harbor.10.0.0.1.nip.io", "CONSOLE_INSECURE_COOKIE": "1",
-    "CICD_SCRIPT_DIR": str(HERE.parent.parent / "script"),
+    "CICD_SCRIPT_DIR": str(HERE.parent.parent / "script"), "CICD_SCM_RECONCILE_MINUTES": "0",
 })
 
 from cicd_console import auth, create_app, jobs, quality, services  # noqa: E402

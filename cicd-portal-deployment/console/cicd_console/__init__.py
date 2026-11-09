@@ -40,6 +40,9 @@ def create_app():
     app.register_blueprint(bp)
     quality_views.register(app)
 
+    # vendor members waiting for their first scm.<domain> / GitLab login: permissions applied in the background
+    services.start_reconciler(app.logger)
+
     @app.route("/healthz")
     def healthz():
         return "ok"

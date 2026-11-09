@@ -279,7 +279,10 @@ else
   echo "The dev application stays Degraded until the first develop build pushes an image."
 fi
 if [[ -n "$SCM_PENDING" ]]; then
+  # the console gives them 쓰기 권한 after their first login (members tab: SCM 저장소 권한 = 첫 로그인 대기)
+  $API scm-members-pending "$VENDOR" "$SCM_PENDING" || true
   echo
-  echo "[TODO] Not yet signed in to https://scm.$HOST_DOMAIN: $SCM_PENDING"
-  echo "       After their first login (and git password in 내정보 관리), run this again (same values) to add their 쓰기 권한."
+  echo "[INFO] Not yet signed in to https://scm.$HOST_DOMAIN: $SCM_PENDING"
+  echo "       The CI/CD console adds their 쓰기 권한 after their first login (members tab, at most 10 minutes;"
+  echo "       or 'SCM 권한 다시 적용'). git push uses the git password set in scm.$HOST_DOMAIN 내정보 관리."
 fi

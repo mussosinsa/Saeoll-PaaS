@@ -175,17 +175,32 @@ def vendor_members(vendor):
             errors=[], back=url_for("main.vendor_page", vendor=vendor) + "#members"))
         resp.headers["Cache-Control"] = "no-store"
         return resp
-    if not USERS_RE.match(username) or "," in username or action not in ("add", "remove"):
+    if action == "scm-sync":
+        # SCM 권한 다시 적용: every member gets the permissions on every repository of the vendor
+        report, err = _try(services.scm_reconcile, vendor, True)
+        _audit("member-scm-sync", vendor)
+        if err:
+            flash(err, "error")
+        else:
+            msgs = (report or {}).get(vendor) or []
+            for category, msg in msgs:
+                flash(msg, category)
+            if not msgs:
+                flash("적용할 구성원이 없습니다.", "ok")
+        return redirect(url_for("main.vendor_page", vendor=vendor) + "#members")
+    level = request.form.get("level", "WRITE")
+    if not USERS_RE.match(username) or "," in username or action not in ("add", "remove") \
+            or level not in ("READ", "WRITE"):
         flash("사용자 ID를 확인하세요.", "error")
     else:
-        note, err = _try(services.change_member, v, username, action == "add")
-        _audit(f"member-{action}", f"{vendor}/{username}")
+        notes, err = _try(services.change_member, v, username, action == "add", level)
+        _audit(f"member-{action}", f"{vendor}/{username}" + (f" ({level})" if action == "add" else ""))
         if err:
             flash(err, "error")
         else:
             flash(f"{username}: {'구성원에 추가' if action == 'add' else '구성원에서 제외'}했습니다.", "ok")
-            if note:
-                flash(note, "warn")
+            for category, msg in notes or []:
+                flash(msg, category)
     return redirect(url_for("main.vendor_page", vendor=vendor) + "#members")
 
 

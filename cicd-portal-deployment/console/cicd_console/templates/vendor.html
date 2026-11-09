@@ -54,10 +54,18 @@
     {% if members_err %}<div class="alert error">구성원 조회 실패: {{ members_err }}</div>{% endif %}
     <div class="table-wrap">
     <table class="grid">
-      <thead><tr><th>사용자 ID</th><th>이름</th><th>이메일</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
+      {% set scm_state = v.scm_members or {} %}
+      <thead><tr><th>사용자 ID</th><th>이름</th><th>이메일</th><th>{{ 'SCM 저장소 권한' if v.source == 'scm' else 'GitLab 그룹' }}</th>{% if is_admin %}<th></th>{% endif %}</tr></thead>
       <tbody>
       {% for username, email, name in members %}
         <tr><td>{{ username }}</td><td>{{ name }}</td><td>{{ email }}</td>
+          {% set st = scm_state.get(username) %}
+          <td>{% if username == v.ci_user %}<span class="dim">CI 계정</span>
+            {% elif not st %}<span class="dim" title="이 기능 이전에 추가된 구성원: 'SCM 권한 다시 적용'으로 적용">미적용</span>
+            {% elif st.state == 'pending' %}<span class="badge s-pending" title="{{ st.error }}">첫 로그인 대기</span>
+            {% elif st.state == 'partial' %}<span class="badge s-failed" title="{{ st.error }}">일부 실패</span>
+            {% elif v.source == 'gitlab' %}<span class="badge s-success">Developer</span>
+            {% else %}<span class="badge s-success">{{ '보기' if st.level == 'READ' else '쓰기' }}</span> <span class="dim">저장소 {{ st.repos }}개</span>{% endif %}</td>
           {% if is_admin %}<td class="r">
             <form method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}" data-confirm="{{ username }}을(를) 구성원에서 제외할까요?">
               {{ csrf() }}<input type="hidden" name="action" value="remove"><input type="hidden" name="username" value="{{ username }}">
@@ -68,7 +76,7 @@
               <button class="btn small">비밀번호 초기화</button>
             </form></td>{% endif %}
         </tr>
-      {% else %}<tr><td colspan="4" class="dim">구성원이 없습니다.</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="5" class="dim">구성원이 없습니다.</td></tr>{% endfor %}
       </tbody>
     </table>
     </div>
@@ -76,10 +84,18 @@
     <form class="inline-form" method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}">
       {{ csrf() }}<input type="hidden" name="action" value="add">
       <label>사용자 추가 <input name="username" required pattern="[A-Za-z0-9._@-]+" placeholder="Keycloak 사용자 ID"></label>
+      {% if v.source == 'scm' %}<label>SCM 권한 <select name="level"><option value="WRITE">쓰기</option><option value="READ">보기</option></select></label>{% endif %}
       <button class="btn primary">추가</button>
     </form>
+    <form class="inline-form" method="post" action="{{ url_for('main.vendor_members', vendor=v.name) }}" data-confirm="모든 구성원에게 {{ v.name }} 저장소 권한을 다시 적용할까요? (기존 권한은 낮추지 않습니다)">
+      {{ csrf() }}<input type="hidden" name="action" value="scm-sync">
+      <button class="btn">{{ 'SCM 권한 다시 적용' if v.source == 'scm' else 'GitLab 권한 다시 적용' }}</button>
+    </form>
     <p class="hint">추가된 사용자는 Jenkins·Argo CD·이 콘솔에서 업체 앱을 조회하고 dev 빌드·배포를 할 수 있습니다. 그룹 변경 후에는 각 화면에서 다시 로그인해야 반영됩니다.
-      {% if v.source == 'scm' %}SCM 저장소 쓰기 권한은 <code>scm.{{ host_domain }}</code>에서 참여자로 따로 지정합니다.{% endif %}</p>
+      {% if v.source == 'scm' %}SCM: 추가하면 업체 저장소(<code>{{ v.name }}-*</code>, gitops 제외) 전체에 참여자 권한(기본 쓰기)을 주고, 제외하면 회수합니다.
+      <code>scm.{{ host_domain }}</code>에 한 번도 로그인하지 않은 사용자는 '첫 로그인 대기'로 기록되고, 첫 로그인 후 콘솔이 자동으로 적용합니다.
+      git push에는 <code>scm.{{ host_domain }}</code> 내정보 관리에서 정한 git 비밀번호를 씁니다.
+      {% else %}GitLab에 아직 로그인하지 않은 사용자는 '첫 로그인 대기'로 기록되고 첫 로그인 후 자동으로 그룹에 추가됩니다.{% endif %}</p>
     {% endif %}
   </div>
 </section>

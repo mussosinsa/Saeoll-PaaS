@@ -562,6 +562,21 @@ class ScmDB:
                 return "name"
         return None
 
+    def permission_values(self, levels):
+        """{level: REPO_PERMITION.PERMISSION value} or None when the DB does not use the SCM-Manager names."""
+        values = {row[0] for row in self.sql("SELECT DISTINCT PERMISSION FROM REPO_PERMITION")}
+        value_of = {v.upper(): v for v in values}
+        # scm.<domain> stores the SCM-Manager permission names (OWNER, WRITE seen in the DB); a level that no
+        # repository uses yet (e.g. READ = 보기) is written the same way
+        if values and set(value_of) <= set(SCM.LEVELS):
+            for level in SCM.LEVELS:
+                value_of.setdefault(level, level)
+        return value_of if all(level in value_of for level in levels) else None
+
+    def users(self):
+        """Accounts of scm.<domain> (created at the first login)."""
+        return {row[0] for row in self.sql("SELECT DISTINCT USER_ID FROM SC_INSTANCE_USER")}
+
     def register(self, scm_repo, scm_repos, description, owner, wanted):
         """Insert SC_REPOSITORY / REPO_PERMITION rows like scm.<domain> does. Returns (registered, pending users)."""
         name = scm_repo["name"]
@@ -591,21 +606,15 @@ class ScmDB:
                      f"{self.lit(created)})")
             repo_no = self.sql(f"SELECT REPO_NO FROM SC_REPOSITORY WHERE REPO_NAME={self.lit(name)}")[0][0]
             log(f"[OK]   {name} registered in scm.<domain> (owner {owner})")
-        values = {row[0] for row in self.sql("SELECT DISTINCT PERMISSION FROM REPO_PERMITION")}
-        value_of = {v.upper(): v for v in values}
-        # scm.<domain> stores the SCM-Manager permission names (OWNER, WRITE seen in the DB); a level that no
-        # repository uses yet (e.g. READ = 보기) is written the same way
-        if values and set(value_of) <= set(SCM.LEVELS):
-            for level in SCM.LEVELS:
-                value_of.setdefault(level, level)
-        if not all(level in value_of for level in set(wanted.values()) | {"OWNER"}):
-            log(f"[WARN] REPO_PERMITION values {sorted(values)} are not SCM-Manager permission names - "
+        value_of = self.permission_values(set(wanted.values()) | {"OWNER"})
+        if value_of is None:
+            log(f"[WARN] REPO_PERMITION values are not SCM-Manager permission names - "
                 f"참여자 of {name} not registered; add them in scm.<domain>")
             return True, []
         # like scm.<domain>: the owner (creator) is a 참여자 with OWNER
         wanted = {owner: "OWNER", **{u: lv for u, lv in wanted.items() if u != owner}}
         have = {row[0] for row in self.sql(f"SELECT USER_ID FROM REPO_PERMITION WHERE REPO_NO={int(repo_no)}")}
-        known = {row[0] for row in self.sql("SELECT DISTINCT USER_ID FROM SC_INSTANCE_USER")}
+        known = self.users()
         pending = []
         for user, level in wanted.items():
             if user not in known:
@@ -773,6 +782,164 @@ def vendor_accounts(vendor, ci_user, extra, apply):
         if db_tables:
             log(f"[OK]   {name} removed from scm.<domain> ({', '.join(db_tables)})")
     return [n for n, _ in delete]
+
+
+# ------------------------------------------- vendor members -> SCM permissions ---
+SCM_MEMBERS_ANNOTATION = "cicd.k-paas.org/scm-members"
+SCM_USER_RE = ScmDB.NAME_RE
+LEVEL_RANK = {"READ": 1, "WRITE": 2, "OWNER": 3}
+
+
+def scm_member_repos(vendor, repos, others=()):
+    """Application repositories of a vendor that its members work on: <vendor>-*, without <vendor>-gitops
+    (Jenkins/Argo CD only) and without the repositories of other vendors named <vendor>-... (others)."""
+    other = tuple(f"{o}-" for o in others if o != vendor and o.startswith(f"{vendor}-"))
+    return [r for r in repos if r.get("name", "").startswith(f"{vendor}-") and r.get("name") != f"{vendor}-gitops"
+            and not r["name"].startswith(other)]
+
+
+def scm_member_sync(vendor, users, level="WRITE", revoke=False, keep=(), others=()):
+    """Vendor members <-> SCM repositories (cicd-<vendor> group of the CI/CD console).
+
+    grant : every user gets at least `level` on the vendor's application repositories, in SCM-Manager (git) and
+            in scm.<domain> (cp_scm REPO_PERMITION = 참여자). Existing permissions are never lowered. A user
+            without an scm.<domain> account (never signed in there) is 'pending' and nothing is written for it.
+    revoke: the users' own permissions on those repositories are removed; OWNER (the creator of a repository
+            in scm.<domain>) is kept and reported, so an operator can hand the repository over.
+    keep  : accounts never touched (CI account, SCM admin).
+    Returns {user: {"state": "ok"|"pending"|"partial"|"removed", "repos": n, "owner": [...], "error": ""}}."""
+    scm = SCM()
+    keep = {k for k in keep if k} | {ENV.get("SCM_ADMIN_USER", "scmadmin"), "scmadmin"}
+    users = sorted({u.lower() for u in users if u and u.lower() not in keep and SCM_USER_RE.match(u)})
+    result = {u: {"state": "removed" if revoke else "ok", "repos": 0, "owner": [], "error": ""} for u in users}
+    if not users:
+        return result
+    repos = scm_member_repos(vendor, scm.repositories(), others)
+    db = ScmDB() if ENV.get("DATABASE_USER_PASSWORD") else None
+    if not revoke:
+        scm_users = scm.users()
+        db_users = db.users() if db else None
+        for u in users:
+            missing = [where for where, known in (("SCM-Manager", scm_users), ("scm.<domain>", db_users))
+                       if known is not None and u not in known]
+            if missing:
+                result[u].update(state="pending", error=f"no account in {', '.join(missing)} (first login)")
+        active = [u for u in users if result[u]["state"] == "ok"]
+    else:
+        active = users
+    # SCM-Manager: one PUT per repository
+    for repo in repos:
+        perms = list(repo.get("permissions") or [])
+        changed = False
+        for u in active:
+            own = [p for p in perms if p.get("name") == u and not p.get("groupPermission")]
+            have = max((LEVEL_RANK.get(p.get("type", ""), 0) for p in own), default=0)
+            if revoke:
+                if have == LEVEL_RANK["OWNER"]:
+                    result[u]["owner"].append(repo["name"])
+                elif own:
+                    perms = [p for p in perms if p not in own]
+                    changed = True
+                    result[u]["repos"] += 1
+            elif have >= LEVEL_RANK[level]:
+                result[u]["repos"] += 1
+            else:
+                perms = [p for p in perms if p not in own] + [{"name": u, "type": level, "groupPermission": False}]
+                changed = True
+                result[u]["repos"] += 1
+        if changed:
+            try:
+                request("PUT", f"{scm.base}/repositories/{q(repo['id'])}", scm.headers, {**repo, "permissions": perms})
+            except HTTPError as e:
+                for u in active:
+                    result[u]["state"] = "partial"
+                    result[u]["error"] = f"SCM-Manager {repo['name']}: HTTP {e.code}"
+                log(f"[WARN] SCM-Manager {repo['name']}: permissions not changed ({str(e)[:200]})")
+    # scm.<domain> list (참여자)
+    if db and repos and active:
+        names = ", ".join(db.lit(r["name"]) for r in repos)
+        rows = db.sql(f"SELECT REPO_NO, REPO_NAME FROM SC_REPOSITORY WHERE REPO_NAME IN ({names})")
+        if rows:
+            nos = ", ".join(str(int(no)) for no, _ in rows)
+            value_of = db.permission_values({level, "OWNER"} if not revoke else {"OWNER"})
+            if value_of is None:
+                log("[WARN] REPO_PERMITION values are not SCM-Manager permission names - 참여자 not changed in "
+                    "scm.<domain> (git access works)")
+            else:
+                users_sql = ", ".join(db.lit(u) for u in active)
+                if revoke:
+                    db.sql(f"DELETE FROM REPO_PERMITION WHERE REPO_NO IN ({nos}) AND USER_ID IN ({users_sql}) "
+                           f"AND PERMISSION <> {db.lit(value_of['OWNER'])}")
+                else:
+                    have = {(no, u): (p or "").upper() for no, u, p in
+                            db.sql(f"SELECT REPO_NO, USER_ID, PERMISSION FROM REPO_PERMITION WHERE REPO_NO IN ({nos}) "
+                                   f"AND USER_ID IN ({users_sql})")}
+                    for no, _ in rows:
+                        for u in active:
+                            cur = have.get((no, u))
+                            if cur is None:
+                                db.sql(f"INSERT INTO REPO_PERMITION (REPO_NO, USER_ID, PERMISSION) VALUES "
+                                       f"({int(no)}, {db.lit(u)}, {db.lit(value_of[level])})")
+                            elif LEVEL_RANK.get(cur, 0) < LEVEL_RANK[level]:
+                                db.sql(f"UPDATE REPO_PERMITION SET PERMISSION={db.lit(value_of[level])} "
+                                       f"WHERE REPO_NO={int(no)} AND USER_ID={db.lit(u)}")
+    word = {"READ": "보기", "WRITE": "쓰기"}.get(level, level)
+    for u, r in result.items():
+        if r["state"] == "pending":
+            log(f"[INFO] {u}: not signed in to scm.<domain> yet - {word} 권한 대기 (applied after the first login)")
+        elif revoke:
+            log(f"[OK]   {u}: permissions removed from {r['repos']} SCM repositories"
+                + (f" (OWNER kept: {', '.join(r['owner'])})" if r["owner"] else ""))
+        else:
+            log(f"[OK]   {u}: {word} 권한 on {r['repos']} SCM repositories of {vendor}")
+    return result
+
+
+def vendor_scm_state(vendor, update=None, remove=()):
+    """SCM permission state of the vendor members, kept on the AppProject (annotation cicd.k-paas.org/scm-members,
+    JSON {user: {level, state, repos, error, at}}). update/remove change it; returns the new state."""
+    ns = ENV.get("ARGOCD_NAMESPACE", "cicd-argocd")
+    out = subprocess.run(["kubectl", "-n", ns, "get", "appproject", vendor, "-o", "json"],
+                         capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise SystemExit(f"[ERROR] AppProject {vendor}: {out.stderr.strip()[:300]}")
+    raw = (json.loads(out.stdout)["metadata"].get("annotations") or {}).get(SCM_MEMBERS_ANNOTATION) or "{}"
+    try:
+        state = json.loads(raw)
+    except ValueError:
+        state = {}
+    if update is None and not remove:
+        return state
+    for u in remove:
+        state.pop(u, None)
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for u, entry in (update or {}).items():
+        state[u] = {**state.get(u, {}), **entry, "at": now}
+    patch = {"metadata": {"annotations": {SCM_MEMBERS_ANNOTATION: json.dumps(state, sort_keys=True,
+                                                                              ensure_ascii=False)}}}
+    out = subprocess.run(["kubectl", "-n", ns, "patch", "appproject", vendor, "--type", "merge", "-p",
+                          json.dumps(patch)], capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise SystemExit(f"[ERROR] AppProject {vendor}: {out.stderr.strip()[:300]}")
+    return state
+
+
+def vendor_names():
+    """Onboarded vendors (Argo CD AppProjects except default)."""
+    out = subprocess.run(["kubectl", "-n", ENV.get("ARGOCD_NAMESPACE", "cicd-argocd"), "get", "appprojects",
+                          "-o", "name"], capture_output=True, text=True, timeout=60)
+    return [n.split("/", 1)[1] for n in out.stdout.split() if n.split("/", 1)[-1] != "default"]
+
+
+def scm_member_apply(vendor, users, level="WRITE", revoke=False, keep=(), others=None):
+    """scm_member_sync + the state on the AppProject (members tab of the console, pending retries)."""
+    result = scm_member_sync(vendor, users, level, revoke, keep, vendor_names() if others is None else others)
+    if revoke:
+        vendor_scm_state(vendor, remove=list(result) + [u.lower() for u in users])
+    elif result:
+        vendor_scm_state(vendor, update={u: {"level": level, "state": r["state"], "repos": r["repos"],
+                                             "error": r["error"]} for u, r in result.items()})
+    return result
 
 
 def policy_forget(prefix):
@@ -1060,6 +1227,13 @@ def main():
     p = sub.add_parser("vendor-accounts"); p.add_argument("vendor"); p.add_argument("--ci-user", default="")
     p.add_argument("--extra", default=""); p.add_argument("--yes", action="store_true")
     p = sub.add_parser("kc-delete-group"); p.add_argument("name")
+    p = sub.add_parser("scm-member-sync", help="vendor members -> 참여자 of the vendor's SCM repositories")
+    p.add_argument("vendor"); p.add_argument("users", nargs="?", default="", help="comma separated (default: cicd-<vendor>)")
+    p.add_argument("--level", default="WRITE", choices=["READ", "WRITE"]); p.add_argument("--revoke", action="store_true")
+    p.add_argument("--keep", default="", help="accounts never changed (CI account)")
+    p.add_argument("--only-new", action="store_true", help="only users without a recorded state (re-runs)")
+    p = sub.add_parser("scm-members-pending", help="record members as waiting for their first scm.<domain> login")
+    p.add_argument("vendor"); p.add_argument("users"); p.add_argument("--level", default="WRITE", choices=["READ", "WRITE"])
     p = sub.add_parser("gl-delete"); p.add_argument("path"); p.add_argument("--group", action="store_true")
     p = sub.add_parser("policy-forget"); p.add_argument("prefix")
     p = sub.add_parser("harbor-tag-digest"); p.add_argument("project"); p.add_argument("repo"); p.add_argument("tag")
@@ -1219,6 +1393,21 @@ def main():
             print("\n".join(scm_vendor_repos(a.vendor, set(filter(None, a.protect.split(","))))))
         elif a.cmd == "vendor-accounts":
             vendor_accounts(a.vendor, a.ci_user, [x for x in a.extra.split(",") if x.strip()], a.yes)
+        elif a.cmd == "scm-member-sync":
+            users = [u for u in a.users.split(",") if u.strip()] or Keycloak().group_members(f"cicd-{a.vendor}")
+            if a.only_new:
+                state = vendor_scm_state(a.vendor)
+                users = [u for u in users if u.strip().lower() not in state]
+            result = scm_member_apply(a.vendor, users, a.level, a.revoke, a.keep.split(","))
+            print(json.dumps(result, ensure_ascii=False))
+        elif a.cmd == "scm-members-pending":
+            # only users without a state yet (a re-run keeps what the console recorded)
+            state = vendor_scm_state(a.vendor)
+            new = {u.strip().lower(): {"level": a.level, "state": "pending", "repos": 0, "error": ""}
+                   for u in a.users.split(",") if u.strip() and u.strip().lower() not in state}
+            if new:
+                vendor_scm_state(a.vendor, update=new)
+                log(f"[OK]   SCM 권한 대기: {', '.join(sorted(new))} (applied by the console after the first login)")
         elif a.cmd == "kc-delete-group":
             print(",".join(Keycloak().delete_group(a.name)))
         elif a.cmd == "gl-delete":

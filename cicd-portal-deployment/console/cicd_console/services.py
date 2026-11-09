@@ -12,6 +12,8 @@ import os
 import re
 import secrets
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -101,11 +103,20 @@ def vendors():
             "source": labels.get(f"{LABEL}/source") or _source_from_repos(p),
             "ns_mode": ns_mode,
             "ci_user": (meta.get("annotations") or {}).get(f"{LABEL}/scm-ci-user") or "",
+            "scm_members": _json_annotation(ann.get(f"{LABEL}/scm-members")),
             "namespaces": [name] if ns_mode == "single" else [f"{name}-dev", f"{name}-prod"],
             "repos": (p.get("spec") or {}).get("sourceRepos") or [],
             "created": parse_time(meta.get("creationTimestamp")),
         })
     return sorted(result, key=lambda v: v["name"])
+
+
+def _json_annotation(value):
+    try:
+        data = json.loads(value or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _source_from_repos(project):
@@ -505,21 +516,149 @@ def members(vendor_name):
     return []
 
 
-def change_member(vendor_info, username, add):
-    """Add/remove a developer: Keycloak group cicd-<vendor> (+ GitLab group <vendor> for gitlab vendors)."""
+def change_member(vendor_info, username, add, level="WRITE"):
+    """Add/remove a developer: Keycloak group cicd-<vendor>, and the vendor's source repositories:
+    scm    : 참여자 (level, default 쓰기) of the vendor's SCM repositories; removed again with the member
+    gitlab : GitLab group <vendor> (Developer)
+    Users who have not signed in to scm.<domain> / GitLab yet are recorded as pending and handled by
+    scm_reconcile after their first login. Returns [(category, message)] for the screen."""
     kc = api().Keycloak()
+    username = username.lower()
     group = f"cicd-{vendor_info['name']}"
     users = [u for u in kc.call("GET", f"/users?username={q(username)}&exact=true") or []
-             if u["username"] == username.lower()]
+             if u["username"] == username]
     if not users:
         raise BackendError(f"Keycloak 사용자 {username}을(를) 찾을 수 없습니다 (CP-Portal 사용자로 먼저 등록)")
     gid = kc.ensure_group(group)
     kc.call("PUT" if add else "DELETE", f"/users/{users[0]['id']}/groups/{gid}")
-    note = ""
-    if vendor_info["source"] == "gitlab":
-        if not GitLab().sync_member(vendor_info["name"], username, add) and add:
-            note = "GitLab에 아직 로그인한 적이 없어 GitLab 그룹에는 추가되지 않았습니다. 첫 로그인 후 다시 추가하세요."
-    return note
+    return [scm_member(vendor_info, username, add, level)] if vendor_info["source"] in ("scm", "gitlab") else []
+
+
+SCM_WORD = {"READ": "보기", "WRITE": "쓰기", "Developer": "Developer"}
+_scm_lock = threading.Lock()
+
+
+def scm_member(vendor_info, username, add, level="WRITE"):
+    """Repository permissions of one member (see change_member); never raises: (category, message)."""
+    name = vendor_info["name"]
+    try:
+        with _scm_lock:
+            if vendor_info["source"] == "gitlab":
+                return _gitlab_member(name, username, add)
+            if not os.environ.get("SCM_ADMIN_PASSWORD"):
+                return ("warn", "SCM 관리자 비밀번호(scm-admin-password)가 콘솔에 설정되지 않아 SCM 저장소 권한은 "
+                                f"scm.{os.environ.get('HOST_DOMAIN')}에서 직접 지정해야 합니다.")
+            others = [v["name"] for v in vendors()]
+            result = api().scm_member_apply(name, [username], level, not add, [vendor_info.get("ci_user")], others)
+    except (SystemExit, Exception) as e:   # noqa: BLE001 - the group change is done
+        _record_error(name, username, level, add, e)
+        return ("error", f"{username}: SCM 저장소 권한 처리 실패 - {str(e)[:300]} ('SCM 권한 다시 적용'으로 재시도)")
+    r = result.get(username) or {"state": "ok", "repos": 0, "owner": [], "error": ""}
+    word = SCM_WORD.get(level, level)
+    if not add:
+        msg = f"{username}: SCM 저장소 {r['repos']}개에서 권한을 회수했습니다."
+        if r["owner"]:
+            return ("warn", msg + f" 소유자(관리 권한)인 저장소는 그대로입니다: {', '.join(r['owner'])} — "
+                                  f"scm.{os.environ.get('HOST_DOMAIN')}에서 소유자를 바꾸세요.")
+        return ("ok", msg)
+    if r["state"] == "pending":
+        return ("warn", f"{username}: scm.{os.environ.get('HOST_DOMAIN')}에 아직 로그인한 적이 없어 'SCM 권한 대기'로 "
+                        f"기록했습니다. 첫 로그인 후 콘솔이 자동으로 {word} 권한을 줍니다(최대 {reconcile_minutes()}분, "
+                        "또는 'SCM 권한 다시 적용').")
+    if r["state"] == "partial":
+        return ("error", f"{username}: SCM 저장소 권한 일부 실패 - {r['error']}")
+    return ("ok", f"{username}: {name} SCM 저장소 {r['repos']}개에 {word} 권한을 주었습니다.")
+
+
+def _gitlab_member(vendor_name, username, add):
+    gl = GitLab()
+    done = gl.sync_member(vendor_name, username, add)
+    if not add:
+        api().vendor_scm_state(vendor_name, remove=[username])
+        return ("ok", f"{username}: GitLab 그룹 {vendor_name}에서 제외했습니다." if done else
+                f"{username}: GitLab 계정이 없어 GitLab 그룹 변경은 없습니다.")
+    api().vendor_scm_state(vendor_name, update={username: {"level": "Developer", "state": "ok" if done else "pending",
+                                                          "repos": 0, "error": ""}})
+    if done:
+        return ("ok", f"{username}: GitLab 그룹 {vendor_name}에 Developer로 추가했습니다.")
+    return ("warn", f"{username}: GitLab에 아직 로그인한 적이 없어 '권한 대기'로 기록했습니다. 첫 로그인 후 콘솔이 "
+                    f"자동으로 GitLab 그룹에 추가합니다(최대 {reconcile_minutes()}분, 또는 '권한 다시 적용').")
+
+
+def _record_error(vendor_name, username, level, add, error):
+    if not add:
+        return
+    try:
+        api().vendor_scm_state(vendor_name, update={username: {"level": level, "state": "partial", "repos": 0,
+                                                              "error": str(error)[:200]}})
+    except (SystemExit, Exception):  # noqa: BLE001 - only the status column
+        pass
+
+
+def reconcile_minutes():
+    try:
+        return max(0, int(os.environ.get("CICD_SCM_RECONCILE_MINUTES", "10")))
+    except ValueError:
+        return 10
+
+
+def scm_reconcile(vendor_name=None, everyone=False):
+    """Apply the repository permissions that are still open.
+    default (every reconcile_minutes, console thread): members recorded as pending / partial
+    everyone ('SCM 권한 다시 적용' button): every member of cicd-<vendor> (also members added before this
+    feature and repositories created later in scm.<domain>), with their recorded level (default 쓰기).
+    Returns {vendor: [(category, message)]}."""
+    report = {}
+    for v in vendors():
+        if vendor_name and v["name"] != vendor_name:
+            continue
+        if v["source"] not in ("scm", "gitlab") or (v.get("suspended") and not vendor_name):
+            continue
+        state = v.get("scm_members") or {}
+        try:
+            current = {m[0] for m in members(v["name"])}
+        except Exception as e:  # noqa: BLE001
+            report[v["name"]] = [("error", f"구성원 조회 실패: {e}")]
+            continue
+        gone = [u for u in state if u not in current]
+        if gone:
+            try:
+                api().vendor_scm_state(v["name"], remove=gone)       # removed outside the console
+            except (SystemExit, Exception):  # noqa: BLE001
+                pass
+        todo = sorted(current if everyone else [u for u, e in state.items()
+                                                if u in current and e.get("state") in ("pending", "partial")])
+        todo = [u for u in todo if u != v.get("ci_user")]
+        msgs = []
+        for u in todo:
+            level = (state.get(u) or {}).get("level") or "WRITE"
+            msgs.append(scm_member(v, u, True, level if level in ("READ", "WRITE") else "WRITE"))
+        if msgs:
+            report[v["name"]] = msgs
+    return report
+
+
+_reconciler = []
+
+
+def start_reconciler(logger):
+    """Background thread of the console: scm_reconcile() every CICD_SCM_RECONCILE_MINUTES (0: off)."""
+    minutes = reconcile_minutes()
+    if not minutes or _reconciler:
+        return
+    def loop():
+        time.sleep(60)
+        while True:
+            try:
+                for vendor_name, msgs in scm_reconcile().items():
+                    for category, msg in msgs:
+                        logger.info("SCM 권한 자동 적용 %s [%s] %s", vendor_name, category, msg)
+            except Exception as e:  # noqa: BLE001 - keep the thread alive
+                logger.warning("SCM 권한 자동 적용 실패: %s", e)
+            time.sleep(minutes * 60)
+    t = threading.Thread(target=loop, name="scm-reconcile", daemon=True)
+    _reconciler.append(t)
+    t.start()
 
 
 # Developer accounts created from the console (업체 등록): temporary password, changed at the first login
