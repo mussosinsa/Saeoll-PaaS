@@ -1,6 +1,8 @@
 """cluster_check.py (deploy-cicd-portal.sh preflight): RKE2 ingress controllers, Pod Security, node pulls."""
 import contextlib
 import io
+import json
+import unittest.mock
 import os
 import sys
 import unittest
@@ -108,6 +110,21 @@ class PullTest(unittest.TestCase):
         self.assertEqual(p["spec"]["nodeName"], "node1")
         self.assertEqual(p["spec"]["containers"][0]["imagePullPolicy"], "Always")
         self.assertTrue(p["spec"]["securityContext"]["runAsNonRoot"])      # admitted under "restricted" too
+
+    def test_taints(self):
+        cp = {"spec": {"taints": [{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"},
+                                  {"key": "x", "effect": "PreferNoSchedule"}]}}
+        self.assertEqual(cc.blocking_taints(cp), ["node-role.kubernetes.io/control-plane:NoSchedule"])
+        self.assertEqual(cc.blocking_taints({"spec": {}}), [])
+
+    def test_pull_error_from_events(self):
+        events = {"items": [
+            {"reason": "Failed", "message": 'Failed to pull image "h/x:1": rpc error: code = Unknown desc = failed to '
+                                           'do request: tls: failed to verify certificate: x509: certificate signed by unknown authority'},
+            {"reason": "Failed", "message": "Error: ErrImagePull"},
+            {"reason": "Failed", "message": 'Back-off pulling image "h/x:1"'}]}
+        with unittest.mock.patch.object(cc, "kubectl", return_value=unittest.mock.Mock(returncode=0, stdout=json.dumps(events))):
+            self.assertIn("x509", cc.pull_error("ns", "p"))
 
     def test_distro(self):
         nodes = {"items": [{"status": {"nodeInfo": {"kubeletVersion": "v1.30.4+rke2r1"}}}]}

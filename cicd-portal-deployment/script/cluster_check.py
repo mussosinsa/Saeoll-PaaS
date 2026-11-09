@@ -249,6 +249,24 @@ def pull_result(pod):
     return "pending"
 
 
+def blocking_taints(node):
+    """Taints that keep ordinary pods (builds, applications) off a node, e.g. control-plane NoSchedule."""
+    return [f"{t['key']}:{t['effect']}" for t in node["spec"].get("taints") or []
+            if t.get("effect") in ("NoSchedule", "NoExecute")]
+
+
+def pull_error(ns, pod):
+    """The kubelet's reason of the failed pull (events "Failed to pull image ..."), '' if none."""
+    r = kubectl("get", "events", "-n", ns, "--field-selector", f"involvedObject.name={pod}", "-o", "json", check=False)
+    if r.returncode != 0:
+        return ""
+    msgs = [e.get("message", "") for e in json.loads(r.stdout).get("items", [])
+            if e.get("reason") == "Failed" and "Back-off" not in e.get("message", "")]
+    detailed = [m for m in msgs if re.search(r"x509|certificate|lookup|no such host|unauthorized|denied|"
+                                             r"connection refused|i/o timeout|not found|rpc error", m, re.I)]
+    return (detailed or msgs or [""])[-1]
+
+
 def check_harbor_pull(harbor_host, timeout, rke2):
     pods = get("pods", "-A")
     found = harbor_image(pods, harbor_host)
@@ -256,8 +274,9 @@ def check_harbor_pull(harbor_host, timeout, rke2):
         say("WARN", f"no running pod uses an image of {harbor_host}: node pulls from Harbor not checked")
         return
     ns, image, secrets = found
-    nodes = [n["metadata"]["name"] for n in get("nodes")["items"]
-             if not n["spec"].get("unschedulable")]
+    node_items = [n for n in get("nodes")["items"] if not n["spec"].get("unschedulable")]
+    nodes = [n["metadata"]["name"] for n in node_items]
+    tainted = {n["metadata"]["name"]: blocking_taints(n) for n in node_items}
     names = {}
     for i, node in enumerate(nodes):
         name = f"cicd-preflight-pull-{i}"
@@ -282,7 +301,8 @@ def check_harbor_pull(harbor_host, timeout, rke2):
         if res == "ok":
             say("OK", f"node {node}: pulls from {harbor_host}")
         else:
-            msg = res[1]
+            # "Back-off pulling image" hides the cause: the kubelet's "Failed to pull image" event has it
+            msg = pull_error(ns, name) or res[1]
             hint = ""
             if re.search(r"x509|certificate", msg, re.I):
                 hint = (" - the node does not trust the K-PaaS CA: RKE2 /etc/rancher/rke2/registries.yaml "
@@ -290,7 +310,13 @@ def check_harbor_pull(harbor_host, timeout, rke2):
                         if rke2 else " - the node does not trust the K-PaaS CA (cp-portal recover-node-ca.sh)")
             elif re.search(r"no such host|lookup", msg, re.I):
                 hint = f" - the node cannot resolve {harbor_host} (node DNS)"
-            say("FAIL", f"node {node}: cannot pull {image}: {msg[:200]}{hint}")
+            elif re.search(r"unauthorized|denied|authentication required", msg, re.I):
+                hint = " - Harbor refused the credentials (pull secret of the probe's namespace)"
+            if tainted.get(node):
+                say("WARN", f"node {node} ({', '.join(tainted[node])}: builds and applications are not scheduled "
+                            f"there): cannot pull from {harbor_host}: {msg[:300]}{hint}")
+            else:
+                say("FAIL", f"node {node}: cannot pull {image}: {msg[:300]}{hint}")
     kubectl("delete", "pod", "-n", ns, "-l", "app.kubernetes.io/part-of=cicd-preflight", "--wait=false", check=False)
 
 
