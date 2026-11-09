@@ -26,6 +26,12 @@ JENKINS_IMAGE=${JENKINS_IMAGE:-""}              # e.g. harbor.<domain>/cicd-port
 CICD_NEXUS_URL=${CICD_NEXUS_URL:-""}            # company Nexus for application dependencies, e.g. http://bootstrap.<domain>:8081
                                                 #   (Maven/Gradle/npm/Composer of the builds, cicd-deps.sh); empty: internet
 
+# KUBERNETES / RKE2 (preflight: cluster_check.py)
+CICD_POD_SECURITY=${CICD_POD_SECURITY-"baseline"}   # Pod Security of cicd-jenkins / cicd-runner / cicd-gitlab when they
+                                                #   have no label (root build pods; RKE2 CIS default is restricted)
+VENDOR_POD_SECURITY=${VENDOR_POD_SECURITY-""}   # vendor namespaces: empty = cluster default (e.g. "baseline" for root images)
+CICD_PREFLIGHT_PULL=${CICD_PREFLIGHT_PULL:-1}   # preflight: probe pod per node pulling from Harbor (0: skip)
+
 # JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
 JENKINS_NAMESPACE="cicd-jenkins"
 JENKINS_CHART_VERSION=""                        # empty: latest chart; pin after the first install

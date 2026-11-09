@@ -109,6 +109,17 @@ read -rsp 'scmadmin git 비밀번호: ' SCM_ADMIN_PASSWORD; echo; export SCM_ADM
 ```
 
 `[OK] Preflight passed`가 나와야 한다. `[WARN]`이 있으면 메시지대로 고치고 다시 실행한다.
+
+사전 점검은 클러스터도 확인한다(RKE2에서 특히 중요):
+
+| 점검 | 실패할 때 |
+| --- | --- |
+| 배포판 (`+rke2` 이면 RKE2) | — (경로 안내: `/var/lib/rancher/rke2/bin`, `/etc/rancher/rke2/rke2.yaml`) |
+| Ingress 컨트롤러: 포털 IngressClass를 처리하는 컨트롤러, **컨트롤러가 둘**(RKE2 기본 `rke2-ingress-nginx` + 별도 설치 `ingress-nginx`)인지, `keycloak.<도메인>` DNS가 그 컨트롤러로 가는지 | 컨트롤러를 하나로 정리(RKE2: `/etc/rancher/rke2/config.yaml`에 `disable: [rke2-ingress-nginx]`) 또는 DNS를 맞는 컨트롤러로 |
+| Pod Security: root로 도는 빌드 Pod(kaniko, 빌드 이미지, GitLab)가 CI 네임스페이스에서 허용되는지 (RKE2 `profile: cis`는 기본이 restricted) | 설치가 라벨이 없는 CI 네임스페이스에 `baseline`을 붙인다(`CICD_POD_SECURITY`). 관리자가 붙인 `restricted` 라벨은 바꾸지 않으므로 직접 바꾼다 |
+| 노드마다 Harbor에서 이미지 받기 (노드당 짧은 점검 Pod, 끝나면 삭제) | `x509` → 노드가 K-PaaS CA를 신뢰하지 않음. RKE2: `/etc/rancher/rke2/registries.yaml`의 `configs."harbor.<도메인>".tls.ca_file` 설정 후 rke2-server/agent를 노드별로 재시작 |
+
+노드 이미지 점검을 건너뛰려면 `CICD_PREFLIGHT_PULL=0`. 업체 네임스페이스의 Pod Security는 `VENDOR_POD_SECURITY`(기본: 클러스터 기본값).
 `SCM-Manager REST API login failed ... 401`이면 Keycloak 비밀번호가 아니라 SCM의 **git 비밀번호**를 넣었는지 확인한다.
 
 ### STEP 2. Jenkins · Argo CD 설치

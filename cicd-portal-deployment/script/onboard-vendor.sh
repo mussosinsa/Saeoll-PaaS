@@ -121,8 +121,10 @@ for ns in "${NAMESPACES[@]}"; do
   fi
   if [[ "$NS_MODE" == single ]]; then
     ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" app.kubernetes.io/managed-by=cicd-portal
+    ensure_pod_security "$ns" "$VENDOR_POD_SECURITY"
   else
     ensure_namespace "$ns" cp.k-paas.org/vendor="$VENDOR" cp.k-paas.org/env="${ns##*-}" app.kubernetes.io/managed-by=cicd-portal
+    ensure_pod_security "$ns" "$VENDOR_POD_SECURITY"
   fi
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: v1

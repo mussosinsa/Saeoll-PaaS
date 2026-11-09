@@ -86,6 +86,22 @@ ensure_namespace() { # name [label=value ...]
   return 0
 }
 
+# Pod Security Admission level of a namespace (enforce label), set only when the namespace has none, so an
+# administrator's own label is never lowered or raised. Empty level: nothing (cluster default).
+# RKE2 "profile: cis" makes "restricted" the cluster default; root build pods (kaniko, build images, GitLab
+# omnibus) need "baseline".
+ensure_pod_security() { # namespace level
+  [[ -n "${2:-}" ]] || return 0
+  local cur
+  cur=$(kubectl get namespace "$1" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' 2>/dev/null || true)
+  if [[ -z "$cur" ]]; then
+    kubectl label namespace "$1" "pod-security.kubernetes.io/enforce=$2" "pod-security.kubernetes.io/warn=$2" >/dev/null
+    ok "Namespace $1: Pod Security $2"
+  elif [[ "$cur" != "$2" ]]; then
+    info "Namespace $1: Pod Security $cur kept (set by an administrator)"
+  fi
+}
+
 # Copy the wildcard *.HOST_DOMAIN TLS secret generated for CP-Portal.
 copy_tls_secret() { # namespace
   kubectl -n "$CP_PORTAL_NAMESPACE" get secret "$TLS_SECRET" -o json | python3 -c '

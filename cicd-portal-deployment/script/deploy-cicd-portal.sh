@@ -57,6 +57,9 @@ step_preflight() {
   for cmd in kubectl helm curl python3 base64; do
     command -v "$cmd" >/dev/null || { warn "$cmd is not installed"; failed=1; }
   done
+  if ! command -v kubectl >/dev/null && [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
+    warn "RKE2: export PATH=\$PATH:/var/lib/rancher/rke2/bin KUBECONFIG=/etc/rancher/rke2/rke2.yaml (or copy it to ~/.kube/config)"
+  fi
   kubectl get storageclass "$K8S_STORAGECLASS" >/dev/null 2>&1 || { warn "StorageClass not found: $K8S_STORAGECLASS"; failed=1; }
   kubectl -n "$CP_PORTAL_NAMESPACE" get secret "$TLS_SECRET" >/dev/null 2>&1 || {
     warn "TLS secret $TLS_SECRET not found in $CP_PORTAL_NAMESPACE (deploy CP-Portal first)"; failed=1; }
@@ -92,6 +95,13 @@ step_preflight() {
         warn "Image tag not found on Docker Hub (or no internet): $GITLAB_IMAGE"
     fi
   fi
+  # cluster checks that matter on RKE2: ingress controllers, Pod Security, node pulls from Harbor
+  local ci_namespaces=()
+  has_source scm && ci_namespaces+=("$JENKINS_NAMESPACE")
+  has_source gitlab && ci_namespaces+=("$RUNNER_NAMESPACE" "$GITLAB_NAMESPACE")
+  python3 cluster_check.py all --ingress-class "$INGRESS_CLASS_NAME" --host "keycloak.$HOST_DOMAIN" \
+    --namespaces "$(IFS=,; echo "${ci_namespaces[*]}")" --pod-security "$CICD_POD_SECURITY" \
+    --harbor-host "$HARBOR_HOST" $([[ "$CICD_PREFLIGHT_PULL" == 1 ]] || echo --no-pull) | sed 's/^/       /' || failed=1
   echo "       Node capacity - requests: Argo CD ~1Gi$(has_source scm && echo ", Jenkins 0.5 CPU/1Gi (limit 3Gi)")$(has_source gitlab && echo ", GitLab ${GITLAB_CPU_REQUEST} CPU/${GITLAB_MEMORY_REQUEST} (limit ${GITLAB_MEMORY_LIMIT})"); builds up to 6Gi each:"
   kubectl top nodes 2>/dev/null | sed 's/^/       /' || warn "kubectl top nodes unavailable (metrics-server)"
   ((failed == 0)) || die "Preflight failed."
@@ -124,6 +134,7 @@ step_keycloak() {
 step_gitlab() {
   info "GitLab CE ($GITLAB_IMAGE) in $GITLAB_NAMESPACE"
   ensure_namespace "$GITLAB_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  ensure_pod_security "$GITLAB_NAMESPACE" "$CICD_POD_SECURITY"
   copy_tls_secret "$GITLAB_NAMESPACE"
   ensure_ca_secret "$GITLAB_NAMESPACE"
   [[ -n "$(get_secret gitlab-oidc-secret)" ]] || die "Keycloak client secret missing. Run: $0 keycloak"
@@ -196,6 +207,7 @@ step_runner() {
   load_gitlab_token
   info "GitLab Runner (chart $GITLAB_RUNNER_CHART_VERSION) in $RUNNER_NAMESPACE"
   ensure_namespace "$RUNNER_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  ensure_pod_security "$RUNNER_NAMESPACE" "$CICD_POD_SECURITY"
   ensure_ca_secret "$RUNNER_NAMESPACE"
   local token
   token=$($API gl-runner "$RUNNER_DESCRIPTION")
@@ -233,6 +245,7 @@ step_runner() {
 step_jenkins() {
   info "Jenkins (chart ${JENKINS_CHART_VERSION:-latest}) in $JENKINS_NAMESPACE"
   ensure_namespace "$JENKINS_NAMESPACE" app.kubernetes.io/part-of=cicd-portal
+  ensure_pod_security "$JENKINS_NAMESPACE" "$CICD_POD_SECURITY"
   copy_tls_secret "$JENKINS_NAMESPACE"
   ensure_ca_secret "$JENKINS_NAMESPACE"
   [[ "$JENKINS_SSO" != true || -n "$(get_secret jenkins-oidc-secret)" ]] || die "Keycloak client secret missing. Run: $0 keycloak"
