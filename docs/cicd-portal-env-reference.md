@@ -15,6 +15,45 @@ CI/CD 포털은 CP-Portal 설정 파일을 **다시 읽어서** 쓴다. 같은 �
 
 ---
 
+## 0. 설정 마법사로 한 번에 (권장, RKE2 포함)
+
+아래 1~2장의 값을 **물어보고, 클러스터에서 찾고, 바로 확인**하는 스크립트다. 값을 파일에 직접 고칠 필요가 없다.
+
+```bash
+cd ~/Saeoll-PaaS/cicd-portal-deployment/script && ./setup-cicd-env.sh
+```
+
+| 단계 | 하는 일 | 묻는 것 |
+|---|---|---|
+| 1. Kubernetes 접속 | RKE2면 `kubectl`(/var/lib/rancher/rke2/bin)·`KUBECONFIG`(/etc/rancher/rke2/rke2.yaml) 자동 설정, K-PaaS 네임스페이스 확인 | — |
+| 2. 기존 K-PaaS | `cp-portal-vars.sh` 값을 기본값으로, 없으면 CP-Portal Ingress에서 도메인을 찾음 | 도메인 (Enter = 기본값) |
+| 3. 인증서 | CA를 `cp-portal-deployment/certs/ca.crt` → 클러스터(cp-cert-setup) 순으로 찾고 검증: CA가 `cp-portal/<도메인>-tls`를 검증하는지, `*.도메인`(jenkins·argocd·cicd·gitlab…)을 덮는지, 만료일, `keycloak.`·`harbor.` HTTPS | 못 찾으면 CA 파일 경로 |
+| 4. 관리자 계정 | Keycloak·Harbor·MariaDB에 설정 파일의 비밀번호로 실제 로그인 | 실패할 때만 현재 비밀번호 (화면에 안 보임, 3회) |
+| 5. 설치 선택 | 소스(scm·gitlab), SCM 관리자 git 비밀번호 로그인 확인, StorageClass·IngressClass 목록에서 선택, RKE2 Pod Security(`baseline` 권장) | 각 항목 |
+| 6. 폐쇄망 | 차트 폴더, Harbor에 있는 `cicd-mirror`·`base-images` 이미지로 `JENKINS_IMAGE` 등 값을 자동 제안, Nexus 주소 | 폐쇄망 여부, 경로 |
+| 7. 저장·점검·배포 | 파일 저장 → `preflight` → (단계마다 확인) 설치 → Jenkins 토큰 → 콘솔 → 보안 검사 | y/n, Jenkins API 토큰 |
+
+**저장되는 파일** (모두 git에 올라가지 않음)
+
+| 파일 | 내용 |
+|---|---|
+| `script/cicd-vars.local.sh` | 이 설치의 값 (`cicd_set 이름 값`). `cicd-vars.sh`가 끝에서 읽고, 콘솔에도 함께 들어간다. **비밀번호 없음** |
+| `script/portal-vars.local.sh` (0600) | `cp-portal-vars.sh`가 없거나 그 관리자 비밀번호가 바뀌었을 때만. 원본 `cp-portal-vars.sh`는 고치지 않는다 |
+| `certs/ca.crt` | CA를 클러스터나 다른 경로에서 가져왔을 때의 사본 (공개 인증서만) |
+| `values/rke2-node-ca.sh` | RKE2 노드용: CA를 시스템 신뢰 저장소와 `/etc/rancher/rke2/registries.yaml`(Harbor)에 넣고 rke2 재시작 |
+
+- **비밀번호**는 이번 실행에만 쓴다. SCM 비밀번호만 원하면 `~/.config/cicd-portal/secrets.env`(0600)에 저장할 수 있다.
+- **CA 개인 키(`ca.key`)는 묻지도 읽지도 않는다.** CA 파일에 개인 키가 들어 있으면 거부한다.
+- 다시 실행하면 이전 값이 기본값으로 나온다. 다른 서버에 같은 값: `./setup-cicd-env.sh --answers <다른 서버의 cicd-vars.local.sh>`.
+  질문 없이: `--yes` (비밀번호는 `SCM_ADMIN_PASSWORD` 환경 변수나 저장 파일). 점검까지만: `--no-deploy`.
+- 이번 실행만 다른 값: `CICD_SOURCES=gitlab ./deploy-cicd-portal.sh ...` 처럼 **export 한 환경 변수가 `cicd-vars.local.sh`보다 우선**한다.
+- **RKE2에서 점검의 Harbor 이미지 받기가 x509로 실패**하면(특히 제어 노드), 그 노드에서 root로 실행한다:
+  `sudo bash ~/Saeoll-PaaS/cicd-portal-deployment/values/rke2-node-ca.sh` (다른 노드는 파일을 복사해서 실행). 그다음 마법사를 다시 실행.
+
+아래 1~2장은 마법사가 다루는 값의 자세한 설명이다.
+
+---
+
 ## 1. 기존 환경에서 가져오는 정보
 
 ### 1-1. 파일 (관리 노드의 `~/Saeoll-PaaS` 아래)

@@ -3,3 +3,6 @@ values/
 __pycache__/
 .venv/
 security/tests/out/
+# installation values written by script/setup-cicd-env.sh (domain, admin passwords, CA copy)
+script/*.local.sh
+certs/

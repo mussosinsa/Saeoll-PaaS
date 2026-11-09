@@ -361,7 +361,8 @@ step_console-image() {
   info "CI/CD console image $image"
   ctx=$(mktemp -d)
   cp -r ../console ../script ../starters ../gitops-template ../db-template ../ci-templates "$ctx/"
-  rm -rf "$ctx/console/tests" "$ctx/script/"*.log
+  # never in the image: logs and the installation's local files (portal-vars.local.sh holds admin passwords)
+  rm -rf "$ctx/console/tests" "$ctx/script/"*.log "$ctx/script/"*.local.sh
   find "$ctx" -name __pycache__ -prune -exec rm -rf {} +
   cp "$(command -v kubectl)" "$ctx/kubectl"
   $API harbor-project "$CONSOLE_HARBOR_PROJECT"
@@ -424,9 +425,12 @@ step_console() {
   fi
   kubectl -n "$CONSOLE_NAMESPACE" create secret generic cicd-console-secrets "${from[@]}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  rm -rf "$dir"
-  kubectl -n "$CONSOLE_NAMESPACE" create configmap cicd-console-vars --from-file=cicd-vars.sh=./cicd-vars.sh \
+  # cicd-vars.sh + the installation's cicd-vars.local.sh (setup-cicd-env.sh) in one file for the console
+  cat ./cicd-vars.sh > "$dir/cicd-vars.sh"
+  [[ -f ./cicd-vars.local.sh ]] && { echo; cat ./cicd-vars.local.sh; } >> "$dir/cicd-vars.sh"
+  kubectl -n "$CONSOLE_NAMESPACE" create configmap cicd-console-vars --from-file=cicd-vars.sh="$dir/cicd-vars.sh" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -rf "$dir"
   mkdir -p "$VALUES_DIR"
   render_file ../manifests/console.yaml "$VALUES_DIR/console.yaml" \
     NAMESPACE="$CONSOLE_NAMESPACE" IMAGE="$image" CONSOLE_HOST="$CONSOLE_HOST" \

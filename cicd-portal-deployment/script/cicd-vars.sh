@@ -2,6 +2,9 @@
 # HOST_DOMAIN, StorageClass, Keycloak, Harbor and TLS values are read from
 # cp-portal-deployment/script/cp-portal-vars.sh unless set here.
 
+# Variables exported by the caller (e.g. CICD_SOURCES=gitlab ./deploy-cicd-portal.sh) win over cicd-vars.local.sh
+_CICD_ENV_NAMES=" $(compgen -e | tr '\n' ' ') "
+
 # COMMON VARIABLE
 HOST_DOMAIN="{host domain}"                     # leave as-is to reuse the CP-Portal value
 K8S_STORAGECLASS=""                             # empty: CP-Portal value (e.g. cp-storageclass)
@@ -115,3 +118,10 @@ SECRET_NAME="cicd-portal-secrets"               # generated passwords/tokens (na
 CA_SECRET_NAME="cicd-ca"                        # K-PaaS CA certificate for build pods
 TEMPLATES_GROUP="cicd"
 TEMPLATES_PROJECT="ci-templates"
+
+# Values of this installation written by ./setup-cicd-env.sh (not in git): cicd_set NAME VALUE lines
+cicd_set() { [[ "$_CICD_ENV_NAMES" == *" $1 "* ]] || printf -v "$1" '%s' "$2"; }
+_cicd_local="$(dirname "${BASH_SOURCE[0]}")/cicd-vars.local.sh"
+# shellcheck source=/dev/null
+[[ -f "$_cicd_local" ]] && source "$_cicd_local"
+unset _cicd_local

@@ -192,6 +192,14 @@ read -rsp 'scmadmin git 비밀번호: ' SCM_ADMIN_PASSWORD; echo; export SCM_ADM
 cd ~/Saeoll-PaaS/cicd-portal-deployment/script
 ```
 
+> **쉬운 방법 (권장, RKE2 포함)**: 아래 ③-1 ~ ③-4 대신 설정 마법사 하나로 한다. 값을 물어보고, 인증서와 비밀번호를
+> 바로 확인하고, 점검과 설치를 단계마다 물어보며 진행한다 →
+> [설정 마법사 설명](cicd-portal-env-reference.md#0-설정-마법사로-한-번에-권장-rke2-포함)
+>
+> ```bash
+> ./setup-cicd-env.sh
+> ```
+
 ### ③-1. 설정
 
 처음에는 소스 방식만 정한다(나머지는 기본값).
@@ -286,7 +294,7 @@ JENKINS_USER=admin JENKINS_API_TOKEN="$JENKINS_API_TOKEN" ./deploy-cicd-portal.s
 | 0 | `~/Saeoll-PaaS/cp-portal-deployment/istio_mc` | `./install_tools.sh` |
 | ① | `~/Saeoll-PaaS/cp-portal-deployment/script` | `./configure-from-cluster-env.sh <cluster.env> <도메인>` → `vi cp-portal-vars.sh` → `./deploy-cp-portal.sh` → `./check-cp-portal.sh` |
 | ② | `~/Saeoll-PaaS/cp-source-control-deployment/script` | `./fetch-cp-source-control.sh` → `./deploy-cp-source-control.sh` → `./check-cp-source-control.sh` → scmadmin git 비밀번호 설정 |
-| ③ | `~/Saeoll-PaaS/cicd-portal-deployment/script` | `vi cicd-vars.sh` → `./deploy-cicd-portal.sh preflight` → `./deploy-cicd-portal.sh` → `... jenkins-token` → `... console-image security-image security console` → `./check-cicd-portal.sh` |
+| ③ | `~/Saeoll-PaaS/cicd-portal-deployment/script` | `./setup-cicd-env.sh` (마법사) 또는 `vi cicd-vars.sh` → `./deploy-cicd-portal.sh preflight` → `./deploy-cicd-portal.sh` → `... jenkins-token` → `... console-image security-image security console` → `./check-cicd-portal.sh` |
 | (선택) | `~/Saeoll-PaaS/cp-pipeline-deployment/script` | `./deploy-cp-pipeline.sh` — K-PaaS 기본 파이프라인이 필요할 때만 |
 
 ## cp-pipeline-deployment는 설치해야 하나?
