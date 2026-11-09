@@ -87,8 +87,8 @@ export_image() {
 }
 
 # Harbor API: tags of a project (newest KEEP_TAGS artifacts per repository), "project/repo:tag" per line
-harbor_tags() {
-  harbor_password | python3 - "$HARBOR" "${V[1]}" "$1" "$KEEP_TAGS" "$CERTS/ca.crt" <<'PY'
+# (the script is a file: stdin carries the password - a heredoc would take stdin and the password would be empty)
+cat > "$TMP/harbor_tags.py" <<'PY'
 import base64, json, os, ssl, sys, urllib.error, urllib.parse, urllib.request
 host, user, project, keep, ca = sys.argv[1:6]
 pw = sys.stdin.readline().rstrip("\n")
@@ -120,6 +120,8 @@ for repo in repos:
         for t in a["tags"]:
             print(f"{project}/{name}:{t['name']}")
 PY
+harbor_tags() {
+  harbor_password | python3 "$TMP/harbor_tags.py" "$HARBOR" "${V[1]}" "$1" "$KEEP_TAGS" "$CERTS/ca.crt"
 }
 
 # 1. Harbor projects ------------------------------------------------------------------------------------------------
