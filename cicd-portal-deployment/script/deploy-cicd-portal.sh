@@ -51,6 +51,30 @@ online_version() {
   return 0
 }
 
+# podman for the image builds (console, scanner): root storage like the CP-Portal image builds. podman writes
+# layers to TMPDIR (default /var/tmp) before storing them: CICD_BUILD_TMPDIR=<dir on a large disk> moves that.
+# Checks the free space first (the scanner image needs about 10 GB while building).
+build_podman() { # sets the array podman
+  podman=()
+  ((EUID == 0)) || podman+=(sudo)
+  if [[ -n "${CICD_BUILD_TMPDIR:-}" ]]; then
+    "${podman[@]}" mkdir -p "$CICD_BUILD_TMPDIR"
+    podman+=(env "TMPDIR=$CICD_BUILD_TMPDIR")
+  fi
+  podman+=(podman)
+  local tmp=${CICD_BUILD_TMPDIR:-/var/tmp} graph dir free
+  graph=$("${podman[@]}" info --format '{{.Store.GraphRoot}}' 2>/dev/null || echo /var/lib/containers/storage)
+  for dir in "$tmp" "$graph"; do
+    free=$(df -Pk "$dir" 2>/dev/null | awk 'NR==2{print int($4/1024/1024)}')
+    if [[ -n "$free" ]] && ((free < ${CICD_BUILD_MIN_FREE_GB:-10})); then
+      warn "Only ${free} GB free for $dir (image build needs about ${CICD_BUILD_MIN_FREE_GB:-10} GB)."
+      warn "  Free space: sudo podman image prune -a -f ; sudo podman system prune -f"
+      warn "  Or build on a larger disk: CICD_BUILD_TMPDIR=/data/podman-tmp $0 <steps>"
+      die "Not enough disk space for the image build ($dir)."
+    fi
+  done
+}
+
 step_preflight() {
   info "Preflight"
   local failed=0 cmd
@@ -332,8 +356,8 @@ step_argocd() {
 # CI/CD console image: the console plus the scripts it runs, pushed to Harbor
 step_console-image() {
   require_cmds podman
-  local image="$HARBOR_HOST/$CONSOLE_HARBOR_PROJECT/cicd-console:$CONSOLE_IMAGE_TAG" ctx podman=(podman)
-  ((EUID == 0)) || podman=(sudo podman)   # same podman storage/trust as the CP-Portal image builds
+  local image="$HARBOR_HOST/$CONSOLE_HARBOR_PROJECT/cicd-console:$CONSOLE_IMAGE_TAG" ctx podman=()
+  build_podman   # same podman storage/trust as the CP-Portal image builds
   info "CI/CD console image $image"
   ctx=$(mktemp -d)
   cp -r ../console ../script ../starters ../gitops-template ../db-template ../ci-templates "$ctx/"
@@ -347,6 +371,7 @@ step_console-image() {
     --build-arg APT_MIRROR="$CONSOLE_APT_MIRROR" "$ctx" || { rm -rf "$ctx"; die "Console image build failed."; }
   rm -rf "$ctx"
   "${podman[@]}" push "$image" || die "Console image push failed ($image)."
+  "${podman[@]}" image prune -f >/dev/null 2>&1 || true
   ok "Console image pushed: $image"
 }
 
@@ -425,8 +450,8 @@ step_console() {
 # Security scanner image (Semgrep, Gitleaks, Trivy + DB, cicd-scan, rules) pushed to Harbor
 step_security-image() {
   require_cmds podman
-  local podman=(podman) ctx
-  ((EUID == 0)) || podman=(sudo podman)
+  local podman=() ctx
+  build_podman
   info "Security scanner image $SECURITY_IMAGE"
   ctx=$(mktemp -d)
   cp -r ../security/scanner ../security/rules ../security/policy "$ctx/"
@@ -441,6 +466,7 @@ step_security-image() {
       rm -rf "$ctx"; die "Security scanner image build failed."; }
   rm -rf "$ctx"
   "${podman[@]}" push "$SECURITY_IMAGE" || die "Security scanner image push failed ($SECURITY_IMAGE)."
+  "${podman[@]}" image prune -f >/dev/null 2>&1 || true    # intermediate layers of earlier builds
   ok "Security scanner image pushed: $SECURITY_IMAGE (rebuild regularly to refresh the Trivy DB)"
 }
 
