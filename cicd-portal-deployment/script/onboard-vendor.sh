@@ -161,6 +161,9 @@ EOF
   ok "Namespace $ns (quota, limits, pull secret $PULL_SECRET, TLS secret)"
 done
 
+# CP-Portal user screen (Namespaces / Roles) lists namespaces through their Roles: copy CP-Portal's Roles
+./portal-roles.sh "$VENDOR" || warn "CP-Portal Roles not created in the namespaces of $VENDOR (./portal-roles.sh $VENDOR)"
+
 # 4. Source repositories and CI -------------------------------------------------------------
 if [[ "$SOURCE" == scm ]]; then
   # CI account in Keycloak (SCM/Jenkins/Argo CD use it for git access to the vendor repos)

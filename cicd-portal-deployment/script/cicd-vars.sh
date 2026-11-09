@@ -30,6 +30,8 @@ CICD_NEXUS_URL=${CICD_NEXUS_URL:-""}            # company Nexus for application 
 CICD_POD_SECURITY=${CICD_POD_SECURITY-"baseline"}   # Pod Security of cicd-jenkins / cicd-runner / cicd-gitlab when they
                                                 #   have no label (root build pods; RKE2 CIS default is restricted)
 VENDOR_POD_SECURITY=${VENDOR_POD_SECURITY-""}   # vendor namespaces: empty = cluster default (e.g. "baseline" for root images)
+PORTAL_ROLES=${PORTAL_ROLES:-"cp-init-role cp-admin-role"}   # Roles CP-Portal creates in its namespaces: copied into
+                                                #   vendor namespaces so CP-Portal can assign them (portal-roles.sh)
 CICD_PREFLIGHT_PULL=${CICD_PREFLIGHT_PULL:-1}   # preflight: probe pod per node pulling from Harbor (0: skip)
 
 # JENKINS (CICD_SOURCE=scm), official jenkins/jenkins Helm chart
