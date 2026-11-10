@@ -10,7 +10,8 @@
                          keycloak URL USER | harbor URL USER | scm URL USER | mariadb
   harbor-mirror URL USER images of the closed-network Harbor projects (cicd-mirror, base-images) -> suggested
                          cicd-vars values as JSON (password on stdin)
-  node-ca-script CA DOMAIN HARBOR_HOST   shell script for the RKE2 nodes (CA in the system store + registries.yaml)
+  node-ca-script CA DOMAIN HARBOR_HOST [REGISTRY ...]   shell script for the RKE2 nodes (CA in the system store,
+                         registries.yaml: Harbor TLS + mirrors of REGISTRY to Harbor project 'mirror' with rewrite)
 """
 import base64
 import datetime
@@ -305,63 +306,102 @@ def login(what, args, password):
 def harbor_mirror(url, user, password):
     """cicd-vars values for images already in the Harbor of a closed network (load-to-harbor.sh)."""
     host = urllib.parse.urlparse(url).netloc
-    found = {}
-    for project in ("cicd-mirror", "base-images"):
-        code, body = http("GET", f"{url.rstrip('/')}/api/v2.0/projects/{project}/repositories?page_size=100",
-                          basic(user, password))
-        if code != 200:
-            continue
-        for repo in json.loads(body or "[]"):
-            name = repo["name"].split("/", 1)[1]
-            enc = urllib.parse.quote(urllib.parse.quote(name, safe=""), safe="")
-            code, arts = http("GET", f"{url.rstrip('/')}/api/v2.0/projects/{project}/repositories/{enc}/artifacts"
-                                     "?with_tag=true&page_size=50", basic(user, password))
-            tags = [t["name"] for a in (json.loads(arts or "[]") if code == 200 else [])
-                    for t in a.get("tags") or []]
-            found[f"{project}/{name}"] = tags
-    return mirror_values(host, found)
+    found, mirrors = {}, set()
+    for project in ("cicd-portal", "cicd-mirror", "base-images", "mirror"):
+        page = 1
+        while True:
+            code, body = http("GET", f"{url.rstrip('/')}/api/v2.0/projects/{project}/repositories"
+                                     f"?page={page}&page_size=100", basic(user, password))
+            repos = json.loads(body or "[]") if code == 200 else []
+            for repo in repos:
+                name = repo["name"].split("/", 1)[1]
+                if project == "mirror":                     # mirror/<registry>/<path>: only the registries
+                    mirrors.add(name.split("/", 1)[0])
+                    continue
+                enc = urllib.parse.quote(urllib.parse.quote(name, safe=""), safe="")
+                code, arts = http("GET", f"{url.rstrip('/')}/api/v2.0/projects/{project}/repositories/{enc}/artifacts"
+                                         "?with_tag=true&page_size=50", basic(user, password))
+                arts = sorted(json.loads(arts or "[]") if code == 200 else [],
+                              key=lambda a: a.get("push_time") or "", reverse=True)
+                found[f"{project}/{name}"] = [t["name"] for a in arts for t in a.get("tags") or []]   # newest first
+            if len(repos) < 100:
+                break
+            page += 1
+    values = mirror_values(host, found)
+    if mirrors:
+        values["MIRROR_REGISTRIES"] = " ".join(sorted(mirrors))
+    return values
 
 
 def mirror_values(host, found):
+    """found: {project/repo: [tags, newest first]} -> cicd-vars values."""
     values = {}
-    jenkins = [t for t in found.get("cicd-mirror/jenkins", []) if t.endswith("-plugins")]
-    tool = [t for t in found.get("cicd-mirror/jenkins", []) if not t.endswith("-plugins")]
-    if jenkins:
-        values["JENKINS_IMAGE"] = f"{host}/cicd-mirror/jenkins:{sorted(jenkins)[-1]}"
-    if tool:
-        values["JENKINS_TOOL_IMAGE"] = f"{host}/cicd-mirror/jenkins:{sorted(tool)[-1]}"
-    if found.get("cicd-mirror/kaniko-executor"):
-        values["KANIKO_IMAGE"] = f"{host}/cicd-mirror/kaniko-executor:{sorted(found['cicd-mirror/kaniko-executor'])[-1]}"
+    newest = lambda key, keep=lambda t: True: next((t for t in found.get(key, []) if keep(t)), "")  # noqa: E731
+    if newest("cicd-mirror/jenkins", lambda t: t.endswith("-plugins")):
+        values["JENKINS_IMAGE"] = f"{host}/cicd-mirror/jenkins:{newest('cicd-mirror/jenkins', lambda t: t.endswith('-plugins'))}"
+    if newest("cicd-mirror/jenkins", lambda t: not t.endswith("-plugins")):
+        values["JENKINS_TOOL_IMAGE"] = f"{host}/cicd-mirror/jenkins:{newest('cicd-mirror/jenkins', lambda t: not t.endswith('-plugins'))}"
+    if newest("cicd-mirror/kaniko-executor"):
+        values["KANIKO_IMAGE"] = f"{host}/cicd-mirror/kaniko-executor:{newest('cicd-mirror/kaniko-executor')}"
     if any(k.startswith("base-images/") for k in found):
         values["CICD_BASE_REGISTRY"] = f"{host}/base-images"
         values["CICD_DOCKERHUB"] = f"{host}/base-images"
-    if found.get("base-images/mariadb"):
-        values["MARIADB_IMAGE"] = f"{host}/base-images/mariadb:{sorted(found['base-images/mariadb'])[-1]}"
+    if newest("base-images/mariadb"):
+        values["MARIADB_IMAGE"] = f"{host}/base-images/mariadb:{newest('base-images/mariadb')}"
+    if newest("cicd-portal/cicd-console"):
+        values["CONSOLE_IMAGE_TAG"] = newest("cicd-portal/cicd-console")
+    if newest("cicd-portal/security-scanner"):
+        values["SECURITY_IMAGE_TAG"] = newest("cicd-portal/security-scanner")
     return values
 
 
 # ------------------------------------------------------------------------------------- RKE2 node CA ---
-def node_ca_script(ca_pem, domain, harbor_host):
-    """Run as root on every RKE2 node: the CA in the system trust store and for RKE2's containerd (Harbor)."""
+def node_ca_script(ca_pem, domain, harbor_host, mirrors=()):
+    """Run as root on every RKE2 node: the CA in the system trust store and for RKE2's containerd (Harbor), and
+    (closed network) mirrors of the other registries to Harbor's project 'mirror' with rewrite (load-to-harbor.sh)."""
+    mirror_lines = ""
+    for reg in sorted(set(mirrors)):
+        if not re.match(r"^[A-Za-z0-9.-]+(:[0-9]+)?$", reg):
+            continue
+        mirror_lines += f"add_mirror {reg}\n"
     return f"""#!/bin/bash
 # K-PaaS CA on an RKE2 node (generated by setup-cicd-env.sh). Run as root on EVERY node (control plane too).
 # Only the public CA certificate is written; the CA private key is never needed.
 set -euo pipefail
+REG=/etc/rancher/rke2/registries.yaml
+CHANGED=0
 cat > /etc/pki/ca-trust/source/anchors/{domain}-ca.crt <<'CA'
 {ca_pem.strip()}
 CA
 update-ca-trust extract
 mkdir -p /etc/rancher/rke2
 cp /etc/pki/ca-trust/source/anchors/{domain}-ca.crt /etc/rancher/rke2/{domain}-ca.crt
-REG=/etc/rancher/rke2/registries.yaml
-if ! grep -q '"{harbor_host}"' "$REG" 2>/dev/null; then
-  [[ -f "$REG" ]] && cp "$REG" "$REG.bak.$(date +%Y%m%d%H%M%S)"
-  grep -q '^configs:' "$REG" 2>/dev/null || echo 'configs:' >> "$REG"
+backup() {{ [[ $CHANGED == 1 || ! -f "$REG" ]] || cp "$REG" "$REG.bak.$(date +%Y%m%d%H%M%S)"; CHANGED=1; }}
+has_key() {{ # section key: is "key:" an entry of the top-level section (mirrors / configs)?
+  [[ -f "$REG" ]] && awk -v sec="$1:" -v key="$2" '
+    /^[^ #]/ {{ s = $1 }}
+    s == sec {{ k = $0; sub(/^  /, "", k); if ($0 ~ /^  [^ ]/) {{ sub(/:.*/, "", k); gsub(/"/, "", k); if (k == key) f = 1 }} }}
+    END {{ exit !f }}' "$REG"
+}}
+section() {{ grep -q "^$1:" "$REG" 2>/dev/null || echo "$1:" >> "$REG"; }}
+if ! has_key configs "{harbor_host}"; then
+  backup; section configs
   sed -i '/^configs:/a\\  "{harbor_host}":\\n    tls:\\n      ca_file: /etc/rancher/rke2/{domain}-ca.crt' "$REG"
 fi
-if systemctl is-active --quiet rke2-server; then systemctl restart rke2-server
-elif systemctl is-active --quiet rke2-agent; then systemctl restart rke2-agent; fi
-echo "[OK] CA installed on $(hostname) (RKE2 restarted: running pods keep running)"
+add_mirror() {{ # registry: pulls of <registry>/<path> go to {harbor_host}/mirror/<registry>/<path>
+  if has_key mirrors "$1"; then
+    echo "[WARN] $REG already has a mirror for $1 - kept (its images must be in that mirror)"; return
+  fi
+  backup; section mirrors
+  sed -i "/^mirrors:/a\\\\  \\"$1\\":\\\\n    endpoint:\\\\n      - \\"https://{harbor_host}\\"\\\\n    rewrite:\\\\n      \\"^(.*)\\$\\": \\"mirror/$1/\\$1\\"" "$REG"
+}}
+{mirror_lines}if [[ $CHANGED == 1 ]]; then
+  if systemctl is-active --quiet rke2-server; then systemctl restart rke2-server
+  elif systemctl is-active --quiet rke2-agent; then systemctl restart rke2-agent; fi
+  echo "[OK] $(hostname): CA and $REG updated, RKE2 restarted (running pods keep running)"
+else
+  echo "[OK] $(hostname): CA installed, $REG already up to date"
+fi
 """
 
 
@@ -391,7 +431,7 @@ def main():
         print(json.dumps(harbor_mirror(args[0], args[1], sys.stdin.readline().rstrip("\n"))))
     elif cmd == "node-ca-script":
         with open(args[0], encoding="utf-8") as fh:
-            print(node_ca_script(fh.read(), args[1], args[2]), end="")
+            print(node_ca_script(fh.read(), args[1], args[2], args[3:]), end="")
     else:
         raise SystemExit(__doc__)
 

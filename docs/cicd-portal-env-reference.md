@@ -50,6 +50,8 @@ cd ~/Saeoll-PaaS/cicd-portal-deployment/script && ./setup-cicd-env.sh
 - **RKE2에서 점검의 Harbor 이미지 받기가 x509로 실패**하면(특히 제어 노드), 그 노드에서 root로 실행한다:
   `sudo bash ~/Saeoll-PaaS/cicd-portal-deployment/values/rke2-node-ca.sh` (다른 노드는 파일을 복사해서 실행). 그다음 마법사를 다시 실행.
 
+폐쇄망에서 백업 이미지를 Harbor에 등록하며 설치하는 전체 순서: [폐쇄망 RKE2 K-PaaS에 CI/CD 포털 설치하기](offline-cicd-install-rke2.md)
+
 아래 1~2장은 마법사가 다루는 값의 자세한 설명이다.
 
 ---

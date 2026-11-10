@@ -14,11 +14,18 @@
 #      + CI tool images: kaniko (KANIKO_IMAGE), Jenkins init image (JENKINS_TOOL_IMAGE), alpine -> cicd-mirror / base-images
 #   3. JENKINS_PLUGINS=1 (default) and no cicd-mirror/jenkins in Harbor: Jenkins controller image + the plugins of
 #      the running Jenkins (podman build, base image from docker.io) -> cicd-mirror/jenkins:<ver>-plugins
+#   4. MIRROR_IMAGES=1 (default): the other images the CI/CD portal runs, from their original registries (Argo CD,
+#      Redis, Dex, Jenkins agent, GitLab, GitLab Runner + helper, Gitleaks, Trivy, Presidio: the pods of the cicd-*
+#      namespaces of this cluster + the settings) -> mirror/<registry>/<path> (public). In the closed network the
+#      RKE2 nodes pull them through registries.yaml mirrors with rewrite (setup-cicd-env.sh writes the node script)
+#      + EXTRA_MIRROR_IMAGES
+#   5. CHARTS=1 (default): Jenkins / Argo CD / GitLab Runner charts at the versions running here -> charts/
+#      (+ charts/versions.env) for CICD_CHART_DIR
 #   PACK=1 (default): <out-dir>.tar + .sha256 to carry into the closed network
 #
 # Output: <out-dir>/images/oci (OCI layout, shared layers), images/harbor-images.txt (<dest>\t<oci name>\t<public|
-# private>), images/sources.txt (where each image came from). Passwords never go to the command line or the logs.
-# Needs: skopeo, python3, curl (podman + kubectl for 3).
+# private>[\tall]), images/sources.txt (where each image came from), charts/. Passwords never go to the command
+# line or the logs. Needs: skopeo, python3, curl (podman + kubectl for 3, kubectl + helm for 4 and 5).
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -30,7 +37,10 @@ EXTRA_BASE_IMAGES=${EXTRA_BASE_IMAGES:-""}
 FROM_DOCKERHUB=${FROM_DOCKERHUB:-1}
 JENKINS_PLUGINS=${JENKINS_PLUGINS:-1}
 PACK=${PACK:-1}
-PUBLIC_PROJECTS=" cicd-mirror base-images "     # pulled without credentials in the target (nodes, Jenkins agents)
+MIRROR_IMAGES=${MIRROR_IMAGES:-1}
+EXTRA_MIRROR_IMAGES=${EXTRA_MIRROR_IMAGES:-""}
+CHARTS=${CHARTS:-1}
+PUBLIC_PROJECTS=" cicd-mirror base-images mirror "     # pulled without credentials in the target (nodes, Jenkins agents)
 
 info() { echo "[INFO] $*"; }
 ok() { echo "[OK]   $*"; }
@@ -67,17 +77,18 @@ declare -A DONE
 FAILED=()
 oci_name() { echo "harbor_$1" | tr '/:@' '___'; }
 
-# export <source docker ref> <destination project/repo:tag> [auth: harbor|none]
+# export <source docker ref> <destination project/repo:tag> [auth: harbor|none] [all: keep the digest / index]
 export_image() {
-  local src=$1 dest=$2 how=${3:-harbor} name project visibility
+  local src=$1 dest=$2 how=${3:-harbor} keep=${4:-} name project visibility
   [[ -z "${DONE[$dest]:-}" ]] || return 0
   name=$(oci_name "$dest")
   project=${dest%%/*}
   visibility=$([[ "$PUBLIC_PROJECTS" == *" $project "* ]] && echo public || echo private)
   local args=(--quiet --retry-times 2)
   [[ "$how" == harbor ]] && args+=(--authfile "$AUTH" --src-cert-dir "$CERTS")
+  [[ "$keep" == all ]] && args+=(--all --preserve-digests)
   if skopeo copy "${args[@]}" "docker://$src" "oci:$OUT/images/oci:$name"; then
-    printf '%s\t%s\t%s\n' "$dest" "$name" "$visibility" >> "$LIST"
+    printf '%s\t%s\t%s%s\n' "$dest" "$name" "$visibility" "${keep:+$'\t'$keep}" >> "$LIST"
     printf '%s\t%s\n' "$dest" "$src" >> "$SOURCES"
     DONE[$dest]=1
     ok "$dest  <- $src"
@@ -187,14 +198,97 @@ if [[ "$JENKINS_PLUGINS" == 1 ]] && ! grep -q '^cicd-mirror/jenkins:.*-plugins' 
   fi
 fi
 
+# 4. images the portal pulls from other registries -> mirror/<registry>/<path> ----------------------------------------
+qualify() { # nginx:1 -> docker.io/library/nginx:1, foo/bar -> docker.io/foo/bar
+  local ref=$1 first=${1%%/*}
+  if [[ "$ref" != */* ]]; then echo "docker.io/library/$ref"
+  elif [[ "$first" != *.* && "$first" != *:* && "$first" != localhost ]]; then echo "docker.io/$ref"
+  else echo "$ref"; fi
+}
+if [[ "$MIRROR_IMAGES" == 1 ]]; then
+  if command -v kubectl >/dev/null && kubectl get nodes >/dev/null 2>&1; then
+    list="$TMP/mirror.txt"; : > "$list"
+    for ns in $(cicd_var ARGOCD_NAMESPACE) $(cicd_var JENKINS_NAMESPACE) $(cicd_var GITLAB_NAMESPACE) \
+              $(cicd_var RUNNER_NAMESPACE) $(cicd_var CONSOLE_NAMESPACE) $(cicd_var SECURITY_NAMESPACE); do
+      kubectl -n "$ns" get pods,deployments,statefulsets,daemonsets,cronjobs -o json 2>/dev/null | python3 -c '
+import json, sys
+def walk(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k in ("containers", "initContainers") and isinstance(v, list):
+                for c in v:
+                    if isinstance(c, dict) and c.get("image"):
+                        print(c["image"])
+            else:
+                walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+walk(json.load(sys.stdin))' >> "$list" || true
+    done
+    if command -v helm >/dev/null; then   # build-time images: Jenkins agent, GitLab Runner helper
+      helm get values jenkins -n "$(cicd_var JENKINS_NAMESPACE)" -a -o json 2>/dev/null | python3 -c '
+import json, sys
+a = (json.load(sys.stdin).get("agent") or {}).get("image") or {}
+if isinstance(a, dict) and a.get("repository"):
+    print(((a.get("registry") + "/") if a.get("registry") else "") + a["repository"] + ":" + str(a.get("tag", "")))' >> "$list" 2>/dev/null || true
+      runner=$(helm list -A -o json 2>/dev/null | python3 -c '
+import json, sys
+print(next((r["app_version"] for r in json.load(sys.stdin) if r["chart"].startswith("gitlab-runner-")), ""))' || true)
+      [[ -n "$runner" ]] && echo "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v${runner#v}" >> "$list"
+    fi
+    for v in GITLAB_IMAGE SECURITY_GITLEAKS_IMAGE SECURITY_TRIVY_IMAGE PRESIDIO_IMAGE; do cicd_var "$v" >> "$list"; done
+    printf '%s\n' $EXTRA_MIRROR_IMAGES >> "$list"
+    while read -r img; do
+      [[ -n "$img" ]] || continue
+      q=$(qualify "$img")
+      [[ "$q" == "$HARBOR/"* || "$q" == harbor.* || "$q" == localhost/* ]] && continue   # Harbor images: steps 1-3
+      repo=${q%@*}; digest=""; [[ "$q" == *@sha256:* ]] && digest=${q#*@}
+      tag=""; [[ "${repo##*/}" == *:* ]] && { tag=${repo##*:}; repo=${repo%:*}; }
+      [[ -n "$tag" ]] || tag=${digest:+sha-${digest:7:12}}
+      [[ -n "$tag" ]] || tag=latest
+      export_image "$q" "mirror/$repo:$tag" none ${digest:+all} || { FAILED+=("mirror/$repo:$tag"); warn "$q: copy failed"; }
+    done < <(sort -u "$list")
+  else
+    warn "kubectl cannot reach this cluster: no mirror images (Argo CD, GitLab, ...) - MIRROR_IMAGES=0 to skip"
+    FAILED+=("mirror images (kubectl)")
+  fi
+fi
+
+# 5. charts at the versions running here -------------------------------------------------------------------------------
+if [[ "$CHARTS" == 1 ]]; then
+  if command -v helm >/dev/null && command -v kubectl >/dev/null; then
+    mkdir -p "$OUT/charts"; : > "$OUT/charts/versions.env"
+    while read -r chart version; do
+      case "$chart" in
+        jenkins) url=https://charts.jenkins.io var=JENKINS_CHART_VERSION ;;
+        argo-cd) url=https://argoproj.github.io/argo-helm var=ARGOCD_CHART_VERSION ;;
+        gitlab-runner) url=https://charts.gitlab.io var=GITLAB_RUNNER_CHART_VERSION ;;
+        *) continue ;;
+      esac
+      if helm pull -d "$OUT/charts" --repo "$url" "$chart" --version "$version" >/dev/null; then
+        echo "$var=\"$version\"" >> "$OUT/charts/versions.env"; ok "chart $chart $version"
+      else
+        FAILED+=("chart $chart $version"); warn "chart $chart $version: pull failed (internet?)"
+      fi
+    done < <(helm list -A -o json 2>/dev/null | python3 -c '
+import json, re, sys
+for r in json.load(sys.stdin):
+    m = re.match(r"^(.*)-(v?\d+\.\d+\.\d+.*)$", r["chart"])
+    if m: print(m.group(1), m.group(2))' | sort -u)
+  else
+    warn "helm/kubectl not available: no charts - CHARTS=0 to skip"; FAILED+=("charts (helm)")
+  fi
+fi
+
 # summary + package ---------------------------------------------------------------------------------------------------
 count=$(wc -l < "$LIST")
 ((count)) || die "nothing exported"
 { echo "# Harbor image export $(date -Iseconds) from $HARBOR"
-  echo "# load in the closed network: offline/load-to-harbor.sh <this directory>  (docs/harbor-image-migration.md)"
+  echo "# load in the closed network: offline/load-to-harbor.sh <this directory or the .tar>  (docs/offline-cicd-install-rke2.md)"
   cut -f1,3 "$LIST"; } > "$OUT/README.txt"
 echo
-ok "$count images -> $OUT ($(du -sh "$OUT/images" | cut -f1))"
+ok "$count images -> $OUT ($(du -sh "$OUT/images" | cut -f1))$([[ -s "$OUT/charts/versions.env" ]] && echo ", charts: $(ls "$OUT/charts"/*.tgz | wc -l)")"
 if [[ "$PACK" == 1 ]]; then
   tar -C "$(dirname "$OUT")" -cf "$OUT.tar" "$(basename "$OUT")"
   (cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT").tar" > "$(basename "$OUT").tar.sha256")

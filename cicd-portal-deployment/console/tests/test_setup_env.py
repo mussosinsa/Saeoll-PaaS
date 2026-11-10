@@ -72,12 +72,14 @@ class DiscoverTest(unittest.TestCase):
         self.assertIn("cp-cert-setup-daemonset", where)
 
     def test_mirror_values(self):
-        v = sc.mirror_values("h", {"cicd-mirror/jenkins": ["2.479.3-jdk17-plugins", "lts-jdk17"],
+        v = sc.mirror_values("h", {"cicd-mirror/jenkins": ["2.479.3-jdk17-plugins", "lts-jdk17"],     # newest first
                                    "cicd-mirror/kaniko-executor": ["v1"], "base-images/mariadb": ["11.4"],
-                                   "base-images/node": ["20-alpine"]})
+                                   "base-images/node": ["20-alpine"], "cicd-portal/cicd-console": ["1.0.2", "1.0.1"]})
         self.assertEqual(v["JENKINS_IMAGE"], "h/cicd-mirror/jenkins:2.479.3-jdk17-plugins")
         self.assertEqual(v["JENKINS_TOOL_IMAGE"], "h/cicd-mirror/jenkins:lts-jdk17")
         self.assertEqual((v["CICD_BASE_REGISTRY"], v["MARIADB_IMAGE"]), ("h/base-images", "h/base-images/mariadb:11.4"))
+        self.assertEqual(v["CONSOLE_IMAGE_TAG"], "1.0.2")
+        self.assertNotIn("SECURITY_IMAGE_TAG", v)
 
 
 @unittest.skipUnless(HAVE_OPENSSL, "openssl")
@@ -119,7 +121,7 @@ class CertTest(unittest.TestCase):
         (root / "anchors").mkdir(parents=True)
         (root / "rke2").mkdir()
         (root / "rke2/registries.yaml").write_text('mirrors:\n  docker.io:\n    endpoint:\n      - "http://m:5000"\n')
-        script = sc.node_ca_script(ca.read_text(), "k.kr", "harbor.k.kr")
+        script = sc.node_ca_script(ca.read_text(), "k.kr", "harbor.k.kr", ["docker.io", "quay.io", "bad name"])
         self.assertNotIn("PRIVATE KEY", script)
         script = script.replace("/etc/pki/ca-trust/source/anchors", str(root / "anchors")) \
                        .replace("/etc/rancher/rke2", str(root / "rke2"))
@@ -134,6 +136,11 @@ class CertTest(unittest.TestCase):
         self.assertEqual(reg.count('"harbor.k.kr":'), 1)
         self.assertIn(f'configs:\n  "harbor.k.kr":\n    tls:\n      ca_file: {root}/rke2/k.kr-ca.crt', reg)
         self.assertIn("mirrors:", reg)
+        self.assertIn('  "quay.io":\n    endpoint:\n      - "https://harbor.k.kr"\n    rewrite:\n'
+                      '      "^(.*)$": "mirror/quay.io/$1"', reg)
+        self.assertEqual(reg.count("quay.io"), 2)                    # added once (second run: kept)
+        self.assertNotIn("mirror/docker.io", reg)                    # an existing docker.io mirror is kept
+        self.assertNotIn("bad name", script)
         self.assertTrue((root / "anchors/k.kr-ca.crt").read_text().startswith("-----BEGIN CERTIFICATE-----"))
 
 
@@ -152,9 +159,11 @@ elif cmd == "login":
     if pw not in ("good", "scm-good"):
         print("HTTP 401"); sys.exit(1)
 elif cmd == "harbor-mirror":
-    print(json.dumps({}))
+    print(json.dumps({"JENKINS_IMAGE": "harbor.k.kr/cicd-mirror/jenkins:2.4-plugins",
+                      "CONSOLE_IMAGE_TAG": "1.0.2", "MIRROR_REGISTRIES": "quay.io ghcr.io"}))
 elif cmd == "node-ca-script":
     print("#!/bin/bash")
+    print("# mirrors: " + " ".join(sys.argv[5:]))
 '''
 
 
@@ -232,6 +241,45 @@ class WizardTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("cicd_set PORTAL_VARS", (self.script / "cicd-vars.local.sh").read_text())
         self.assertIn("K8S_STORAGECLASS=nfs", plocal.read_text())
+
+    def test_closed_network_loads_backup(self):
+        offline = self.tmp / "offline"
+        offline.mkdir()
+        (offline / "load-to-harbor.sh").write_text(
+            '#!/bin/bash\necho "load $* host=$HARBOR_HOST user=$HARBOR_USER pw=${HARBOR_PASSWORD:+set}" >> '
+            f'"{self.tmp}/load.log"\n')
+        (offline / "load-to-harbor.sh").chmod(0o755)
+        backup = self.tmp / "harbor-export-20261110"
+        (backup / "charts").mkdir(parents=True)
+        (backup / "charts/versions.env").write_text('JENKINS_CHART_VERSION="5.8.10"\nARGOCD_CHART_VERSION="7.8.0"\n')
+        bindir = self.tmp / "bin"
+        (bindir / "skopeo").write_text("#!/bin/sh\nexit 0\n")
+        (bindir / "skopeo").chmod(0o755)
+        answers = "\n".join([
+            "", "good", "", "", "scm-good", "", "", "", "",   # as test_interactive
+            "y",                       # closed network
+            str(backup),               # backup folder
+            "",                        # register: yes
+            "",                        # charts folder: <backup>/charts
+            "", "",                    # JENKINS_IMAGE, CONSOLE_IMAGE_TAG from Harbor
+            "",                        # Nexus: none
+            "y",                       # ran the node script on every node
+            "",                        # save the SCM password: no
+        ]) + "\n"
+        r = self.run_wizard(answers, "--no-deploy")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        load = (self.tmp / "load.log").read_text()
+        self.assertIn(f"load {backup} host=harbor.k.kr user=admin pw=set", load)
+        self.assertNotIn("good", load)                                # password only in the environment
+        local = (self.script / "cicd-vars.local.sh").read_text()
+        self.assertIn(f"cicd_set CICD_CHART_DIR {backup}/charts", local)
+        self.assertIn("cicd_set JENKINS_CHART_VERSION 5.8.10", local)
+        self.assertIn("cicd_set JENKINS_IMAGE harbor.k.kr/cicd-mirror/jenkins:2.4-plugins", local)
+        self.assertIn("cicd_set CONSOLE_IMAGE_TAG 1.0.2", local)
+        self.assertNotIn("MIRROR_REGISTRIES", local)
+        self.assertIn(f"cicd_set CICD_IMAGE_LOADED {backup}", local)    # re-run: "register?" defaults to No
+        node = (self.tmp / "cicd-portal-deployment/values/rke2-node-ca.sh").read_text()
+        self.assertIn("# mirrors: quay.io ghcr.io", node)
 
     def test_yes_fails_without_password(self):
         r = self.run_wizard("", "--yes", "--no-deploy")              # Harbor password of the file fails

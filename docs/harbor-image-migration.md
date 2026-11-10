@@ -1,5 +1,9 @@
 # Harbor 이미지 백업 → 다른 K-PaaS(폐쇄망) Harbor 등록
 
+> 폐쇄망 **RKE2** K-PaaS에 CI/CD 포털까지 설치하는 전체 순서(백업 → 반입 → Harbor 등록 → 노드 미러 → 설치)는
+> [폐쇄망 RKE2 K-PaaS에 CI/CD 포털 설치하기](offline-cicd-install-rke2.md)를 따른다. 이 문서는 백업·등록 스크립트의 상세 설명이다.
+> `harbor-export.sh`는 이제 Argo CD·GitLab 등 다른 레지스트리 이미지(`mirror/<레지스트리>/...`)와 차트(`charts/`)도 함께 백업한다.
+
 지금 쓰는 K-PaaS의 Harbor에서 **CI/CD 포털 이미지**와 **앱 언어별 base 이미지(php, java, node.js, vue)**,
 **DB 이미지(MariaDB, PostgreSQL)** 를 백업해서, 인터넷이 없는 다른 K-PaaS의 Harbor에 등록하고
 CI/CD 포털을 배포하는 방법이다.

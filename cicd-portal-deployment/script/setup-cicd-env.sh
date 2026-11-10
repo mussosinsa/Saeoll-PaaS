@@ -239,19 +239,50 @@ fi
 # 6. closed network ---------------------------------------------------------------------------------------------------
 title "6/7 폐쇄망 (인터넷 없이 설치)"
 OFFLINE=n; [[ -n "$(cur CICD_CHART_DIR "")" ]] && OFFLINE=y
+MIRRORS=""
 if yesno "폐쇄망입니까? (차트·이미지를 반입 묶음과 Harbor 에서)" "$OFFLINE"; then
-  ask CHARTS "Helm 차트 폴더 (반입 묶음의 charts)" "$(cur CICD_CHART_DIR /opt/offline/charts)" '^/.+'
+  # 6-1. backed-up images (offline/harbor-export.sh) -> Harbor of this K-PaaS
+  echo "  반입한 이미지 백업: harbor-export-<날짜>.tar (또는 풀어 둔 폴더). 등록하지 않으려면 - 입력."
+  ask BUNDLE "이미지 백업 파일/폴더" "$(cur CICD_IMAGE_BUNDLE "$(ls -1d /opt/harbor-export-*.tar 2>/dev/null | tail -1)")" '^(/.+|-)?$'
+  [[ "$BUNDLE" == - ]] && BUNDLE=""
+  if [[ -n "$BUNDLE" ]]; then
+    [[ -e "$BUNDLE" ]] || die "$BUNDLE 이 없습니다 - 반입 매체에서 복사하세요"
+    loader=$(cd "$ROOT/.." && pwd)/offline/load-to-harbor.sh
+    [[ -x "$loader" ]] || die "$loader 가 없습니다 (저장소 전체가 필요합니다)"
+    command -v skopeo >/dev/null || die "skopeo 가 없습니다 (sudo dnf install -y skopeo)"
+    loaded=$(cur CICD_IMAGE_LOADED "")
+    [[ "$loaded" == "$BUNDLE" ]] && info "이 백업은 이미 등록했습니다 (다시 등록해도 됩니다)"
+    if yesno "$BUNDLE 의 이미지를 harbor.$DOMAIN 에 등록할까요? (수 분~수십 분)" "$([[ "$loaded" == "$BUNDLE" ]] && echo n || echo y)"; then
+      mkdir -p "$ROOT/values"
+      HARBOR_HOST="harbor.$DOMAIN" HARBOR_USER="${PV[REPOSITORY_USERNAME]}" HARBOR_PASSWORD="${PV[REPOSITORY_PASSWORD]}" \
+        CA_FILE="$CA" "$loader" "$BUNDLE" | tee "$ROOT/values/load-to-harbor.log" ||
+        die "Harbor 등록 실패 - $ROOT/values/load-to-harbor.log 를 확인하고 다시 실행하세요 (이미 올라간 이미지는 다시 올려도 됩니다)"
+      loaded=$BUNDLE
+    fi
+    [[ -n "$loaded" ]] && OUT[CICD_IMAGE_LOADED]=$loaded
+    OUT[CICD_IMAGE_BUNDLE]=$BUNDLE
+    bdir=$BUNDLE; [[ -f "$BUNDLE" ]] && bdir="$(dirname "$BUNDLE")/$(tar -tf "$BUNDLE" | head -1 | cut -d/ -f1)"
+    [[ -d "$bdir/charts" ]] && def_charts="$bdir/charts"
+  fi
+  ask CHARTS "Helm 차트 폴더 (jenkins / argo-cd / gitlab-runner .tgz)" "$(cur CICD_CHART_DIR "${def_charts:-/opt/offline/charts}")" '^/.+'
   [[ -d "$CHARTS" ]] || warn "$CHARTS 가 없습니다 - 반입 묶음을 먼저 복사하세요"
   OUT[CICD_CHART_DIR]=$CHARTS
+  if [[ -f "$CHARTS/versions.env" ]]; then    # chart versions the images were taken from
+    while IFS='=' read -r k v; do [[ "$k" =~ ^[A-Z_]+$ ]] && OUT[$k]=${v//\"/}; done < "$CHARTS/versions.env"
+  fi
+  # 6-2. values from the images now in Harbor
   if vals=$(printf '%s\n' "${PV[REPOSITORY_PASSWORD]}" | python3 setup_check.py harbor-mirror "$hb_url" "${PV[REPOSITORY_USERNAME]}"); then
     # read the list first: ask reads the answers from stdin
     mapfile -t MIRROR < <(python3 -c 'import json,sys; [print(f"{k}\t{v}") for k,v in json.loads(sys.argv[1]).items()]' "$vals")
     for line in "${MIRROR[@]}"; do
       k=${line%%$'\t'*}; v=${line#*$'\t'}
+      if [[ "$k" == MIRROR_REGISTRIES ]]; then MIRRORS=$v; continue; fi
       ask val "$k (Harbor)" "$(cur "$k" "$v")"; OUT[$k]=$val
     done
   fi
-  grep -q . <<<"${OUT[JENKINS_IMAGE]:-}" || warn "Harbor 에 cicd-mirror/jenkins:*-plugins 가 없습니다 - offline/load-to-harbor.sh 를 먼저 실행하세요"
+  grep -q . <<<"${OUT[JENKINS_IMAGE]:-}" || [[ " $SOURCES " != *" scm "* ]] ||
+    warn "Harbor 에 cicd-mirror/jenkins:*-plugins 가 없습니다 - 이미지 백업을 등록하세요 (Jenkins 플러그인을 받을 수 없음)"
+  [[ -n "$MIRRORS" ]] && info "Harbor mirror 프로젝트의 레지스트리: $MIRRORS (RKE2 노드 스크립트에 반영)"
   ask NEXUS "사내 Nexus 주소 (앱 빌드 의존성, 없으면 비움)" "$(cur CICD_NEXUS_URL "")" '^(https?://.+)?$'
   OUT[CICD_NEXUS_URL]=$NEXUS
 fi
@@ -286,10 +317,18 @@ sed -n '/^cicd_set/p' "$LOCAL" | sed 's/^cicd_set /  /'
 
 if [[ "$DISTRO" == rke2 ]]; then
   mkdir -p "$ROOT/values"
-  python3 setup_check.py node-ca-script "$CA" "$DOMAIN" "harbor.$DOMAIN" > "$ROOT/values/rke2-node-ca.sh"
+  # shellcheck disable=SC2086
+  python3 setup_check.py node-ca-script "$CA" "$DOMAIN" "harbor.$DOMAIN" $MIRRORS > "$ROOT/values/rke2-node-ca.sh"
   chmod 755 "$ROOT/values/rke2-node-ca.sh"
-  info "RKE2 노드용 CA 설치 스크립트: $ROOT/values/rke2-node-ca.sh"
-  info "  (점검에서 노드의 Harbor 이미지 받기가 x509 로 실패하면 그 노드에서 root 로 실행 - 제어 노드 포함)"
+  info "RKE2 노드용 스크립트: $ROOT/values/rke2-node-ca.sh (CA$([[ -n "$MIRRORS" ]] && echo " + Harbor 미러: $MIRRORS"))"
+  if [[ -n "$MIRRORS" ]]; then
+    echo "  ${C_B}폐쇄망: 배포 전에 모든 노드(제어 노드 포함)에서 root 로 한 번 실행해야 합니다.${C_0}"
+    echo "    scp $ROOT/values/rke2-node-ca.sh <노드>:/tmp/ && ssh <노드> sudo bash /tmp/rke2-node-ca.sh"
+    ((YES)) || yesno "모든 노드에서 실행했습니까? (아니오: 여기서 멈추고 다음에 다시 실행)" n ||
+      { ok "설정 저장됨. 노드 작업 후 다시 실행하세요: ./setup-cicd-env.sh"; exit 0; }
+  else
+    info "  (점검에서 노드의 Harbor 이미지 받기가 x509 로 실패하면 그 노드에서 root 로 실행 - 제어 노드 포함)"
+  fi
 fi
 
 if [[ -n "$SCM_PW" ]] && yesno "SCM 비밀번호를 다음 실행을 위해 $SECRETS_FILE (0600)에 저장할까요?" n; then
