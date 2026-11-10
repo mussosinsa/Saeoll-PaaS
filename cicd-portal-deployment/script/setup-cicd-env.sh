@@ -271,7 +271,8 @@ if yesno "폐쇄망입니까? (차트·이미지를 반입 묶음과 Harbor 에�
     while IFS='=' read -r k v; do [[ "$k" =~ ^[A-Z_]+$ ]] && OUT[$k]=${v//\"/}; done < "$CHARTS/versions.env"
   fi
   # 6-2. values from the images now in Harbor
-  if vals=$(printf '%s\n' "${PV[REPOSITORY_PASSWORD]}" | python3 setup_check.py harbor-mirror "$hb_url" "${PV[REPOSITORY_USERNAME]}"); then
+  list_file=""; [[ -n "${bdir:-}" && -f "$bdir/images/harbor-images.txt" ]] && list_file="$bdir/images/harbor-images.txt"
+  if vals=$(printf '%s\n' "${PV[REPOSITORY_PASSWORD]}" | python3 setup_check.py harbor-mirror "$hb_url" "${PV[REPOSITORY_USERNAME]}" $list_file); then
     # read the list first: ask reads the answers from stdin
     mapfile -t MIRROR < <(python3 -c 'import json,sys; [print(f"{k}\t{v}") for k,v in json.loads(sys.argv[1]).items()]' "$vals")
     for line in "${MIRROR[@]}"; do

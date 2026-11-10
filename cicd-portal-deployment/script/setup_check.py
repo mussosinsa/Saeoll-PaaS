@@ -8,7 +8,7 @@
                          names covered by the certificate, expiry. Output [OK]/[WARN]/[FAIL] lines, exit 1 on FAIL
   login WHAT ...         login checks with the password on stdin (never as an argument):
                          keycloak URL USER | harbor URL USER | scm URL USER | mariadb
-  harbor-mirror URL USER images of the closed-network Harbor projects (cicd-mirror, base-images) -> suggested
+  harbor-mirror URL USER [LIST]  images of the closed-network Harbor projects (cicd-mirror, base-images) -> suggested
                          cicd-vars values as JSON (password on stdin)
   node-ca-script CA DOMAIN HARBOR_HOST [REGISTRY ...]   shell script for the RKE2 nodes (CA in the system store,
                          registries.yaml: Harbor TLS + mirrors of REGISTRY to Harbor project 'mirror' with rewrite)
@@ -303,15 +303,40 @@ def login(what, args, password):
 
 
 # ------------------------------------------------------------------------------------- harbor mirror ---
-def harbor_mirror(url, user, password):
-    """cicd-vars values for images already in the Harbor of a closed network (load-to-harbor.sh)."""
+def list_file_found(path):
+    """{project/repo: [tags]} and mirror registries from harbor-images.txt of the backup (newest tag first)."""
+    found, mirrors = {}, set()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                dest = line.split("\t", 1)[0].strip()
+                if ":" not in dest or "/" not in dest:
+                    continue
+                repo, tag = dest.rsplit(":", 1)
+                if repo.startswith("mirror/"):
+                    mirrors.add(repo.split("/")[1])
+                else:
+                    found.setdefault(repo, []).append(tag)
+    except OSError:
+        pass
+    return found, mirrors
+
+
+def harbor_mirror(url, user, password, list_file=""):
+    """cicd-vars values for images already in the Harbor of a closed network (load-to-harbor.sh). Projects the Harbor
+    API cannot list (some versions answer HTTP 500) are taken from the backup's harbor-images.txt (list_file)."""
     host = urllib.parse.urlparse(url).netloc
     found, mirrors = {}, set()
+    from_file, file_mirrors = list_file_found(list_file) if list_file else ({}, set())
     for project in ("cicd-portal", "cicd-mirror", "base-images", "mirror"):
         page = 1
         while True:
             code, body = http("GET", f"{url.rstrip('/')}/api/v2.0/projects/{project}/repositories"
                                      f"?page={page}&page_size=100", basic(user, password))
+            if code != 200 and code != 404 and page == 1:
+                found.update({k: v for k, v in from_file.items() if k.startswith(f"{project}/")})
+                if project == "mirror":
+                    mirrors |= file_mirrors
             repos = json.loads(body or "[]") if code == 200 else []
             for repo in repos:
                 name = repo["name"].split("/", 1)[1]
@@ -428,7 +453,7 @@ def main():
             print(reason)
             sys.exit(1)
     elif cmd == "harbor-mirror":
-        print(json.dumps(harbor_mirror(args[0], args[1], sys.stdin.readline().rstrip("\n"))))
+        print(json.dumps(harbor_mirror(args[0], args[1], sys.stdin.readline().rstrip("\n"), *args[2:3])))
     elif cmd == "node-ca-script":
         with open(args[0], encoding="utf-8") as fh:
             print(node_ca_script(fh.read(), args[1], args[2], args[3:]), end="")

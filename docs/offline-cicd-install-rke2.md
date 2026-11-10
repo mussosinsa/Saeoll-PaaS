@@ -289,6 +289,7 @@ kubectl get pods -A | grep -E 'cicd-' | grep -vE 'Running|Completed'
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | `sha256 mismatch` | 반입 중 손상 | 다시 복사 |
+| 백업 중 `Harbor API ...: HTTP 500` | 일부 Harbor 버전의 저장소 목록 API 오류 | 정상 진행: 자동으로 `skopeo list-tags`로 조회 (`repository list via the registry API`). 업체 앱 이미지는 `FALLBACK_REPOS="<프로젝트>/<저장소> ..."` |
 | 등록 중 `Harbor login failed` | Harbor admin 비밀번호가 다름 | 마법사 4/7에서 현재 비밀번호 입력 (마법사가 확인한 값으로 등록) |
 | 등록 중 `push failed` | Harbor 디스크 부족, 네트워크 | Harbor 화면 **시스템 관리 → 저장소 사용량**, 로그 `values/load-to-harbor.log` 확인 후 다시 실행 |
 | `x509: certificate signed by unknown authority` (Pod `ErrImagePull`) | 그 노드에 CA 미설치 | 그 노드에서 `rke2-node-ca.sh` 실행 |

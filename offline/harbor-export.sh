@@ -7,7 +7,8 @@
 #   ./harbor-export.sh [out-dir]          (default: ../harbor-export-<date>)
 #
 #   1. Harbor projects HARBOR_PROJECTS (default "cicd-portal cicd-mirror base-images"): the newest KEEP_TAGS tags
-#      of every repository (cicd-console, security-scanner, jenkins:<ver>-plugins, base-images/...)
+#      of every repository (cicd-console, security-scanner, jenkins:<ver>-plugins, base-images/...). If the Harbor
+#      API answers HTTP 500/403, the registry API is used for the portal's repositories (+ FALLBACK_REPOS)
 #   2. base images of the starters' Dockerfiles (php, java, node.js, vue: composer, php-apache, maven, gradle,
 #      eclipse-temurin, node, nginx) + DB_IMAGES (mariadb, postgres) + EXTRA_BASE_IMAGES -> base-images/<image>:
 #      taken from the current Harbor base-images, else from docker.io (FROM_DOCKERHUB=0: Harbor only)
@@ -119,7 +120,13 @@ def get(path):
 try:
     repos = get(f"/projects/{urllib.parse.quote(project)}/repositories")
 except urllib.error.HTTPError as e:
-    sys.exit(0 if e.code == 404 else f"[ERROR] Harbor {project}: HTTP {e.code} (admin account of cp-portal-vars.sh?)")
+    if e.code == 404:
+        sys.exit(0)
+    body = e.read().decode(errors="replace").strip().replace("\n", " ")[:300]
+    print(f"[WARN] Harbor API {project}/repositories: HTTP {e.code} {body}", file=sys.stderr)
+    if e.code == 401:
+        print("       401: admin account of cp-portal-vars.sh (REPOSITORY_USERNAME / REPOSITORY_PASSWORD)", file=sys.stderr)
+    sys.exit(2 if e.code >= 500 or e.code == 403 else 1)   # 2: try the registry API (skopeo list-tags)
 except (urllib.error.URLError, OSError) as e:
     sys.exit(f"[ERROR] https://{host}: {getattr(e, 'reason', e)}")
 for repo in repos:
@@ -135,9 +142,38 @@ harbor_tags() {
   harbor_password | python3 "$TMP/harbor_tags.py" "$HARBOR" "${V[1]}" "$1" "$KEEP_TAGS" "$CERTS/ca.crt"
 }
 
+# base images of the starters (php, java, node.js, vue) + DB + extra (steps 1 and 2)
+mariadb=$(cicd_var MARIADB_IMAGE); mariadb=${mariadb##*/}
+mapfile -t BASES < <({ grep -rhoE '^FROM \$\{BASE_REGISTRY\}/[^ ]+' "$REPO/cicd-portal-deployment/starters" 2>/dev/null |
+                       sed 's|^FROM ${BASE_REGISTRY}/||'
+                       printf '%s\n' $DB_IMAGES $EXTRA_BASE_IMAGES ${mariadb:+"$mariadb"}; } | sed '/^$/d' | sort -u)
+
+# Some Harbor versions answer the repository list with HTTP 500: then the registry API (skopeo list-tags) is asked
+# for the repositories the portal uses (FALLBACK_REPOS="<project>/<repo> ...": more, e.g. vendor application images)
+registry_tags() { # project -> "project/repo:tag" lines, newest KEEP_TAGS per repository (version order)
+  local project=$1 repo repos=() out
+  case "$project" in
+    cicd-portal) repos=(cicd-console security-scanner) ;;
+    cicd-mirror) repos=(jenkins kaniko-executor) ;;
+    base-images) for b in "${BASES[@]}" alpine:3.20; do repos+=("${b%%:*}"); done ;;
+  esac
+  for r in ${FALLBACK_REPOS:-}; do [[ "${r%%/*}" == "$project" ]] && repos+=("${r#*/}"); done
+  for repo in $(printf '%s\n' "${repos[@]}" | sort -u); do
+    out=$(skopeo list-tags --authfile "$AUTH" --cert-dir "$CERTS" "docker://$HARBOR/$project/$repo" 2>/dev/null) || continue
+    python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1]).get("Tags") or []))' "$out" |
+      sort -rV | head -n "$KEEP_TAGS" | sed "s|^|$project/$repo:|"
+  done
+}
+
 # 1. Harbor projects ------------------------------------------------------------------------------------------------
 for project in $HARBOR_PROJECTS; do
-  harbor_tags "$project" > "$TMP/tags" || { FAILED+=("Harbor project $project (list)"); continue; }
+  rc=0; harbor_tags "$project" > "$TMP/tags" || rc=$?
+  if ((rc == 2)); then
+    info "Harbor project $project: repository list via the registry API (skopeo list-tags)"
+    registry_tags "$project" > "$TMP/tags"
+  elif ((rc != 0)); then
+    FAILED+=("Harbor project $project (list)"); continue
+  fi
   mapfile -t refs < "$TMP/tags"
   ((${#refs[@]})) || { info "Harbor project $project: no tagged images (or the project does not exist)"; continue; }
   info "Harbor project $project: ${#refs[@]} images"
@@ -147,10 +183,6 @@ for project in $HARBOR_PROJECTS; do
 done
 
 # 2. base images: starters (php, java, node.js, vue) + DB + extra ----------------------------------------------------
-mariadb=$(cicd_var MARIADB_IMAGE); mariadb=${mariadb##*/}
-mapfile -t BASES < <({ grep -rhoE '^FROM \$\{BASE_REGISTRY\}/[^ ]+' "$REPO/cicd-portal-deployment/starters" 2>/dev/null |
-                       sed 's|^FROM ${BASE_REGISTRY}/||'
-                       printf '%s\n' $DB_IMAGES $EXTRA_BASE_IMAGES ${mariadb:+"$mariadb"}; } | sed '/^$/d' | sort -u)
 for b in "${BASES[@]}"; do
   dest="base-images/$b"
   [[ -z "${DONE[$dest]:-}" ]] || continue

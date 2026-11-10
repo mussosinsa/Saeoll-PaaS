@@ -204,6 +204,7 @@ SCM_ADMIN_PASSWORD='<SCM 관리자 git 비밀번호>' ./deploy-cicd-portal.sh co
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | 백업 중 `[ERROR] https://harbor...: certificate verify failed` | `cp-portal-deployment/certs/ca.crt`가 지금 Harbor의 CA가 아님 | 지금 환경의 CA를 그 위치에 둔다 |
+| 백업 중 `Harbor API ...: HTTP 500` 다음 `repository list via the registry API` | 일부 Harbor 버전의 저장소 목록 API 오류 | 자동으로 레지스트리 API(`skopeo list-tags`)로 포털 저장소를 조회하므로 그대로 진행. 업체 프로젝트도 옮기려면 `FALLBACK_REPOS="soft/homepage soft/board"` |
 | 백업 중 `HTTP 401` | `cp-portal-vars.sh`의 Harbor 계정·비밀번호가 다름 | `REPOSITORY_USERNAME`, `REPOSITORY_PASSWORD` 확인 |
 | `base-images/...: not in harbor... nor docker.io` | Harbor에도 없고 인터넷도 안 됨 | 인터넷 되는 PC에서 `FROM_DOCKERHUB=1`로 다시 실행하거나, 그 이미지를 지금 Harbor `base-images`에 먼저 넣는다 |
 | `Jenkins image with plugins not built` | Jenkins base 이미지(docker.io)를 받지 못함 | 인터넷 연결 확인. scm 업체를 쓰지 않으면 무시 (`JENKINS_PLUGINS=0`) |

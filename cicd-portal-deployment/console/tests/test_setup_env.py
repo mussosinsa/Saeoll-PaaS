@@ -82,6 +82,20 @@ class DiscoverTest(unittest.TestCase):
         self.assertNotIn("SECURITY_IMAGE_TAG", v)
 
 
+class HarborFallbackTest(unittest.TestCase):
+    def test_list_file_when_api_fails(self):
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        (tmp / "list").write_text("cicd-portal/cicd-console:1.0.2\tn\tprivate\ncicd-portal/cicd-console:1.0.1\tn\tprivate\n"
+                                  "cicd-mirror/jenkins:2.5-plugins\tn\tpublic\nmirror/quay.io/argoproj/argocd:v2\tn\tpublic\n"
+                                  "mirror/docker.io/library/redis:7\tn\tpublic\tall\n")
+        with mock.patch.object(sc, "http", return_value=(500, "internal server error")):
+            v = sc.harbor_mirror("https://harbor.k.kr", "admin", "pw", str(tmp / "list"))
+        self.assertEqual(v["CONSOLE_IMAGE_TAG"], "1.0.2")
+        self.assertEqual(v["JENKINS_IMAGE"], "harbor.k.kr/cicd-mirror/jenkins:2.5-plugins")
+        self.assertEqual(v["MIRROR_REGISTRIES"], "docker.io quay.io")
+
+
 @unittest.skipUnless(HAVE_OPENSSL, "openssl")
 class CertTest(unittest.TestCase):
     def setUp(self):
