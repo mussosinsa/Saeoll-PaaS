@@ -187,6 +187,7 @@ read -rsp 'scmadmin git 비밀번호: ' SCM_ADMIN_PASSWORD; echo; export SCM_ADM
 | `PM_USERS` | `onboard-vendor.sh` | 업체 PM (GitLab Maintainer) |
 | `CICD_SOURCES` | 모든 명령 | `cicd-vars.sh` 값 대신 이번 실행만 (예: `CICD_SOURCES=gitlab`) |
 | `CICD_JENKINS_URL`, `CICD_GITLAB_URL`, `CICD_SCM_URL` | 스크립트 | 관리 노드에서 `*.<도메인>` 대신 다른 API 주소를 쓸 때 |
+| `JENKINS_PLUGINS_REINSTALL=1` | `jenkins` | 플러그인 다시 설치(추가·업데이트). 평소에는 첫 시작 때 한 번만 받고 PVC에 보관(`initializeOnce`) |
 | `CICD_BUILD_TMPDIR`, `CICD_BUILD_MIN_FREE_GB` | `console-image`, `security-image` | podman 빌드 임시 폴더(디스크 부족 시 `/data/podman-tmp`), 최소 여유 GB(기본 10) |
 | `SECURITY_PRESIDIO`, `DEFECTDOJO_URL`, `DEFECTDOJO_TOKEN`, `SECURITY_POLICY_RESET` | `security` | 개인정보 분석기, 결과 전송, 정책 초기화 |
 | `PORTAL_DIR`, `PORTAL_VARS`, `CA_FILE` | 모든 명령 | 1-1의 파일 위치가 다를 때 |

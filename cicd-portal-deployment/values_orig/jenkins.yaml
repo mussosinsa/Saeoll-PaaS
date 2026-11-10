@@ -2,7 +2,14 @@
 # Builds run as Kubernetes agent pods in this namespace (pod templates in each Jenkinsfile).
 controller:
   jenkinsUrl: https://{JENKINS_HOST}/
-  installLatestPlugins: true
+  # Plugins are downloaded once (first start) and then kept in the jenkins_home PVC: no re-download on pod
+  # restarts or helm upgrades. JCasC still reloads (config-reload sidecar). To add or update plugins later:
+  # JENKINS_PLUGINS_REINSTALL=1 ./deploy-cicd-portal.sh jenkins (removes the marker, the next start initializes).
+  initializeOnce: true
+  installLatestPlugins: false
+  installLatestSpecifiedPlugins: false
+  overwritePlugins: false
+  overwritePluginsFromImage: false
   additionalPlugins:
     - oic-auth
     - matrix-auth

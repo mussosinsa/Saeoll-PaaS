@@ -295,8 +295,17 @@ step_jenkins() {
     values+=(-f "$VALUES_DIR/jenkins-image.yaml")
     info "Jenkins controller image $JENKINS_IMAGE (plugins built in)"
   fi
+  # initializeOnce: plugins are installed only at the first start (marker in jenkins_home). JENKINS_PLUGINS_REINSTALL=1
+  # removes the marker so the next start installs missing / added plugins again (installed ones are kept).
+  local reinit=0
+  if [[ "${JENKINS_PLUGINS_REINSTALL:-0}" == 1 ]] && kubectl -n "$JENKINS_NAMESPACE" get pod jenkins-0 >/dev/null 2>&1; then
+    kubectl -n "$JENKINS_NAMESPACE" exec jenkins-0 -c jenkins -- rm -f /var/jenkins_home/initialization-completed
+    reinit=1
+    info "Jenkins plugins: initialization marker removed - plugins are installed again at the next start"
+  fi
   helm upgrade --install jenkins "$(chart_ref jenkins https://charts.jenkins.io jenkins "$JENKINS_CHART_VERSION")" \
     $(online_version "$JENKINS_CHART_VERSION") -n "$JENKINS_NAMESPACE" "${values[@]}"
+  ((reinit)) && kubectl -n "$JENKINS_NAMESPACE" delete pod jenkins-0 --wait=true >/dev/null
   # A crash-looping StatefulSet pod is not replaced by the upgrade (and keeps old JCasC
   # files in its emptyDir): recreate it so the new configuration is used.
   local restarts

@@ -121,7 +121,7 @@ curl -gsk -u "$U:$T" "$JENKINS_URL/job/saeoll/config.xml" | grep -E "permission|
 | 작업 | 방법 |
 | --- | --- |
 | 백업 | PVC 스냅샷, 또는 `kubectl -n cicd-jenkins exec jenkins-0 -c jenkins -- tar czf - --exclude=workspace -C /var/jenkins_home . > jenkins-home.tgz` |
-| 플러그인·보안 업데이트 | `./deploy-cicd-portal.sh jenkins` (`installLatestPlugins: true`) |
+| 플러그인·보안 업데이트 | `JENKINS_PLUGINS_REINSTALL=1 ./deploy-cicd-portal.sh jenkins` — 평소에는 첫 시작 때 한 번만 받고 `jenkins_home` PVC에 보관한다(`initializeOnce: true`, 재시작·`helm upgrade` 때 재다운로드 없음). 이미 있는 플러그인은 덮어쓰지 않고(`overwritePlugins: false`) 빠진·추가된 것만 받는다 |
 | 차트 업그레이드 | `cicd-vars.sh`의 `JENKINS_CHART_VERSION` 변경 → `./deploy-cicd-portal.sh jenkins` (백업 후) |
 | SSO 장애 시 | `JENKINS_SSO=false ./deploy-cicd-portal.sh jenkins` → 로컬 admin(`kubectl -n cicd-jenkins get secret jenkins -o jsonpath='{.data.jenkins-admin-password}' \| base64 -d`) → 원인 해결 후 `true`로 재배포 |
 
@@ -134,7 +134,7 @@ curl -gsk -u "$U:$T" "$JENKINS_URL/job/saeoll/config.xml" | grep -E "permission|
 | 스크립트 `Jenkins API ... HTTP 302` | 토큰 없음/만료, SSO 세션 설정 | API 토큰 재등록(1-2), 최신 values 재배포 |
 | 업체 계정 대시보드가 비어 있음 | 그룹 미반영 또는 권한 방식 globalMatrix | 4장 첫 줄, Security의 Authorization 확인 |
 | develop push 후 빌드 안 됨 | master에 push / Poll SCM 소실 | `git branch -vv` / 3장 주의 |
-| `No such DSL method 'junit'` | JUnit 플러그인 없음 | `./deploy-cicd-portal.sh jenkins` + `REPLACE_CI=1` |
+| `No such DSL method 'junit'` | JUnit 플러그인 없음 | `JENKINS_PLUGINS_REINSTALL=1 ./deploy-cicd-portal.sh jenkins` + `REPLACE_CI=1` |
 | `fatal: detected dubious ownership` | 예전 Jenkinsfile (경고) | `REPLACE_CI=1` |
 | Image `xz: Failed to enable the sandbox` | trixie 기반 PHP 이미지 + kaniko | Dockerfile `php:8.3-apache-bookworm` |
 | Image `UNAUTHORIZED` / `x509` | Harbor robot / CA | [Harbor 가이드](guide-harbor.md) 7장 |
