@@ -112,7 +112,13 @@ MARIADB_IMAGE="docker.io/library/mariadb:11.4"  # dedicated MariaDB per app/env 
 DB_SIZE=${DB_SIZE:-2Gi}                          # dedicated MariaDB volume
 
 # The belows are the default values.
-INGRESS_CLASS_NAME="nginx"
+INGRESS_CLASS_NAME="nginx"                      # CICD_EXPOSE=ingress: IngressClass of the portal and the apps
+# How the web addresses (jenkins. gitlab. argocd. cicd. and the apps <app>-<vendor>[-dev].) are exposed:
+#   ingress : Kubernetes Ingress of INGRESS_CLASS_NAME (ingress-nginx)
+#   istio   : Istio VirtualServices bound to ISTIO_GATEWAY (no ingress-nginx; K-PaaS cp-gateway on RKE2)
+#   auto    : istio when ISTIO_GATEWAY exists and no ingress-nginx controller runs, else ingress
+CICD_EXPOSE=${CICD_EXPOSE:-auto}
+ISTIO_GATEWAY=${ISTIO_GATEWAY:-"istio-system/cp-gateway"}   # <namespace>/<name> of the Istio Gateway (TLS *.domain)
 CP_PORTAL_NAMESPACE="cp-portal"
 SECRET_NAME="cicd-portal-secrets"               # generated passwords/tokens (namespace GITLAB_NAMESPACE)
 CA_SECRET_NAME="cicd-ca"                        # K-PaaS CA certificate for build pods

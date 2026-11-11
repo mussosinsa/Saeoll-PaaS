@@ -1,6 +1,7 @@
 """자동 확장 (HPA): autoscale_overlay.py (gitops overlay), services.autoscalers, 설정 화면 -> scale-app.sh."""
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,13 +19,29 @@ import autoscale_overlay as ov  # noqa: E402
 TEMPLATE = os.path.join(os.environ["CICD_SCRIPT_DIR"], "..", "gitops-template", "overlays", "prod", "kustomization.yaml")
 
 
+def expose_patch(mode):
+    """lib.sh expose_patch (the host patch add-app.sh renders into the overlay)."""
+    return subprocess.run(["bash", "-c", f'source {os.environ["CICD_SCRIPT_DIR"]}/lib.sh; '
+                           f'expose_patch {mode} erp erp-soft.x.io erp-prod.soft.svc.cluster.local'],
+                          capture_output=True, text=True, check=True).stdout.rstrip("\n")
+
+
 class OverlayTest(unittest.TestCase):
+    MODE = "ingress"
+
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.dir)
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root)
+        self.dir = os.path.join(self.root, "apps", "erp", "overlays", "prod")
+        os.makedirs(self.dir)
+        os.makedirs(os.path.join(self.root, "apps", "erp", "base"))
+        if self.MODE == "istio":
+            with open(os.path.join(self.root, "apps", "erp", "base", "virtualservice.yaml"), "w") as fh:
+                fh.write("apiVersion: networking.istio.io/v1beta1\nkind: VirtualService\n")
         text = open(TEMPLATE, encoding="utf-8").read()
         for k, v in {"{APP}": "erp", "{VENDOR}": "soft", "{HOST_DOMAIN}": "x.io", "{PROD_NAMESPACE}": "soft",
-                     "{PROD_LAYOUT}": "nameSuffix: -prod\n", "{IMAGE_REPO}": "h/soft/erp"}.items():
+                     "{PROD_LAYOUT}": "nameSuffix: -prod\n", "{IMAGE_REPO}": "h/soft/erp",
+                     "{PROD_EXPOSE_PATCH}": expose_patch(self.MODE)}.items():
             text = text.replace(k, v)
         self.kfile = os.path.join(self.dir, "kustomization.yaml")
         with open(self.kfile, "w", encoding="utf-8") as fh:
@@ -131,3 +148,26 @@ class AutoscaleConsoleTest(t.ConsoleBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IstioOverlayTest(OverlayTest):
+    """Apps exposed through the Istio Gateway: sticky session = DestinationRule in autoscale.yaml."""
+    MODE = "istio"
+
+    def test_enable_disable_roundtrip(self):
+        info = ov.enable(self.dir, "erp", 2, 6, 70, 0, "300m", True)
+        self.assertTrue(info["sticky"])
+        self.assertNotIn("nginx.ingress", self.text())
+        docs = list(yaml.safe_load_all(open(os.path.join(self.dir, "autoscale.yaml"), encoding="utf-8")))
+        dr = next(d for d in docs if d and d["kind"] == "DestinationRule")
+        self.assertEqual(dr["apiVersion"], "networking.istio.io/v1beta1")
+        self.assertEqual(dr["spec"]["host"], "erp-prod.soft.svc.cluster.local")     # nameSuffix -prod, namespace soft
+        self.assertEqual(dr["spec"]["trafficPolicy"]["loadBalancer"]["consistentHash"]["httpCookie"]["name"], "cicd-route")
+        k = self.kustomization()
+        vs = next(p for p in k["patches"] if p["target"]["kind"] == "VirtualService")
+        self.assertIn("/spec/hosts/0", vs["patch"])
+        ov.disable(self.dir, "erp")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "autoscale.yaml")))
+
+    def test_stop_start(self):
+        pass

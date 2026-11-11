@@ -1,0 +1,21 @@
+# Address of the application through the Istio Gateway (CICD_EXPOSE=istio). The overlay sets the host, the
+# service of the environment and the Argo CD link.
+apiVersion: {ISTIO_API}
+kind: VirtualService
+metadata:
+  name: {APP}
+  labels:
+    app: {APP}
+  annotations:
+    link.argocd.argoproj.io/external-link: https://HOST    # replaced by the overlay
+spec:
+  hosts:
+    - HOST                      # replaced by the overlay
+  gateways:
+    - {ISTIO_GATEWAY}
+  http:
+    - route:
+        - destination:
+            host: SERVICE       # replaced by the overlay: <service>.<namespace>.svc.cluster.local
+            port:
+              number: 80

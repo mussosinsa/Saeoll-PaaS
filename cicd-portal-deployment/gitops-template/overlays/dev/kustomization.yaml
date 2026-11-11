@@ -12,13 +12,4 @@ replicas:
   - name: {APP}
     count: 1
 patches:
-  - target:
-      kind: Ingress
-      name: {APP}
-    patch: |-
-      - op: replace
-        path: /spec/rules/0/host
-        value: {APP}-{VENDOR}-dev.{HOST_DOMAIN}
-      - op: replace
-        path: /spec/tls/0/hosts/0
-        value: {APP}-{VENDOR}-dev.{HOST_DOMAIN}
+{DEV_EXPOSE_PATCH}

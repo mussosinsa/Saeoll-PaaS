@@ -90,13 +90,22 @@ else
   load_gitlab_token
   GITOPS_URL="$GITLAB_INTERNAL_URL/$VENDOR/gitops.git"
 fi
+# web address of the app: Ingress (ingress-nginx) or Istio VirtualService (CICD_EXPOSE, cicd-vars.sh)
+EXPOSE=$(expose_mode)
+EXPOSE_FILE=ingress.yaml; EXPOSE_SKIP=virtualservice.yaml
+[[ "$EXPOSE" == istio ]] && { EXPOSE_FILE=virtualservice.yaml; EXPOSE_SKIP=ingress.yaml; }
+DEV_EXPOSE_PATCH=$(expose_patch "$EXPOSE" "$APP" "$APP-$VENDOR-dev.$HOST_DOMAIN" "$(app_deployment dev).$DEV_NS.svc.cluster.local")
+PROD_EXPOSE_PATCH=$(expose_patch "$EXPOSE" "$APP" "$APP-$VENDOR.$HOST_DOMAIN" "$(app_deployment prod).$PROD_NS.svc.cluster.local")
 SUBST=(APP="$APP" VENDOR="$VENDOR" HOST_DOMAIN="$HOST_DOMAIN" IMAGE_REPO="$IMAGE_REPO" HEALTH_PATH="$HEALTH_PATH"
        TLS_SECRET="$TLS_SECRET" HARBOR_HOST="$HARBOR_HOST" GITOPS_REPO_URL="$GITOPS_URL"
        BASE_REGISTRY="$CICD_BASE_REGISTRY" KANIKO_IMAGE="$KANIKO_IMAGE" CICD_DOCKERHUB="$CICD_DOCKERHUB"
        DEV_NAMESPACE="$DEV_NS" PROD_NAMESPACE="$PROD_NS"
        DEV_LAYOUT="$DEV_LAYOUT" PROD_LAYOUT="$PROD_LAYOUT"
        SECURITY_IMAGE="$SCAN_IMAGE" CICD_APP_TYPE="$TYPE"
-       APP_PORT="$APP_PORT" APP_MEMORY_LIMIT="$APP_MEMORY_LIMIT" PROBES="$PROBES" CICD_NEXUS_URL="$CICD_NEXUS_URL")
+       APP_PORT="$APP_PORT" APP_MEMORY_LIMIT="$APP_MEMORY_LIMIT" PROBES="$PROBES" CICD_NEXUS_URL="$CICD_NEXUS_URL"
+       INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME" EXPOSE_FILE="$EXPOSE_FILE" DEV_EXPOSE_PATCH="$DEV_EXPOSE_PATCH"
+       PROD_EXPOSE_PATCH="$PROD_EXPOSE_PATCH" ISTIO_GATEWAY="$ISTIO_GATEWAY"
+       ISTIO_API="$([[ "$EXPOSE" == istio ]] && istio_api || echo networking.istio.io/v1)")
 
 
 SCM_PENDING=""
@@ -105,7 +114,7 @@ if [[ "$TYPE" == image ]]; then
   # in the Jenkins job by the portal, so vendors cannot skip its security gate).
   gdir=$(scm_clone "$GITOPS_REPO")
   mkdir -p "$gdir/apps/$APP"
-  render_tree ../gitops-template "$gdir/apps/$APP" "${SUBST[@]}" >/dev/null
+  render_tree ../gitops-template "$gdir/apps/$APP" "${SUBST[@]}" --exclude "$EXPOSE_SKIP" >/dev/null
   if scm_commit_push "$gdir" main "Add $APP manifests (image app, cicd-portal)"; then
     ok "SCM $GITOPS_REPO: apps/$APP manifests pushed (port $APP_PORT, health $HEALTH_PATH, memory $APP_MEMORY_LIMIT)"
   else
@@ -156,7 +165,7 @@ elif [[ "$SOURCE" == scm ]]; then
   # 2. GitOps manifests (kept if already present: CI owns the image tags) -------------------
   gdir=$(scm_clone "$GITOPS_REPO")
   mkdir -p "$gdir/apps/$APP"
-  render_tree ../gitops-template "$gdir/apps/$APP" "${SUBST[@]}" >/dev/null
+  render_tree ../gitops-template "$gdir/apps/$APP" "${SUBST[@]}" --exclude "$EXPOSE_SKIP" >/dev/null
   if scm_commit_push "$gdir" main "Add $APP manifests (cicd-portal)"; then
     ok "SCM $GITOPS_REPO: apps/$APP manifests pushed"
   else

@@ -2,7 +2,8 @@
 """Cluster checks of ./deploy-cicd-portal.sh preflight that matter on RKE2 (and on any cluster):
 
   distro      Kubernetes distribution from the kubelet version (RKE2: v1.30.4+rke2r1)
-  ingress     which ingress-nginx controllers serve the IngressClass of the portal; two controllers claiming it
+  ingress     (--expose istio: the Istio Gateway takes the portal's host names over HTTPS and they resolve to its
+              LoadBalancer address) which ingress-nginx controllers serve the IngressClass of the portal; two controllers claiming it
               (RKE2's rke2-ingress-nginx + a separately installed ingress-nginx) and whether the DNS address of
               the platform (keycloak.<domain>) reaches a controller of that class
   psa         Pod Security: would a root pod (kaniko, build images, GitLab omnibus) be admitted in the CI
@@ -146,6 +147,59 @@ def check_ingress(ingress_class, host, classes, pods, services, resolve=None):
                     f"{ingress_class}: the portal's Ingresses would not answer there")
     else:
         say("OK", f"DNS: {host} -> {', '.join(ips)} (controller of IngressClass {ingress_class})")
+
+
+# ------------------------------------------------------------------------------------------------- istio ---
+def host_covered(patterns, host):
+    """Gateway server hosts ('*', '*.domain', 'host', optionally '<namespace>/...') cover the host?"""
+    for p in patterns:
+        p = p.split("/", 1)[1] if "/" in p else p
+        if p in ("*", host) or (p.startswith("*.") and host.endswith(p[1:]) and host.count(".") >= p.count(".")):
+            return True
+    return False
+
+
+def check_istio(gateway_ref, hosts, gateway, services, resolve=None):
+    """CICD_EXPOSE=istio: the Gateway exists, its servers take the portal's host names over HTTPS, and the names
+    resolve to the address of the gateway's LoadBalancer service."""
+    resolve = resolve or (lambda h: sorted({a[4][0] for a in socket.getaddrinfo(h, 443, socket.AF_INET)}))
+    ns, name = gateway_ref.split("/", 1) if "/" in gateway_ref else ("istio-system", gateway_ref)
+    if not gateway:
+        say("FAIL", f"Istio Gateway {ns}/{name} not found (ISTIO_GATEWAY in cicd-vars.sh)")
+        return
+    servers = (gateway.get("spec") or {}).get("servers") or []
+    https = [s for s in servers if ((s.get("port") or {}).get("protocol") or "").upper() in ("HTTPS", "TLS")]
+    patterns = [h for s in (https or servers) for h in s.get("hosts") or []]
+    if not https:
+        say("WARN", f"Gateway {ns}/{name} has no HTTPS server - the portal uses https:// addresses")
+    missing = [h for h in hosts if h and not host_covered(patterns, h)]
+    if missing:
+        say("FAIL", f"Gateway {ns}/{name} hosts {patterns} do not include {', '.join(missing)} - add them (or "
+                    "'*.<domain>') to the gateway servers, and to its TLS certificate")
+    else:
+        say("OK", f"Gateway {ns}/{name}: HTTPS hosts cover {', '.join(h for h in hosts if h)}")
+    selector = (gateway.get("spec") or {}).get("selector") or {}
+    ips = set()
+    for svc in services.get("items", []):
+        sel = (svc.get("spec") or {}).get("selector") or {}
+        if selector and sel and all(sel.get(k) == v for k, v in selector.items()) or \
+                (not selector and svc["metadata"]["name"] == "istio-ingressgateway"):
+            for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []:
+                ips.add(i.get("ip") or i.get("hostname"))
+    if not ips:
+        say("WARN", f"no LoadBalancer address found for the gateway pods {selector} - DNS not checked")
+        return
+    for h in [x for x in hosts if x]:
+        try:
+            got = set(resolve(h))
+        except OSError as e:
+            say("FAIL", f"DNS: {h} does not resolve ({e}) - register it (or *.domain) to {', '.join(sorted(ips))}")
+            continue
+        if got & ips:
+            say("OK", f"DNS: {h} -> {', '.join(sorted(got))} (Istio ingress gateway)")
+        else:
+            say("WARN", f"DNS: {h} -> {', '.join(sorted(got))}, gateway address {', '.join(sorted(ips))} "
+                        "(a VIP / load balancer in front? it must forward to the gateway)")
 
 
 # --------------------------------------------------------------------------------------------------- psa ---
@@ -324,6 +378,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("check", choices=["distro", "ingress", "psa", "harbor-pull", "all"])
     ap.add_argument("--ingress-class", default="nginx")
+    ap.add_argument("--expose", default="ingress", choices=["ingress", "istio"])
+    ap.add_argument("--gateway", default="istio-system/cp-gateway")
+    ap.add_argument("--gateway-hosts", default="", help="comma separated host names served through the gateway")
     ap.add_argument("--host", default="")
     ap.add_argument("--namespaces", default="")
     ap.add_argument("--pod-security", default="baseline")
@@ -338,7 +395,12 @@ def main():
         if rke2:
             say("OK", "RKE2: kubectl/crictl in /var/lib/rancher/rke2/bin, kubeconfig /etc/rancher/rke2/rke2.yaml, "
                       "registries /etc/rancher/rke2/registries.yaml")
-    if a.check in ("ingress", "all"):
+    if a.check in ("ingress", "all") and a.expose == "istio":
+        gns, gname = a.gateway.split("/", 1) if "/" in a.gateway else ("istio-system", a.gateway)
+        gw = get("gateways.networking.istio.io", gname, "-n", gns)
+        hosts = [h for h in [a.host] + a.gateway_hosts.split(",") if h]
+        check_istio(a.gateway, hosts, gw if gw.get("metadata") else None, get("services", "-n", gns))
+    elif a.check in ("ingress", "all"):
         check_ingress(a.ingress_class, a.host, get("ingressclass"), get("pods", "-A"), get("services", "-A"))
     if a.check in ("psa", "all"):
         check_psa([n for n in a.namespaces.split(",") if n], a.pod_security)

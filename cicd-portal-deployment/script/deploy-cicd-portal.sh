@@ -30,6 +30,7 @@ if ((${#STEPS[@]} == 0)); then
   STEPS+=(argocd)
 fi
 RUNNER_DESCRIPTION="cicd-k8s"
+_EXPOSE=$(expose_mode)   # ingress | istio, decided once for this run
 
 
 # Helm chart reference: the online repository, or (closed network) CICD_CHART_DIR/<chart>-<version>.tgz from the
@@ -90,7 +91,14 @@ step_preflight() {
   [[ -s "$CA_FILE" ]] || { warn "K-PaaS CA certificate not found: $CA_FILE (set CA_FILE)"; failed=1; }
   # no "grep -q" in pipes here: with pipefail its early exit makes kubectl fail with SIGPIPE
   [[ "$(kubectl -n keycloak get pods --no-headers 2>/dev/null)" == *Running* ]] || { warn "Keycloak is not running"; failed=1; }
-  kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || { warn "IngressClass not found: $INGRESS_CLASS_NAME"; failed=1; }
+  local expose
+  expose=$(expose_mode)
+  if [[ "$expose" == istio ]]; then
+    info "Web addresses: Istio VirtualServices on $ISTIO_GATEWAY (CICD_EXPOSE=${CICD_EXPOSE:-auto})"
+  else
+    info "Web addresses: Ingress of class $INGRESS_CLASS_NAME (CICD_EXPOSE=${CICD_EXPOSE:-auto})"
+    kubectl get ingressclass "$INGRESS_CLASS_NAME" >/dev/null 2>&1 || { warn "IngressClass not found: $INGRESS_CLASS_NAME"; failed=1; }
+  fi
   info "Sources: $CICD_SOURCES (+ Argo CD)"
   command -v git >/dev/null || { warn "git is not installed (dnf install -y git)"; failed=1; }
   if has_source scm; then
@@ -123,7 +131,11 @@ step_preflight() {
   local ci_namespaces=()
   has_source scm && ci_namespaces+=("$JENKINS_NAMESPACE")
   has_source gitlab && ci_namespaces+=("$RUNNER_NAMESPACE" "$GITLAB_NAMESPACE")
-  python3 cluster_check.py all --ingress-class "$INGRESS_CLASS_NAME" --host "keycloak.$HOST_DOMAIN" \
+  local hosts=("$ARGOCD_HOST" "$CONSOLE_HOST")
+  has_source scm && hosts+=("$JENKINS_HOST")
+  has_source gitlab && hosts+=("$GITLAB_HOST")
+  python3 cluster_check.py all --expose "$expose" --gateway "$ISTIO_GATEWAY" --gateway-hosts "$(IFS=,; echo "${hosts[*]}")" \
+    --ingress-class "$INGRESS_CLASS_NAME" --host "keycloak.$HOST_DOMAIN" \
     --namespaces "$(IFS=,; echo "${ci_namespaces[*]}")" --pod-security "$CICD_POD_SECURITY" \
     --harbor-host "$HARBOR_HOST" $([[ "$CICD_PREFLIGHT_PULL" == 1 ]] || echo --no-pull) | sed 's/^/       /' || failed=1
   echo "       Node capacity - requests: Argo CD ~1Gi$(has_source scm && echo ", Jenkins 0.5 CPU/1Gi (limit 3Gi)")$(has_source gitlab && echo ", GitLab ${GITLAB_CPU_REQUEST} CPU/${GITLAB_MEMORY_REQUEST} (limit ${GITLAB_MEMORY_LIMIT})"); builds up to 6Gi each:"
@@ -171,7 +183,12 @@ step_gitlab() {
     MEMORY_LIMIT="$GITLAB_MEMORY_LIMIT" TLS_SECRET="$TLS_SECRET" INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME" \
     SECRET_NAME="$SECRET_NAME" CA_SECRET_NAME="$CA_SECRET_NAME" KEYCLOAK_ISSUER="$KEYCLOAK_ISSUER" \
     OIDC_CLIENT_ID="$KEYCLOAK_GITLAB_CLIENT_ID"
+  if [[ "$(expose_mode)" == istio ]]; then
+    drop_ingress "$VALUES_DIR/gitlab.yaml"
+    kubectl -n "$GITLAB_NAMESPACE" delete ingress gitlab --ignore-not-found >/dev/null
+  fi
   kubectl apply -f "$VALUES_DIR/gitlab.yaml"
+  [[ "$(expose_mode)" == istio ]] && virtual_service "$GITLAB_NAMESPACE" gitlab "$GITLAB_HOST" gitlab 80 600s
   # Pick up config changes (the Omnibus config is read at container start)
   kubectl -n "$GITLAB_NAMESPACE" rollout restart deployment/gitlab >/dev/null
   info "Waiting for GitLab to become ready (first start takes 5-15 minutes)..."
@@ -287,6 +304,10 @@ step_jenkins() {
   else
     warn "JENKINS_SSO=false: local admin (kubectl -n $JENKINS_NAMESPACE get secret jenkins -o jsonpath='{.data.jenkins-admin-password}' | base64 -d)"
   fi
+  if [[ "$(expose_mode)" == istio ]]; then   # address through the Istio Gateway, no Ingress
+    printf 'controller:\n  ingress:\n    enabled: false\n' > "$VALUES_DIR/jenkins-istio.yaml"
+    values+=(-f "$VALUES_DIR/jenkins-istio.yaml")
+  fi
   if [[ -n "${JENKINS_IMAGE:-}" ]]; then
     # Closed network: controller image with the plugins built in (offline bundle) - no plugin download
     local img=${JENKINS_IMAGE%:*} tag=${JENKINS_IMAGE##*:}
@@ -306,6 +327,7 @@ step_jenkins() {
   helm upgrade --install jenkins "$(chart_ref jenkins https://charts.jenkins.io jenkins "$JENKINS_CHART_VERSION")" \
     $(online_version "$JENKINS_CHART_VERSION") -n "$JENKINS_NAMESPACE" "${values[@]}"
   ((reinit)) && kubectl -n "$JENKINS_NAMESPACE" delete pod jenkins-0 --wait=true >/dev/null
+  [[ "$(expose_mode)" == istio ]] && virtual_service "$JENKINS_NAMESPACE" jenkins "$JENKINS_HOST" jenkins 8080
   # A crash-looping StatefulSet pod is not replaced by the upgrade (and keeps old JCasC
   # files in its emptyDir): recreate it so the new configuration is used.
   local restarts
@@ -350,10 +372,16 @@ step_argocd() {
   secret_values=$(mktemp)
   chmod 600 "$secret_values"
   printf 'configs:\n  secret:\n    extra:\n      oidc.keycloak.clientSecret: "%s"\n' "$oidc_secret" >"$secret_values"
+  local expose_values=()
+  if [[ "$(expose_mode)" == istio ]]; then   # address through the Istio Gateway, no Ingress
+    printf 'server:\n  ingress:\n    enabled: false\n' > "$VALUES_DIR/argocd-istio.yaml"
+    expose_values=(-f "$VALUES_DIR/argocd-istio.yaml")
+  fi
   helm upgrade --install argocd "$(chart_ref argo https://argoproj.github.io/argo-helm argo-cd "$ARGOCD_CHART_VERSION")" \
     $(online_version "$ARGOCD_CHART_VERSION") \
-    -n "$ARGOCD_NAMESPACE" -f "$VALUES_DIR/argocd.yaml" -f "$secret_values" || { rm -f "$secret_values"; exit 1; }
+    -n "$ARGOCD_NAMESPACE" -f "$VALUES_DIR/argocd.yaml" -f "$secret_values" "${expose_values[@]}" || { rm -f "$secret_values"; exit 1; }
   rm -f "$secret_values"
+  [[ "$(expose_mode)" == istio ]] && virtual_service "$ARGOCD_NAMESPACE" argocd-server "$ARGOCD_HOST" argocd-server 80
   # Wait for every component (server, repo-server, controller, redis), not only the UI
   local res
   for res in $(kubectl -n "$ARGOCD_NAMESPACE" get deployment,statefulset -o name); do
@@ -446,7 +474,13 @@ step_console() {
     OIDC_CLIENT_ID="$KEYCLOAK_CONSOLE_CLIENT_ID" CA_SECRET_NAME="$CA_SECRET_NAME" TLS_SECRET="$TLS_SECRET" \
     INGRESS_CLASS_NAME="$INGRESS_CLASS_NAME" JENKINS_API_URL="$CONSOLE_JENKINS_API_URL" \
     GITLAB_API_URL="$CONSOLE_GITLAB_API_URL" SCM_API_URL="$CONSOLE_SCM_API_URL"
+  if [[ "$(expose_mode)" == istio ]]; then
+    drop_ingress "$VALUES_DIR/console.yaml"
+    kubectl -n "$CONSOLE_NAMESPACE" delete ingress cicd-console --ignore-not-found >/dev/null
+  fi
   kubectl apply -f "$VALUES_DIR/console.yaml"
+  # image uploads (up to CICD_UPLOAD_MAX_MB) take long: 30 minutes like the Ingress timeouts
+  [[ "$(expose_mode)" == istio ]] && virtual_service "$CONSOLE_NAMESPACE" cicd-console "$CONSOLE_HOST" cicd-console 80 1800s
   # SCM-Manager restart for repository deletions that hit files in use (앱/업체 삭제, "SCM-Manager 재시작 허용")
   if kubectl get namespace "${SCM_NAMESPACE:-cp-source-control}" >/dev/null 2>&1; then
     render_file ../manifests/console-scm.yaml "$VALUES_DIR/console-scm.yaml" \

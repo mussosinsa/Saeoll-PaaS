@@ -51,7 +51,8 @@ class DiscoverTest(unittest.TestCase):
                                        {"metadata": {"name": "nfs", "annotations": {
                                            "storageclass.kubernetes.io/is-default-class": "true"}}}]},
             "namespaces": {"items": [{"metadata": {"name": n}} for n in ("cp-portal", "keycloak", "harbor")]},
-            "svc": {"items": []},
+            "svc": {"items": []}, "pods": {"items": []},
+            "gateways.networking.istio.io": {"items": [{"metadata": {"namespace": "istio-system", "name": "cp-gateway"}}]},
         }
         with mock.patch.object(sc, "get", side_effect=lambda kind, *a: objs[kind]), \
                 mock.patch.object(sc, "kubectl", return_value=(0, "", "")):
@@ -59,6 +60,7 @@ class DiscoverTest(unittest.TestCase):
         self.assertEqual((d["distro"], d["domain"], d["default_storage_class"], d["tls_secret"]),
                          ("rke2", "k.kr", "nfs", True))
         self.assertFalse(d["namespaces"]["mariadb"])
+        self.assertEqual((d["istio_gateways"], d["ingress_nginx"]), (["istio-system/cp-gateway"], False))
 
     def test_ca_from_daemonset_configmap(self):
         pem = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----"
@@ -165,6 +167,7 @@ if cmd == "discover":
     print(json.dumps({"distro": "rke2", "versions": ["v1.30.4+rke2r1"], "nodes": 3, "domain": "k.kr", "lb_ip": "10.0.0.5",
                       "ingress_classes": ["nginx"], "default_ingress_class": "nginx",
                       "storage_classes": ["local-path", "nfs"], "default_storage_class": "nfs", "tls_secret": True,
+                      "istio_gateways": ["istio-system/cp-gateway"], "ingress_nginx": False,
                       "namespaces": {n: True for n in ("cp-portal", "keycloak", "harbor", "mariadb", "cp-source-control")}}))
 elif cmd == "verify-ca":
     print("[OK]   CA verifies")
@@ -230,7 +233,8 @@ class WizardTest(unittest.TestCase):
             "",            # SCM admin scmadmin
             "scm-good",    # SCM git password
             "",            # StorageClass: cp-storageclass not in the list -> default nfs
-            "",            # IngressClass nginx
+            "",            # web addresses: istio (gateway found, no ingress-nginx)
+            "",            # Istio Gateway istio-system/cp-gateway
             "", "",        # Pod Security baseline / vendor empty
             "",            # closed network: no
             "",            # save the SCM password: no
@@ -241,6 +245,8 @@ class WizardTest(unittest.TestCase):
         self.assertIn("cicd_set CICD_SOURCES scm", local)
         self.assertIn("cicd_set K8S_STORAGECLASS nfs", local)
         self.assertIn("cicd_set CICD_POD_SECURITY baseline", local)
+        self.assertIn("cicd_set CICD_EXPOSE istio", local)
+        self.assertNotIn("ISTIO_GATEWAY", local)                     # default gateway: not written
         self.assertIn("cicd_set PORTAL_VARS", local)                 # Harbor password changed -> portal-vars.local.sh
         self.assertNotIn("good", local)                             # no password in cicd-vars.local.sh
         plocal = self.script / "portal-vars.local.sh"
@@ -270,7 +276,7 @@ class WizardTest(unittest.TestCase):
         (bindir / "skopeo").write_text("#!/bin/sh\nexit 0\n")
         (bindir / "skopeo").chmod(0o755)
         answers = "\n".join([
-            "", "good", "", "", "scm-good", "", "", "", "",   # as test_interactive
+            "", "good", "", "", "scm-good", "", "", "", "", "",   # as test_interactive
             "y",                       # closed network
             str(backup),               # backup folder
             "",                        # register: yes

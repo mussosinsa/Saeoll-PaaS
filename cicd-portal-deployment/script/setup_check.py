@@ -89,6 +89,10 @@ def discover():
         "domain": domain,
         "lb_ip": lb_ip,
         "ingress_classes": [c["metadata"]["name"] for c in classes["items"]],
+        "istio_gateways": [f"{g['metadata']['namespace']}/{g['metadata']['name']}"
+                           for g in get("gateways.networking.istio.io", "-A")["items"]],
+        "ingress_nginx": any(("ingress-nginx" in (p["metadata"].get("labels") or {}).get("app.kubernetes.io/name", ""))
+                             and (p.get("status") or {}).get("phase") == "Running" for p in get("pods", "-A")["items"]),
         "default_ingress_class": default_name(classes["items"], ["ingressclass.kubernetes.io/is-default-class"]),
         "storage_classes": [c["metadata"]["name"] for c in scs["items"]],
         "default_storage_class": default_name(scs["items"], ["storageclass.kubernetes.io/is-default-class",

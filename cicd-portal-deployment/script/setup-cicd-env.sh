@@ -220,13 +220,31 @@ ask SC "StorageClass" "$def_sc" "^($(IFS='|'; echo "${SCS[*]}"))$"
 [[ "$SC" == local-path ]] && warn "local-path 는 노드 디스크에 저장됩니다 (노드 장애 시 Jenkins/GitLab 데이터 위험) - 운영은 NFS/Longhorn 권장"
 [[ "$SC" != "${PV[K8S_STORAGECLASS]}" ]] && OUT[K8S_STORAGECLASS]=$SC
 
-mapfile -t ICS < <(dget ingress_classes | tr ' ' '\n' | sed '/^$/d')
-((${#ICS[@]})) || die "IngressClass 가 없습니다"
-def_ic=$(cur INGRESS_CLASS_NAME nginx)
-printf '%s\n' "${ICS[@]}" | grep -qx "$def_ic" || def_ic=${ICS[0]}
-echo "  IngressClass 목록: ${ICS[*]}"
-ask IC "IngressClass (CP-Portal 이 쓰는 것)" "$def_ic" "^($(IFS='|'; echo "${ICS[*]}"))$"
-[[ "$IC" != nginx ]] && OUT[INGRESS_CLASS_NAME]=$IC
+# web addresses: Istio Gateway (VirtualService) or Ingress
+mapfile -t GWS < <(dget istio_gateways | tr ' ' '\n' | sed '/^$/d')
+def_expose=$(cur CICD_EXPOSE "")
+if [[ -z "$def_expose" || "$def_expose" == auto ]]; then
+  def_expose=ingress
+  ((${#GWS[@]})) && [[ $(dget ingress_nginx) != True ]] && def_expose=istio
+fi
+((${#GWS[@]})) && echo "  Istio Gateway: ${GWS[*]}$([[ $(dget ingress_nginx) == True ]] && echo " / ingress-nginx 실행 중" || echo " / ingress-nginx 없음")"
+ask EXPOSE "화면 주소 방식 (istio = Istio Gateway + VirtualService, ingress = ingress-nginx)" "$def_expose" '^(istio|ingress)$'
+OUT[CICD_EXPOSE]=$EXPOSE
+if [[ "$EXPOSE" == istio ]]; then
+  ((${#GWS[@]})) || die "Istio Gateway 가 없습니다 (kubectl get gateways.networking.istio.io -A)"
+  def_gw=$(cur ISTIO_GATEWAY "istio-system/cp-gateway")
+  printf '%s\n' "${GWS[@]}" | grep -qx "$def_gw" || def_gw=${GWS[0]}
+  ask GW "Istio Gateway (<namespace>/<name>)" "$def_gw" "^($(IFS='|'; echo "${GWS[*]}"))$"
+  [[ "$GW" != istio-system/cp-gateway ]] && OUT[ISTIO_GATEWAY]=$GW
+else
+  mapfile -t ICS < <(dget ingress_classes | tr ' ' '\n' | sed '/^$/d')
+  ((${#ICS[@]})) || die "IngressClass 가 없습니다"
+  def_ic=$(cur INGRESS_CLASS_NAME nginx)
+  printf '%s\n' "${ICS[@]}" | grep -qx "$def_ic" || def_ic=${ICS[0]}
+  echo "  IngressClass 목록: ${ICS[*]}"
+  ask IC "IngressClass (CP-Portal 이 쓰는 것)" "$def_ic" "^($(IFS='|'; echo "${ICS[*]}"))$"
+  [[ "$IC" != nginx ]] && OUT[INGRESS_CLASS_NAME]=$IC
+fi
 
 if [[ "$DISTRO" == rke2 ]]; then
   echo "  RKE2: CIS 프로필이면 Pod Security 기본값이 restricted 라 빌드 Pod(root)가 거부됩니다."

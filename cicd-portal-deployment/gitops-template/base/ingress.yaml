@@ -5,7 +5,7 @@ metadata:
   labels:
     app: {APP}
 spec:
-  ingressClassName: nginx
+  ingressClassName: {INGRESS_CLASS_NAME}
   tls:
     - hosts:
         - HOST                  # replaced by the overlay

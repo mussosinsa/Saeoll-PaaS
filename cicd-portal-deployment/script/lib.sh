@@ -339,6 +339,83 @@ gitops_clone() { # vendor source
   git -C "$gdir" config user.email "cicd-portal@${HOST_DOMAIN}"
   echo "$gdir"
 }
+# ----------------------------------------------------------------------------------- web addresses ---
+# expose_mode: ingress | istio (CICD_EXPOSE; auto decides once from the cluster, see cicd-vars.sh)
+expose_mode() {
+  if [[ -z "${_EXPOSE:-}" ]]; then
+    case "${CICD_EXPOSE:-auto}" in
+      ingress|istio) _EXPOSE=$CICD_EXPOSE ;;
+      *)
+        _EXPOSE=ingress
+        if kubectl -n "${ISTIO_GATEWAY%%/*}" get gateways.networking.istio.io "${ISTIO_GATEWAY#*/}" >/dev/null 2>&1 &&
+           [[ -z "$(kubectl get pods -A -l app.kubernetes.io/name=ingress-nginx --field-selector=status.phase=Running \
+                    -o name 2>/dev/null; kubectl get pods -A -l app.kubernetes.io/name=rke2-ingress-nginx \
+                    --field-selector=status.phase=Running -o name 2>/dev/null)" ]]; then
+          _EXPOSE=istio
+        fi ;;
+    esac
+  fi
+  echo "$_EXPOSE"
+}
+# apiVersion of the Istio networking API served by the cluster (v1 since Istio 1.22, else v1beta1)
+istio_api() {
+  if [[ -z "${_ISTIO_API:-}" ]]; then
+    local served
+    served=$(kubectl get crd virtualservices.networking.istio.io \
+      -o jsonpath='{range .spec.versions[?(@.served==true)]}{.name}{" "}{end}' 2>/dev/null || true)
+    if [[ " $served " == *" v1 "* ]]; then _ISTIO_API=networking.istio.io/v1; else _ISTIO_API=networking.istio.io/v1beta1; fi
+  fi
+  echo "$_ISTIO_API"
+}
+# VirtualService <name> in <namespace>: https://<host> -> <service>:<port> through ISTIO_GATEWAY
+virtual_service() { # namespace name host service port [timeout]
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: $(istio_api)
+kind: VirtualService
+metadata:
+  name: $2
+  namespace: $1
+  labels:
+    app.kubernetes.io/part-of: cicd-portal
+spec:
+  hosts:
+    - "$3"
+  gateways:
+    - $ISTIO_GATEWAY
+  http:
+    - route:
+        - destination:
+            host: $4.$1.svc.cluster.local
+            port:
+              number: $5
+$([[ -n "${6:-}" ]] && printf '      timeout: %s\n' "$6")
+EOF
+  ok "VirtualService $1/$2: https://$3 -> $4:$5 ($ISTIO_GATEWAY)"
+}
+# A rendered manifest without its Ingress documents (istio mode)
+drop_ingress() { # file
+  python3 - "$1" <<'PY'
+import re, sys
+path = sys.argv[1]
+docs = re.split(r"(?m)^---\s*$", open(path, encoding="utf-8").read())
+keep = [d for d in docs if not re.search(r"(?m)^kind:\s*Ingress\s*$", d)]
+open(path, "w", encoding="utf-8").write("---".join(keep))
+PY
+}
+# kustomize overlay patch that sets the host of an application (Ingress or VirtualService), JSON6902 inline
+expose_patch() { # mode app host service-fqdn
+  if [[ "$1" == istio ]]; then
+    printf '  - target:\n      kind: VirtualService\n      name: %s\n    patch: |-\n' "$2"
+    printf '      - op: replace\n        path: /spec/hosts/0\n        value: %s\n' "$3"
+    printf '      - op: replace\n        path: /metadata/annotations/link.argocd.argoproj.io~1external-link\n        value: https://%s\n' "$3"
+    printf '      - op: replace\n        path: /spec/http/0/route/0/destination/host\n        value: %s\n' "$4"
+  else
+    printf '  - target:\n      kind: Ingress\n      name: %s\n    patch: |-\n' "$2"
+    printf '      - op: replace\n        path: /spec/rules/0/host\n        value: %s\n' "$3"
+    printf '      - op: replace\n        path: /spec/tls/0/hosts/0\n        value: %s\n' "$3"
+  fi
+}
+
 gitops_cleanup() { # dir source
   if [[ "$2" == scm ]]; then scm_cleanup "$1"; else rm -rf "$(dirname "$1")"; fi
 }

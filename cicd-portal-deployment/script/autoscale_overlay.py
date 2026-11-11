@@ -5,7 +5,7 @@ enable : writes autoscale.yaml (HorizontalPodAutoscaler + PodDisruptionBudget), 
          adds patches between "# cicd-portal autoscale begin/end" markers:
            Deployment: remove /spec/replicas (the HPA owns the replica count; Argo CD must not reset it),
                        CPU request (the HPA target is a percentage of it), spread over the nodes
-           Ingress   : sticky session cookie (optional)
+           Ingress   : sticky session cookie (optional; Istio VirtualService apps: a DestinationRule in autoscale.yaml)
          The kustomize "replicas" entry of the app is removed; its count is kept in a comment for disable.
 disable: the reverse (replicas entry restored with the kept count).
 stop / start (app-state.sh on an autoscaled overlay): the replicas patch becomes "replace with 0" (an HPA does
@@ -92,8 +92,28 @@ def status(overlay, app):
             info[key] = int(m.group(1)) if m else None
         m = re.search(r"path: /spec/template/spec/containers/0/resources/requests/cpu\n\s*value: (\S+)", text)
         info["cpu_request"] = m.group(1) if m else ""
-        info["sticky"] = "affinity: cookie" in text
+        info["sticky"] = "affinity: cookie" in text or "httpCookie:" in body
     return info
+
+
+def istio_base(overlay):
+    """apiVersion of base/virtualservice.yaml when the app is exposed through Istio (CICD_EXPOSE=istio), else ''."""
+    path = os.path.join(overlay, "..", "..", "base", "virtualservice.yaml")
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        m = re.search(r"(?m)^apiVersion:\s*(\S+)", fh.read())
+    return m.group(1) if m else "networking.istio.io/v1"
+
+
+def destination_rule(overlay, app, api):
+    """Sticky session through the Istio gateway: consistent hash on a cookie for the service of this overlay."""
+    text = "\n".join(read(os.path.join(overlay, "kustomization.yaml")))
+    ns = (re.search(r"(?m)^namespace:\s*(\S+)", text) or [None, ""])[1]
+    suffix = (re.search(r"(?m)^nameSuffix:\s*(\S+)", text) or [None, ""])[1]
+    return (f"---\napiVersion: {api}\nkind: DestinationRule\nmetadata:\n  name: {app}\n  labels:\n    app: {app}\n"
+            f"spec:\n  host: {app}{suffix}.{ns}.svc.cluster.local\n  trafficPolicy:\n    loadBalancer:\n"
+            f"      consistentHash:\n        httpCookie:\n          name: cicd-route\n          ttl: 3600s\n")
 
 
 def hpa_yaml(app, minimum, maximum, cpu, memory):
@@ -216,7 +236,8 @@ def enable(overlay, app, minimum, maximum, cpu, memory, cpu_request, sticky):
         lines.insert(r + 1, f"  - autoscale.yaml  {RES_MARK}")
     # patches block
     p = top_key(lines, "patches")
-    block = patch_block(app, cpu_request, sticky, stopped=was_stopped)
+    api = istio_base(overlay)
+    block = patch_block(app, cpu_request, sticky and not api, stopped=was_stopped)   # Istio: DestinationRule
     if p is None:
         lines += ["patches:"] + block
     else:
@@ -224,7 +245,7 @@ def enable(overlay, app, minimum, maximum, cpu, memory, cpu_request, sticky):
         lines[end:end] = block
     write(kfile, lines)
     with open(os.path.join(overlay, "autoscale.yaml"), "w", encoding="utf-8") as fh:
-        fh.write(hpa_yaml(app, minimum, maximum, cpu, memory))
+        fh.write(hpa_yaml(app, minimum, maximum, cpu, memory) + (destination_rule(overlay, app, api) if sticky and api else ""))
     return status(overlay, app)
 
 

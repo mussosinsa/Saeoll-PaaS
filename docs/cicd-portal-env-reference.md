@@ -135,6 +135,8 @@ cd ~/Saeoll-PaaS/cicd-portal-deployment/script && ./deploy-cicd-portal.sh prefli
 | `K8S_STORAGECLASS` | `""` | 비우면 CP-Portal 값. 그 값이 실제 목록에 없을 때 (예: `"nfs-client"`) |
 | `CICD_SOURCES` | `"scm gitlab"` | 설치할 소스. K-PaaS SCM + Jenkins만: `"scm"`, GitLab만: `"gitlab"` |
 | `INGRESS_CLASS_NAME` | `"nginx"` | IngressClass 이름이 다를 때 |
+| `CICD_EXPOSE` | `auto` | 화면 주소 방식. `istio`: ingress-nginx 없이 Istio Gateway의 VirtualService (`auto`는 게이트웨이가 있고 ingress-nginx가 없으면 istio) → [Istio Gateway](cicd-istio-gateway.md) |
+| `ISTIO_GATEWAY` | `istio-system/cp-gateway` | istio 방식에서 쓸 Gateway |
 | `CP_PORTAL_NAMESPACE` | `"cp-portal"` | TLS Secret이 다른 네임스페이스에 있을 때 |
 | `SCM_NAMESPACE`, `SCM_INTERNAL_URL` | `cp-source-control`, `http://cp-source-control-manager-service...:8080/scm` | 소스 컨트롤을 다른 이름으로 설치했을 때 |
 | `SCM_ADMIN_USER` | `scmadmin` | SCM 관리자 ID가 다를 때 |

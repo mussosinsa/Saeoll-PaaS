@@ -319,3 +319,5 @@ tail -50 cicd-portal-deploy.log
 > 폐쇄망 RKE2 K-PaaS에 백업 이미지를 Harbor에 등록하고 CI/CD 포털을 설치하는 순서: [폐쇄망 RKE2 설치](offline-cicd-install-rke2.md)
 >
 > CI/CD 포털이 기존 K-PaaS에서 읽는 정보와 `cicd-vars.sh`·환경 변수 전체 목록: [CI/CD 포털 환경 정보와 환경 변수](cicd-portal-env-reference.md)
+
+> ingress-nginx 없이 Istio `cp-gateway`로 포털을 여는 RKE2 클러스터: [CI/CD 포털 — Istio Gateway](cicd-istio-gateway.md)
