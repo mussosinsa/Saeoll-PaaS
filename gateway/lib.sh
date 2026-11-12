@@ -29,13 +29,34 @@ if ! command -v kubectl >/dev/null && [[ -x /var/lib/rancher/rke2/bin/kubectl ]]
   [[ -n "${KUBECONFIG:-}" || -f "$HOME/.kube/config" ]] || export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
 fi
 
-# HOST_DOMAIN and INGRESS_LB_IP of K-PaaS (cp-portal-vars.sh), unless set in the environment
+# HOST_DOMAIN and INGRESS_LB_IP of K-PaaS: environment > cp-portal-vars.sh > the cluster (CP-Portal Ingress host
+# portal.<domain>, else the keycloak./harbor. hosts)
 load_domain() {
+  local from="environment" file_value=""
   if [[ -z "${HOST_DOMAIN:-}" && -f "$PORTAL_VARS" ]]; then
-    HOST_DOMAIN=$(set +u; source "$PORTAL_VARS" >/dev/null 2>&1; echo "$HOST_DOMAIN")
-    INGRESS_LB_IP=${INGRESS_LB_IP:-$(set +u; source "$PORTAL_VARS" >/dev/null 2>&1; echo "${INGRESS_LB_IP:-}")}
+    file_value=$(set +eu; source "$PORTAL_VARS" >/dev/null 2>&1; echo "${HOST_DOMAIN:-}")
+    HOST_DOMAIN=$file_value from=$PORTAL_VARS
+    INGRESS_LB_IP=${INGRESS_LB_IP:-$(set +eu; source "$PORTAL_VARS" >/dev/null 2>&1; echo "${INGRESS_LB_IP:-}")}
   fi
-  [[ -n "${HOST_DOMAIN:-}" && "$HOST_DOMAIN" != *'{'* ]] || die "HOST_DOMAIN unknown: set it, or PORTAL_VARS=<cp-portal-vars.sh>"
+  if [[ -z "${HOST_DOMAIN:-}" || "$HOST_DOMAIN" == *'{'* ]]; then
+    HOST_DOMAIN=$(kubectl get ingress -A -o jsonpath='{range .items[*]}{range .spec.rules[*]}{.host}{"\n"}{end}{end}' 2>/dev/null |
+      python3 -c '
+import sys
+hosts = [h.strip() for h in sys.stdin if h.strip()]
+for prefix in ("portal.", "keycloak.", "harbor."):
+    found = [h[len(prefix):] for h in hosts if h.startswith(prefix) and "." in h[len(prefix):]]
+    if found:
+        print(found[0]); break' || true)
+    from="the cluster (Ingress hosts)"
+  fi
+  if [[ -z "${HOST_DOMAIN:-}" || "$HOST_DOMAIN" == *'{'* ]]; then
+    echo "[ERROR] HOST_DOMAIN unknown." >&2
+    echo "        cp-portal-vars.sh: $PORTAL_VARS ($([[ -f "$PORTAL_VARS" ]] && echo "HOST_DOMAIN='${file_value}'" || echo "not found"))" >&2
+    echo "        cluster: no Ingress host portal.<domain> / keycloak.<domain> / harbor.<domain>" >&2
+    echo "        Set it for this run: HOST_DOMAIN=<domain> $0 ...   (or PORTAL_VARS=<path of cp-portal-vars.sh>)" >&2
+    exit 1
+  fi
+  info "HOST_DOMAIN $HOST_DOMAIN (from $from)"
   if [[ -z "${INGRESS_LB_IP:-}" && "$HOST_DOMAIN" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})\.nip\.io$ ]]; then
     INGRESS_LB_IP=${BASH_REMATCH[1]}
   fi
