@@ -39,6 +39,12 @@ command -v skopeo >/dev/null || die "skopeo is not installed (dnf install -y sko
 
 # Harbor of this installation: cp-portal-vars.sh, or the environment (setup-cicd-env.sh passes the values it checked:
 # HARBOR_HOST, HARBOR_USER, HARBOR_PASSWORD, CA_FILE)
+# shellcheck source=portal-vars.sh
+source "$SCRIPT_DIR/portal-vars.sh"
+PORTAL_VARS_TMP=""
+if [[ -z "${HARBOR_HOST:-}" || -z "${HARBOR_PASSWORD:-}" ]]; then
+  resolve_portal_vars "$REPO" || exit 1
+fi
 PORTAL_VARS=${PORTAL_VARS:-"$REPO/cp-portal-deployment/script/cp-portal-vars.sh"}
 mapfile -t V < <(set +u; source "$PORTAL_VARS" >/dev/null 2>&1
                  echo "$HOST_DOMAIN"; echo "$REPOSITORY_USERNAME"; echo "$REPOSITORY_PASSWORD")
@@ -48,7 +54,7 @@ V[2]=${HARBOR_PASSWORD:-${V[2]:-}}
 unset HARBOR_PASSWORD
 [[ "$HARBOR" != harbor. && "$HARBOR" != *'{'* ]] || die "Harbor address unknown: configure $PORTAL_VARS or set HARBOR_HOST"
 CA_DIR=$(mktemp -d); AUTH="$CA_DIR/auth.json"
-trap 'rm -rf "$CA_DIR"' EXIT
+trap 'rm -rf "$CA_DIR"; [[ -n "$PORTAL_VARS_TMP" ]] && rm -f "$PORTAL_VARS_TMP"' EXIT
 CA_SRC=${CA_FILE:-"$REPO/cp-portal-deployment/certs/ca.crt"}
 cp "$CA_SRC" "$CA_DIR/ca.crt" 2>/dev/null || warn "$CA_SRC not found: system CAs only"
 # credentials file (0600): the password goes through stdin, not through the command line

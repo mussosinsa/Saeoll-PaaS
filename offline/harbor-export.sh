@@ -50,18 +50,22 @@ die() { echo "[ERROR] $*" >&2; exit 1; }
 for c in skopeo python3; do command -v "$c" >/dev/null || die "$c is not installed (dnf install -y $c)"; done
 [[ "$KEEP_TAGS" =~ ^[1-9][0-9]*$ ]] || die "KEEP_TAGS must be a number >= 1"
 
-mapfile -t V < <(set +u; source "$REPO/cp-portal-deployment/script/cp-portal-vars.sh" >/dev/null 2>&1
+# shellcheck source=portal-vars.sh
+source "$SCRIPT_DIR/portal-vars.sh"
+PORTAL_VARS_TMP=""
+resolve_portal_vars "$REPO" || exit 1
+mapfile -t V < <(set +u; source "$PORTAL_VARS" >/dev/null 2>&1
                  echo "$HOST_DOMAIN"; echo "$REPOSITORY_USERNAME")
-[[ -n "${V[0]:-}" && "${V[0]}" != *'{'* ]] || die "HOST_DOMAIN is not configured in cp-portal-deployment/script/cp-portal-vars.sh"
+[[ -n "${V[0]:-}" && "${V[0]}" != *'{'* ]] || die "HOST_DOMAIN is not configured in $PORTAL_VARS"
 HARBOR="harbor.${V[0]}"
-harbor_password() { (set +u; source "$REPO/cp-portal-deployment/script/cp-portal-vars.sh" >/dev/null 2>&1
+harbor_password() { (set +u; source "$PORTAL_VARS" >/dev/null 2>&1
                      printf '%s\n' "$REPOSITORY_PASSWORD"); }
 cicd_var() { (set +u; source "$REPO/cicd-portal-deployment/script/cicd-vars.sh" >/dev/null 2>&1; echo "${!1}"); }
 
 mkdir -p "$OUT/images"
 OUT=$(cd "$OUT" && pwd)
 TMP=$(mktemp -d); chmod 700 "$TMP"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; [[ -n "$PORTAL_VARS_TMP" ]] && rm -f "$PORTAL_VARS_TMP"' EXIT
 CERTS="$TMP/certs"; mkdir -p "$CERTS"
 cp "$REPO/cp-portal-deployment/certs/ca.crt" "$CERTS/ca.crt" 2>/dev/null || warn "cp-portal-deployment/certs/ca.crt not found: system CAs only"
 AUTH="$TMP/auth.json"

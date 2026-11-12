@@ -42,7 +42,12 @@ has_step() { [[ " $STEPS " == *" $1 "* ]]; }
 FAILED=()
 
 # Settings of the current installation (read in a subshell: the vars files define many names)
-portal_vars() { (set +u; source "$REPO/cp-portal-deployment/script/cp-portal-vars.sh" >/dev/null 2>&1; for v in "$@"; do echo "${!v}"; done); }
+# shellcheck source=portal-vars.sh
+source "$SCRIPT_DIR/portal-vars.sh"
+PORTAL_VARS_TMP=""
+resolve_portal_vars "$REPO" || exit 1
+trap '[[ -n "$PORTAL_VARS_TMP" ]] && rm -f "$PORTAL_VARS_TMP"' EXIT
+portal_vars() { (set +u; source "$PORTAL_VARS" >/dev/null 2>&1; for v in "$@"; do echo "${!v}"; done); }
 cicd_vars() { (set +u; source "$REPO/cicd-portal-deployment/script/cicd-vars.sh" >/dev/null 2>&1; for v in "$@"; do echo "${!v}"; done); }
 mapfile -t P < <(portal_vars HOST_DOMAIN REPOSITORY_USERNAME)
 HOST_DOMAIN=${P[0]}
