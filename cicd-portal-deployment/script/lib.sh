@@ -14,26 +14,43 @@ warn() { echo "[WARN] $*" >&2; }
 die() { echo "[ERROR] $*" >&2; exit 1; }
 
 # Reuse the values CP-Portal was deployed with (domain, Keycloak admin, Harbor).
-load_portal_vars() {
-  [[ -r "$PORTAL_VARS" ]] || die "$PORTAL_VARS not found (set PORTAL_VARS)."
-  local own_domain=$HOST_DOMAIN own_sc=$K8S_STORAGECLASS
+_read_portal_vars() { # file -> P_* and the admin accounts
   eval "$(
-    source "$PORTAL_VARS" >/dev/null 2>&1
-    printf 'P_HOST_DOMAIN=%q\n' "$HOST_DOMAIN"
-    printf 'P_K8S_STORAGECLASS=%q\n' "$K8S_STORAGECLASS"
-    printf 'P_KEYCLOAK_URL=%q\n' "$KEYCLOAK_URL"
-    printf 'P_REPOSITORY_URL=%q\n' "$REPOSITORY_URL"
-    printf 'KEYCLOAK_ADMIN_USERNAME=%q\n' "$KEYCLOAK_ADMIN_USERNAME"
-    printf 'KEYCLOAK_ADMIN_PASSWORD=%q\n' "$KEYCLOAK_ADMIN_PASSWORD"
-    printf 'KEYCLOAK_CP_REALM=%q\n' "$KEYCLOAK_CP_REALM"
-    printf 'REPOSITORY_USERNAME=%q\n' "$REPOSITORY_USERNAME"
-    printf 'REPOSITORY_PASSWORD=%q\n' "$REPOSITORY_PASSWORD"
+    set +eu
+    source "$1" >/dev/null 2>&1
+    printf 'P_HOST_DOMAIN=%q\n' "${HOST_DOMAIN:-}"
+    printf 'P_K8S_STORAGECLASS=%q\n' "${K8S_STORAGECLASS:-}"
+    printf 'P_KEYCLOAK_URL=%q\n' "${KEYCLOAK_URL:-}"
+    printf 'P_REPOSITORY_URL=%q\n' "${REPOSITORY_URL:-}"
+    printf 'KEYCLOAK_ADMIN_USERNAME=%q\n' "${KEYCLOAK_ADMIN_USERNAME:-}"
+    printf 'KEYCLOAK_ADMIN_PASSWORD=%q\n' "${KEYCLOAK_ADMIN_PASSWORD:-}"
+    printf 'KEYCLOAK_CP_REALM=%q\n' "${KEYCLOAK_CP_REALM:-}"
+    printf 'REPOSITORY_USERNAME=%q\n' "${REPOSITORY_USERNAME:-}"
+    printf 'REPOSITORY_PASSWORD=%q\n' "${REPOSITORY_PASSWORD:-}"
     printf 'P_DATABASE_URL=%q\n' "${DATABASE_URL:-}"
     printf 'DATABASE_USER_PASSWORD=%q\n' "${DATABASE_USER_PASSWORD:-}"
   )"
+}
+load_portal_vars() {
+  [[ -r "$PORTAL_VARS" ]] || die "$PORTAL_VARS not found (set PORTAL_VARS)."
+  local own_domain=$HOST_DOMAIN own_sc=$K8S_STORAGECLASS copy
+  _read_portal_vars "$PORTAL_VARS"
+  if [[ -z "$P_HOST_DOMAIN" || "$P_HOST_DOMAIN" == *'{'* ]] && [[ -z "$own_domain" || "$own_domain" == *'{'* ]]; then
+    # cp-portal-vars.sh back to its placeholders (e.g. a git checkout during a pull): the copy the CI/CD console
+    # keeps (secret cicd-console-secrets) has the same values
+    copy=$(mktemp); chmod 600 "$copy"
+    if kubectl -n "${CONSOLE_NAMESPACE:-cicd-console}" get secret cicd-console-secrets \
+         -o jsonpath='{.data.cp-portal-vars\.sh}' 2>/dev/null | base64 -d > "$copy" 2>/dev/null && [[ -s "$copy" ]]; then
+      _read_portal_vars "$copy"
+      [[ -n "$P_HOST_DOMAIN" && "$P_HOST_DOMAIN" != *'{'* ]] && \
+        warn "$PORTAL_VARS has no HOST_DOMAIN - using the copy of the CI/CD console ($P_HOST_DOMAIN). Fix the file: cp-portal-deployment/script/restore-vars-from-cluster.sh"
+    fi
+    rm -f "$copy"
+  fi
   HOST_DOMAIN=$own_domain
   [[ -z "$HOST_DOMAIN" || "$HOST_DOMAIN" == *'{'* ]] && HOST_DOMAIN=$P_HOST_DOMAIN
-  [[ -n "$HOST_DOMAIN" && "$HOST_DOMAIN" != *'{'* ]] || die "HOST_DOMAIN is not configured in $PORTAL_VARS."
+  [[ -n "$HOST_DOMAIN" && "$HOST_DOMAIN" != *'{'* ]] || \
+    die "HOST_DOMAIN is not configured in $PORTAL_VARS (value: '${P_HOST_DOMAIN}'). Restore the file: cd ../../cp-portal-deployment/script && ./restore-vars-from-cluster.sh"
   K8S_STORAGECLASS=${own_sc:-$P_K8S_STORAGECLASS}
 
   TLS_SECRET="${HOST_DOMAIN}-tls"
