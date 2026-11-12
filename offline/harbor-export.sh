@@ -241,7 +241,8 @@ if [[ "$MIRROR_IMAGES" == 1 ]]; then
   if command -v kubectl >/dev/null && kubectl get nodes >/dev/null 2>&1; then
     list="$TMP/mirror.txt"; : > "$list"
     for ns in $(cicd_var ARGOCD_NAMESPACE) $(cicd_var JENKINS_NAMESPACE) $(cicd_var GITLAB_NAMESPACE) \
-              $(cicd_var RUNNER_NAMESPACE) $(cicd_var CONSOLE_NAMESPACE) $(cicd_var SECURITY_NAMESPACE); do
+              $(cicd_var RUNNER_NAMESPACE) $(cicd_var CONSOLE_NAMESPACE) $(cicd_var SECURITY_NAMESPACE) \
+              ${ISTIO_NAMESPACE:-istio-system}; do   # + Istio (istiod, ingress gateway: gateway/, ingress-nginx retired)
       kubectl -n "$ns" get pods,deployments,statefulsets,daemonsets,cronjobs -o json 2>/dev/null | python3 -c '
 import json, sys
 def walk(o):

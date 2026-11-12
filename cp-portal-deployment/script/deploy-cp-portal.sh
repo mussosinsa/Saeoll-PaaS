@@ -46,6 +46,12 @@ configure_portal_vars_if_needed() {
 }
 
 configure_portal_vars_if_needed || return 1 2>/dev/null || exit 1
+GATEWAY_DIR="$SCRIPT_DIR/../../gateway"
+if [[ "${CP_EXPOSE:-ingress}" == istio ]]; then
+  # the gateway pods take the place of the ingress controller (SECMG_BOUND_CIDR, controller checks)
+  INGRESS_NAMESPACE=${ISTIO_NAMESPACE:-istio-system}
+  INGRESS_CONTROLLER_SELECTOR="istio=ingressgateway"
+fi
 declare -A DEPLOY_CONFIG
 DEPLOY_CONFIG[IPV6_ENABLED]=true
 DEPLOY_CONFIG[INGRESS_ENABLED]=true
@@ -140,6 +146,26 @@ check_domain_dns() {
     echo "[ERROR] (docs/install-with-domain.md, 3-3). SKIP_DNS_CHECK=1 skips this check." >&2
     return 1
   fi
+}
+
+# CP_EXPOSE=istio: Istio ingress gateway (and the address of *.domain) instead of ingress-nginx
+ensure_istio_gateway() {
+  local lb_ip=${INGRESS_LB_IP:-}
+  if [[ -z "$lb_ip" && "$HOST_DOMAIN" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})\.nip\.io$ ]]; then
+    lb_ip=${BASH_REMATCH[1]}
+  fi
+  [[ -x "$GATEWAY_DIR/install-istio-gateway.sh" ]] || { echo "[ERROR] $GATEWAY_DIR/install-istio-gateway.sh not found" >&2; return 1; }
+  HOST_DOMAIN="$HOST_DOMAIN" INGRESS_LB_IP="$lb_ip" PORTAL_VARS="$SCRIPT_DIR/cp-portal-vars.sh" \
+    "$GATEWAY_DIR/install-istio-gateway.sh" ${lb_ip:+--ip "$lb_ip"}
+}
+# VirtualServices for the Ingresses the charts create (re-run after every chart: the next steps call the addresses)
+expose_sync() {
+  [[ "${CP_EXPOSE:-ingress}" == istio ]] || return 0
+  HOST_DOMAIN="$HOST_DOMAIN" PORTAL_VARS="$SCRIPT_DIR/cp-portal-vars.sh" \
+    "$GATEWAY_DIR/ingress-to-istio.sh" --apply --quiet | grep -v '^\[INFO\]' || true
+}
+ensure_exposure() {
+  if [[ "${CP_EXPOSE:-ingress}" == istio ]]; then ensure_istio_gateway; else ensure_ingress_controller; fi
 }
 
 ensure_ingress_controller() {
@@ -266,7 +292,8 @@ helm_install() {
   local chart_path="../charts/${chart_name}-${version}.tgz"
 
   shift $(( $# < 3 ? $# : 3 ))
-  helm upgrade --install -f "$value_path" "$release_name" "$chart_path" -n "$namespace" "$@"
+  helm upgrade --install -f "$value_path" "$release_name" "$chart_path" -n "$namespace" "$@" || return $?
+  expose_sync
 }
 chart_pull(){
   mkdir -p ../charts
@@ -409,7 +436,7 @@ wait_for_cert_setup() {
 main_pre_cp_portal() {
   ### EXECUTION ########################################
   validate_portal_configuration || return 1
-  ensure_ingress_controller || return 1
+  ensure_exposure || return 1
   check_domain_dns || return 1
   ensure_metrics_server || return 1
 
@@ -617,6 +644,7 @@ main_cp_portal() {
 main() {
   main_pre_cp_portal || return 1
   main_cp_portal || return 1
+  expose_sync
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main

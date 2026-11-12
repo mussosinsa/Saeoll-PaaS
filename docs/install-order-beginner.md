@@ -321,3 +321,5 @@ tail -50 cicd-portal-deploy.log
 > CI/CD 포털이 기존 K-PaaS에서 읽는 정보와 `cicd-vars.sh`·환경 변수 전체 목록: [CI/CD 포털 환경 정보와 환경 변수](cicd-portal-env-reference.md)
 
 > ingress-nginx 없이 Istio `cp-gateway`로 포털을 여는 RKE2 클러스터: [CI/CD 포털 — Istio Gateway](cicd-istio-gateway.md)
+
+> ingress-nginx 지원 종료(2026-03)에 따른 Istio ingress gateway 전환: [ingress-nginx → Istio 전환 가이드](ingress-nginx-to-istio.md)

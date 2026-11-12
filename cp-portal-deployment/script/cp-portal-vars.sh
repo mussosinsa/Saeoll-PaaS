@@ -72,6 +72,9 @@ K8S_CLUSTER_ADMIN_NAMESPACE="kube-system"                                       
 INGRESS_CLASS_NAME="nginx"                                                                   # ingress class name
 INGRESS_NAMESPACE="ingress-nginx"                                                            # ingress controller namespace
 INGRESS_CONTROLLER_SELECTOR="app.kubernetes.io/name=ingress-nginx"                           # ingress controller selector
+# Web addresses: ingress = ingress-nginx (retired upstream in 2026: no more security fixes)
+#                istio   = Istio ingress gateway + VirtualServices made from the Ingresses (../../gateway/, docs/ingress-nginx-to-istio.md)
+CP_EXPOSE="${CP_EXPOSE:-ingress}"                                                            # ingress | istio
 
 # SECRETS_MANAGEMENT
 ## `secmg` is used as a shorthand for secrets management

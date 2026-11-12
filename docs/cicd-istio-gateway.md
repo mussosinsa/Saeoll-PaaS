@@ -1,5 +1,7 @@
 # CI/CD 포털 — Istio Gateway로 화면 열기 (ingress-nginx 없이)
 
+> ingress-nginx를 쓰던 클러스터 전체(K-PaaS + CI/CD + 앱)를 옮기는 절차: [ingress-nginx → Istio 전환 가이드](ingress-nginx-to-istio.md)
+
 K-PaaS를 RKE2에 설치해 **ingress-nginx 없이 Istio의 `cp-gateway`** 로 포털·Keycloak을 여는 클러스터에서,
 CI/CD 포털(Jenkins·GitLab·Argo CD·콘솔)과 **업체 앱 주소**도 같은 게이트웨이의 **VirtualService**로 연다.
 
